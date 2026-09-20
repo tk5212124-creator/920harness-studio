@@ -7,6 +7,7 @@ node tests/harness-runtime.mjs      # 自己テスト28件（Runtime回帰15 + P
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
+node tests/harness-share.mjs        # 書き出し・共有リンク・取り込み・診断を通しで操作
 ```
 
 必要なもの: Node 22 以上と Playwright（Chromium）。

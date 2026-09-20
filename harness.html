@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — ノードエディタ v0.6.0</title>
+<title>Harness Studio — 書き出しと診断 v0.7.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -84,8 +84,8 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.6.0 · ノードエディタ</span></h1>
-<div class="tag">タップとドラッグでハーネスを組む · 正本は HarnessSpec · 内蔵ローカルLLM（WebLLM同梱・サーバ不要）· OpenAI互換ローカル · Runtimeは adapter 種別を知らない</div>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.7.0 · 書き出しと診断</span></h1>
+<div class="tag">タップとドラッグで組む · HSLで書き出して共有 · 構造を機械とAIで診断 · 内蔵ローカルLLM（サーバ不要）· OpenAI互換ローカル · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
 <div class="card" style="margin-bottom:16px"><h2>Provider（ローカルLLM）</h2>
@@ -127,6 +127,8 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="fab"><button id="zIn" title="拡大">＋</button><button id="zOut" title="縮小">−</button><button id="zFit" title="全体">⤢</button></div>
 </div>
 <div class="hintbar" id="hint"></div>
+<div class="row"><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button></div>
+<input type="file" id="fileIn" accept=".hsl,.json,.txt,text/plain,application/json" style="display:none">
 </div>
 <div class="row"><div class="seg" id="exSeg">
 <button data-ex="exW1">内蔵LLM直列</button><button data-ex="exL1">ローカル直列</button><button data-ex="exL2">ローカル並列+Join</button><button data-ex="exL3">JSON契約+文字数分岐</button><button data-ex="exL4">ローカル改稿ループ</button>
@@ -159,7 +161,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="sheet" id="sheet"><div id="sheetBody"></div></div>
 <script>
 "use strict";
-const CP_KEY="harness_vslice_cp_v060";
+const CP_KEY="harness_vslice_cp_v070";
 const ABSENT=Symbol("absent");
 /* ---- 式評価 ---- */
 const OPS2=["&&","||","==","!=","<=",">="],OPS1=["+","-","*","/","%","<",">"];
@@ -223,6 +225,259 @@ function getPath(scope,key){const parts=key.split(".");let cur=scope;for(const p
 /* ---- Store ---- */
 function memStore(){return{value:null,save(r){this.value=JSON.parse(JSON.stringify(r,(k,v)=>v===ABSENT?"__A__":v));},load(){return this.value?JSON.parse(JSON.stringify(this.value),(k,v)=>v==="__A__"?ABSENT:v):null;}};}
 function canonSpec(spec){return JSON.stringify(spec);}
+
+/* ==================================================================
+   HSL — Harness Spec Language
+   ハーネスを人が読み書きできる行指向のテキストにする。
+   値はすべて JSON リテラルなので、書き出し→読み込みで元に戻る（往復可能）。
+   ================================================================== */
+const HSL_VERSION="hsl/1";
+function jstr(v){return JSON.stringify(v);}
+// 1行を「語」に切る。JSON文字列と {..} [..] は中の空白ごと1語として扱う
+function hslTokens(line){
+  const out=[];let i=0;
+  while(i<line.length){
+    const c=line[i];
+    if(/\s/.test(c)){i++;continue;}
+    if(c==='"'){let j=i+1;while(j<line.length){if(line[j]==="\\")j+=2;else if(line[j]==='"'){j++;break;}else j++;}
+      out.push(line.slice(i,j));i=j;continue;}
+    if(c==="{"||c==="["){const close=c==="{"?"}":"]";let d=0,j=i,q=false;
+      while(j<line.length){const ch=line[j];
+        if(q){if(ch==="\\")j++;else if(ch==='"')q=false;}
+        else if(ch==='"')q=true;
+        else if(ch===c)d++;
+        else if(ch===close){d--;if(d===0){j++;break;}}
+        j++;}
+      out.push(line.slice(i,j));i=j;continue;}
+    let j=i;while(j<line.length&&!/\s/.test(line[j]))j++;
+    out.push(line.slice(i,j));i=j;
+  }
+  return out;
+}
+function hslValue(tok,ln){
+  if(tok==null||tok==="")throw{code:"HSL_PARSE_ERROR",line:(ln||0)+1,message:"値が足りない"};
+  try{return JSON.parse(tok);}catch(e){
+    if(/^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(tok))return tok;      // 裸の語はそのまま文字列
+    throw{code:"HSL_PARSE_ERROR",line:ln,message:"値として読めない: "+tok};}
+}
+/* --- 書き出し --- */
+function specToHSL(spec){
+  const L=[];const meta=spec.metadata||{};
+  L.push(`# ${HSL_VERSION}`);
+  L.push(`harness ${jstr(meta.name||"untitled")} v${jstr(String(meta.version||"1")).slice(1,-1)}`);
+  L.push("");
+  for(const[id,def]of Object.entries(spec.providers||{})){
+    const parts=[`provider ${id} = ${def.adapter}`];
+    for(const[k,v]of Object.entries(def))if(k!=="adapter")parts.push(`${k} ${jstr(v)}`);
+    L.push(parts.join(" "));
+  }
+  if(spec.providers&&Object.keys(spec.providers).length)L.push("");
+  for(const[k,v]of Object.entries(spec.vars||{}))L.push(`var ${k} = ${jstr(v)}`);
+  if(spec.vars&&Object.keys(spec.vars).length)L.push("");
+  const NODE_SKIP=new Set(["id","type","provider","model","prompt","generation","schema","routing","op","sep","template","inputs","mock"]);
+  for(const n of spec.nodes||[]){
+    L.push(`node ${n.id}: ${n.type||"llm"}${n.provider?" "+n.provider:""}`);
+    if(n.model!=null)L.push(`  model ${jstr(n.model)}`);
+    const p=n.prompt||{};
+    if(p.system!=null)L.push(`  system ${jstr(p.system)}`);
+    if(p.template&&p.template.value!=null)L.push(`  prompt ${jstr(p.template.value)}`);
+    if(p.prefix!=null)L.push(`  prefix ${jstr(p.prefix)}`);
+    if(p.suffix!=null)L.push(`  suffix ${jstr(p.suffix)}`);
+    for(const[k,v]of Object.entries(p))if(!["system","template","prefix","suffix"].includes(k))L.push(`  prompt_set ${k} ${jstr(v)}`);
+    if(n.generation)L.push(`  gen ${jstr(n.generation)}`);
+    if(n.schema)L.push(`  schema ${jstr(n.schema)}`);
+    if(n.routing){const r=n.routing;let t=`  route ${r.mode||""}`.trimEnd();
+      if(r.failurePolicy)t+=` failure ${r.failurePolicy}`;
+      if(r.onNoMatch)t+=` on_no_match ${r.onNoMatch}`;
+      for(const[k,v]of Object.entries(r))if(!["mode","failurePolicy","onNoMatch"].includes(k))t+=` ${k} ${jstr(v)}`;
+      L.push(t);}
+    if(n.op!=null)L.push(`  op ${n.op}`);
+    if(n.sep!=null)L.push(`  sep ${jstr(n.sep)}`);
+    if(n.template)L.push(`  template ${jstr(n.template)}`);
+    if(n.inputs)L.push(`  inputs ${jstr(n.inputs)}`);
+    if(n.mock)L.push(`  mock ${jstr(n.mock)}`);
+    for(const[k,v]of Object.entries(n))if(!NODE_SKIP.has(k))L.push(`  set ${k} ${jstr(v)}`);
+  }
+  if((spec.nodes||[]).length)L.push("");
+  const ESKIP=new Set(["from","to","if","else","loop","position","transform","priority","validation"]);
+  for(const e of spec.edges||[]){
+    const port=(e.to.port&&e.to.port!=="in")?"."+e.to.port:"";
+    let t=`${e.from.node} -> ${e.to.node}${port}`;
+    if(e.if)t+=` if ${jstr(e.if)}`;
+    if(e.else)t+=` else`;
+    if(e.loop){t+=` loop ${e.loop.id}`;if(e.loop.max!=null)t+=` max ${e.loop.max}`;if(e.loop.until)t+=` until ${jstr(e.loop.until)}`;}
+    if(e.position!=null)t+=` position ${e.position}`;
+    if(e.transform)t+=` transform ${e.transform}`;
+    if(e.priority!=null)t+=` priority ${e.priority}`;
+    if(e.validation)t+=` validation ${jstr(e.validation)}`;
+    for(const[k,v]of Object.entries(e))if(!ESKIP.has(k))t+=` ${k} ${jstr(v)}`;
+    L.push(t);
+  }
+  const lay=(spec.metadata||{}).layout;
+  if(lay&&Object.keys(lay).length){L.push("");
+    for(const[id,q]of Object.entries(lay))L.push(`layout ${id} ${Math.round(q.x)},${Math.round(q.y)}`);}
+  const MSKIP=new Set(["name","version","layout"]);
+  for(const[k,v]of Object.entries(spec.metadata||{}))if(!MSKIP.has(k))L.push(`meta ${k} ${jstr(v)}`);
+  return L.join("\n")+"\n";
+}
+/* --- 読み込み --- */
+function hslToSpec(text){
+  const spec={metadata:{name:"untitled",version:"1"},nodes:[],edges:[]};
+  const lines=String(text).split(/\r?\n/);let cur=null;
+  const err=(ln,m)=>{throw{code:"HSL_PARSE_ERROR",line:ln+1,message:m};};
+  lines.forEach((raw,ln)=>{
+    const line=raw.replace(/\s+$/,"");
+    if(!line.trim()||/^\s*#/.test(line))return;
+    const indented=/^\s/.test(line);
+    const t=hslTokens(line);
+    if(indented){
+      if(!cur)err(ln,"どのノードの設定か分からない（字下げの前に node が要る）");
+      const k=t[0],rest=t.slice(1);
+      const one=()=>{if(rest.length<1)err(ln,k+" に値が無い");return hslValue(rest[0],ln);};
+      if(k==="model")cur.model=one();
+      else if(k==="system"){cur.prompt=cur.prompt||{};cur.prompt.system=one();}
+      else if(k==="prompt"){cur.prompt=cur.prompt||{};cur.prompt.template={syntax:"mustache",mode:"interpolation_only",value:one()};}
+      else if(k==="prefix"){cur.prompt=cur.prompt||{};cur.prompt.prefix=one();}
+      else if(k==="suffix"){cur.prompt=cur.prompt||{};cur.prompt.suffix=one();}
+      else if(k==="prompt_set"){cur.prompt=cur.prompt||{};cur.prompt[rest[0]]=hslValue(rest[1],ln);}
+      else if(k==="gen")cur.generation=one();
+      else if(k==="schema")cur.schema=one();
+      else if(k==="op")cur.op=one();
+      else if(k==="sep")cur.sep=one();
+      else if(k==="template")cur.template=one();
+      else if(k==="inputs")cur.inputs=one();
+      else if(k==="mock")cur.mock=one();
+      else if(k==="route"){
+        const r={};if(rest[0]&&!["failure","on_no_match"].includes(rest[0]))r.mode=hslValue(rest.shift(),ln);
+        for(let i=0;i<rest.length;i+=2){const kk=rest[i],vv=hslValue(rest[i+1],ln);
+          if(kk==="failure")r.failurePolicy=vv;else if(kk==="on_no_match")r.onNoMatch=vv;else r[kk]=vv;}
+        cur.routing=r;}
+      else if(k==="set")cur[rest[0]]=hslValue(rest[1],ln);
+      else err(ln,"知らない設定: "+k);
+      return;
+    }
+    cur=null;
+    const k=t[0];
+    if(k==="harness"){spec.metadata.name=hslValue(t[1],ln);
+      const v=t[2]||"";spec.metadata.version=String(hslValue((v[0]==="v"?v.slice(1):v)||'"1"',ln));}
+    else if(k==="provider"){
+      if(t[2]!=="=")err(ln,"provider <id> = <adapter> の形にする");
+      const def={adapter:hslValue(t[3],ln)};
+      for(let i=4;i<t.length;i+=2)def[t[i]]=hslValue(t[i+1],ln);
+      spec.providers=spec.providers||{};spec.providers[hslValue(t[1],ln)]=def;}
+    else if(k==="var"){if(t[2]!=="=")err(ln,"var <名前> = <値> の形にする");
+      spec.vars=spec.vars||{};spec.vars[hslValue(t[1],ln)]=hslValue(t[3],ln);}
+    else if(k==="node"){
+      const idRaw=t[1]||"";if(!/:$/.test(idRaw)&&t[2]!==":")err(ln,"node <id>: <種類> の形にする");
+      const id=hslValue(idRaw.replace(/:$/,""),ln);
+      const type=hslValue(t[2],ln);
+      const n={id,type};if(t[3])n.provider=hslValue(t[3],ln);
+      spec.nodes.push(n);cur=n;}
+    else if(k==="layout"){const id=hslValue(t[1],ln);const m=/^(-?\d+)\s*,\s*(-?\d+)$/.exec(t[2]||"");
+      if(!m)err(ln,"layout <id> <x>,<y> の形にする");
+      spec.metadata.layout=spec.metadata.layout||{};spec.metadata.layout[id]={x:+m[1],y:+m[2]};}
+    else if(k==="meta")spec.metadata[t[1]]=hslValue(t[2],ln);
+    else if(t[1]==="->"){
+      const to=String(t[2]||"");const dot=to.indexOf(".");
+      const e={from:{node:hslValue(t[0],ln),port:"out"},
+               to:{node:dot<0?to:to.slice(0,dot),port:dot<0?"in":to.slice(dot+1)}};
+      const rest=t.slice(3);
+      for(let i=0;i<rest.length;i++){
+        const kk=rest[i];
+        if(kk==="if")e.if=hslValue(rest[++i],ln);
+        else if(kk==="else")e.else=true;
+        else if(kk==="loop"){e.loop={id:hslValue(rest[++i],ln)};
+          while(rest[i+1]==="max"||rest[i+1]==="until"){const kk2=rest[++i];const vv=hslValue(rest[++i],ln);
+            if(kk2==="max")e.loop.max=vv;else e.loop.until=vv;}}
+        else if(kk==="position")e.position=hslValue(rest[++i],ln);
+        else if(kk==="transform")e.transform=hslValue(rest[++i],ln);
+        else if(kk==="priority")e.priority=hslValue(rest[++i],ln);
+        else if(kk==="validation")e.validation=hslValue(rest[++i],ln);
+        else e[kk]=hslValue(rest[++i],ln);
+      }
+      spec.edges.push(e);}
+    else err(ln,"知らない行: "+k);
+  });
+  if(!spec.nodes.length)delete spec.nodes;
+  if(!spec.edges.length)delete spec.edges;
+  return spec;
+}
+/* --- ハーネスの構造を機械的に診る（AIに聞く前に、確実に分かることを出す） --- */
+const EXPR_ROOTS=new Set(["run","input","vars","loop","true","false","null"]);
+function exprNodeRefs(src){
+  const out=new Set();const re=/\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(out|meta|usage|status|prev|type|raw|valid)\b/g;
+  let m;while((m=re.exec(String(src||""))))if(!EXPR_ROOTS.has(m[1]))out.add(m[1]);
+  return[...out];
+}
+function reviewSpec(spec){
+  const F=[];const add=(level,message,node)=>F.push({level,message,node});
+  const nodes=spec.nodes||[],edges=spec.edges||[];
+  const ids=new Set(nodes.map(n=>n.id));
+  const ins=nodes.filter(n=>n.type==="input"),outs=nodes.filter(n=>n.type==="output");
+  if(!ins.length)add("error","入力ノードが無い。実行の起点が決まらない");
+  if(ins.length>1)add("warn",`入力ノードが${ins.length}個ある。起点は最初の1つだけが使われる`);
+  if(!outs.length)add("error","出力ノードが無い。結果を受け取る場所が無い");
+  // 到達性
+  const fwd={},bwd={};
+  for(const e of edges){(fwd[e.from.node]=fwd[e.from.node]||[]).push(e.to.node);(bwd[e.to.node]=bwd[e.to.node]||[]).push(e.from.node);}
+  const reach=(start,g)=>{const seen=new Set(start);const st=[...start];
+    while(st.length){const x=st.pop();for(const y of g[x]||[])if(!seen.has(y)){seen.add(y);st.push(y);}}return seen;};
+  const fromIn=reach(ins.map(n=>n.id),fwd),toOut=reach(outs.map(n=>n.id),bwd);
+  for(const n of nodes){
+    if(ins.length&&!fromIn.has(n.id))add("error",`入力から辿り着けない（線が繋がっていない）`,n.id);
+    else if(outs.length&&!toOut.has(n.id))add("error",`ここから出力に辿り着けない（行き止まり）`,n.id);
+  }
+  // ノード個別
+  for(const n of nodes){
+    if(n.type==="llm"||n.type==="tool"){
+      const t=n.prompt&&n.prompt.template&&n.prompt.template.value;
+      if(!t&&!(n.prompt&&n.prompt.system))add("warn","プロンプトが空。前のノードの出力がそのまま渡る",n.id);
+      if(!(n.generation&&n.generation.maxTokens!=null))add("info","maxTokens 未設定。ローカルLLMだと長く出力し続けることがある",n.id);
+      if(n.provider){const def=(spec.providers||{})[n.provider];
+        if(def&&def.adapter!=="mock"&&!def.model&&!n.model)add("error",`provider "${n.provider}" にモデルが無い`,n.id);}
+    }
+    if(n.type==="join"){
+      const card=n.inputs&&n.inputs.items&&n.inputs.items.cardinality;
+      if(card!=="many")add("error","Joinの items が many になっていない。複数を受け取れない",n.id);
+      if(!n.op)add("error","Joinのまとめ方(op)が決まっていない",n.id);
+    }
+  }
+  // 式の参照先
+  const checkExpr=(src,where)=>{
+    for(const r of exprNodeRefs(src)){
+      if(!ids.has(r)){add("error",`条件式が知らないノード "${r}" を見ている（${where}）`);continue;}
+      const target=nodes.find(x=>x.id===r);
+      if(/\.out\s*\.\s*[A-Za-z_$]/.test(src)&&target&&(target.type==="llm"||target.type==="tool")&&!target.schema)
+        add("warn",`"${r}.out.〜" を見ているのに ${r} に schema が無い。JSONで返る保証がないので実行時に落ちることがある`,r);
+    }};
+  for(const e of edges){
+    if(e.if)checkExpr(e.if,`${e.from.node} → ${e.to.node} の if`);
+    if(e.loop&&e.loop.until)checkExpr(e.loop.until,`loop ${e.loop.id} の until`);
+    if(e.loop&&!e.loop.until)add("warn",`loop "${e.loop.id}" に打ち切り条件(until)が無い。必ず${e.loop.max}回まわる`,e.from.node);
+  }
+  // 使われていない provider
+  const used=new Set(nodes.map(n=>n.provider).filter(Boolean));
+  for(const pid of Object.keys(spec.providers||{}))if(!used.has(pid))add("info",`provider "${pid}" はどのノードからも使われていない`);
+  // validate の結果も混ぜる（実行前に弾かれるもの）
+  try{for(const m of validate(spec))add("error",m);}catch(e){add("error","spec不正: "+(e.message||e));}
+  const order={error:0,warn:1,info:2};
+  return F.sort((a,b)=>order[a.level]-order[b.level]);
+}
+// 書き出して読み直すと元に戻るか（戻らない箇所を返す）
+function hslRoundTripDiff(spec){
+  let back;try{back=hslToSpec(specToHSL(spec));}catch(e){return["HSLに書き出せない: "+(e.message||e)];}
+  const diffs=[];
+  const walk=(a,b,path)=>{
+    if(JSON.stringify(a)===JSON.stringify(b))return;
+    if(a&&b&&typeof a==="object"&&typeof b==="object"&&!Array.isArray(a)&&!Array.isArray(b)){
+      for(const k of new Set([...Object.keys(a),...Object.keys(b)]))walk(a[k],b[k],path?path+"."+k:k);
+      return;}
+    if(Array.isArray(a)&&Array.isArray(b)&&a.length===b.length){a.forEach((x,i)=>walk(x,b[i],`${path}[${i}]`));return;}
+    diffs.push(`${path}: ${JSON.stringify(a)} → ${JSON.stringify(b)}`);
+  };
+  walk(JSON.parse(JSON.stringify(spec)),back,"");
+  return diffs.length?diffs:null;
+}
 const NN=v=>v==null?null:v;
 
 /* ==================================================================
@@ -979,7 +1234,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -1594,6 +1849,183 @@ $("#dirBtn").onclick=()=>{setDir(Ed.dir==="tb"?"lr":"tb");autoLayout();syncFromC
 $("#zIn").onclick=()=>{Ed.view.k=Math.min(2.2,Ed.view.k*1.2);applyView();};
 $("#zOut").onclick=()=>{Ed.view.k=Math.max(0.3,Ed.view.k/1.2);applyView();};
 $("#zFit").onclick=fitView;
+/* ==================================================================
+   書き出し / 取り込み / 診断
+   ================================================================== */
+const b64url=b=>btoa(String.fromCharCode(...b)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const b64urlDec=t=>{const s2=t.replace(/-/g,"+").replace(/_/g,"/");const bin=atob(s2+"=".repeat((4-s2.length%4)%4));
+  return Uint8Array.from(bin,c=>c.charCodeAt(0));};
+async function encodeShare(spec){
+  const bytes=new TextEncoder().encode(JSON.stringify(spec));
+  if(typeof CompressionStream!=="undefined"){
+    try{const buf=await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate-raw"))).arrayBuffer();
+      return "z"+b64url(new Uint8Array(buf));}catch(e){}
+  }
+  return "j"+b64url(bytes);
+}
+async function decodeShare(str){
+  const kind=str[0],data=b64urlDec(str.slice(1));
+  if(kind==="z"){const buf=await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
+    return JSON.parse(new TextDecoder().decode(buf));}
+  if(kind==="j")return JSON.parse(new TextDecoder().decode(data));
+  throw new Error("共有リンクの形式が違う");
+}
+function download(name,text,type){
+  const a=document.createElement("a");const url=URL.createObjectURL(new Blob([text],{type:type||"text/plain;charset=utf-8"}));
+  a.href=url;a.download=name;document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},1000);
+}
+async function copyText(t){
+  try{await navigator.clipboard.writeText(t);return true;}
+  catch(e){const ta=document.createElement("textarea");ta.value=t;document.body.appendChild(ta);ta.select();
+    let okc=false;try{okc=document.execCommand("copy");}catch(_){}ta.remove();return okc;}
+}
+const specName=()=>((Ed.spec.metadata||{}).name||"harness").replace(/[^\w一-龠ぁ-んァ-ヶー-]/g,"_");
+function openExportSheet(){
+  let hsl="",warn="";
+  try{hsl=specToHSL(Ed.spec);}catch(e){hsl="";warn="HSLに書き出せない: "+(e.message||e);}
+  const diff=hsl?hslRoundTripDiff(Ed.spec):null;
+  if(diff)warn=`この構成はHSLだけでは完全に戻らない（${diff.length}箇所）。共有はJSONを使う:\n`+diff.slice(0,3).join("\n");
+  let h=head("書き出す");
+  h+=`<div class="mini">HSL は人が読み書きできるハーネスの表記。JSON と同じ内容を持つ。</div>`;
+  if(warn)h+=`<div class="vErr" style="margin:8px 0">⚠ ${esc(warn)}</div>`;
+  h+=`<label class="fld"><span>HSL</span><textarea id="exText" style="min-height:190px" readonly>${esc(hsl)}</textarea></label>`;
+  h+=`<div class="row"><button id="exCopy">HSLをコピー</button><button id="exSaveH">.hsl で保存</button><button id="exSaveJ">.json で保存</button></div>`;
+  h+=`<div class="row"><button class="primary" id="exLink">共有リンクを作る</button><span class="mini" id="exLinkInfo"></span></div>`;
+  h+=`<label class="fld" id="exLinkWrap" style="display:none"><span>リンク（別の端末でも開ける）</span><textarea id="exLinkText" style="min-height:76px" readonly></textarea></label>`;
+  h+=`<div class="row" id="exShareRow" style="display:none"><button id="exLinkCopy">リンクをコピー</button><button id="exShare">共有…</button></div>`;
+  openSheet(h);bindClose();
+  $("#exCopy").onclick=async()=>{$("#exCopy").textContent=(await copyText(hsl))?"コピーした":"コピーできない";};
+  $("#exSaveH").onclick=()=>download(specName()+".hsl",hsl);
+  $("#exSaveJ").onclick=()=>download(specName()+".json",JSON.stringify(Ed.spec,null,2),"application/json");
+  $("#exLink").onclick=async()=>{
+    try{
+      const payload=await encodeShare(Ed.spec);
+      const url=location.href.split("#")[0]+"#s="+payload;   // file:// でも壊れないように
+      $("#exLinkWrap").style.display="";$("#exShareRow").style.display="";
+      $("#exLinkText").value=url;
+      $("#exLinkInfo").textContent=`${url.length}文字${url.length>8000?"（長すぎて開けない端末がある。ファイルで渡す方が確実）":""}`;
+      $("#exLinkCopy").onclick=async()=>{$("#exLinkCopy").textContent=(await copyText(url))?"コピーした":"コピーできない";};
+      $("#exShare").style.display=navigator.share?"":"none";
+      $("#exShare").onclick=()=>navigator.share({title:(Ed.spec.metadata||{}).name||"harness",url}).catch(()=>{});
+    }catch(e){$("#exLinkInfo").textContent="作れない: "+(e.message||e);}
+  };
+}
+function detectFormat(text){
+  const t=String(text).replace(/^\s*(#[^\n]*\n)*/,"").trim();
+  return t.startsWith("{")?"json":"hsl";
+}
+function importText(text,fromWhere){
+  const fmt=detectFormat(text);
+  let o;
+  try{o=fmt==="json"?JSON.parse(text):hslToSpec(text);}
+  catch(e){
+    const at=e&&e.line?`（${e.line}行目）`:"";
+    return{ok:false,message:`${fmt.toUpperCase()}として読めない${at}: ${e.message||e}`};
+  }
+  if(!o||!Array.isArray(o.nodes))return{ok:false,message:"nodes が無い。ハーネスとして読めない"};
+  setSpecObj(o);fitView();
+  const errs=showErrs();
+  setHint(`${fromWhere}から${fmt.toUpperCase()}として取り込んだ（ノード${o.nodes.length}・線${(o.edges||[]).length}）`);
+  return{ok:true,fmt,errs:errs.length};
+}
+function openImportSheet(){
+  let h=head("取り込む");
+  h+=`<div class="mini">HSL でも JSON でも貼れる。共有リンクを貼っても読む。</div>`;
+  h+=`<label class="fld"><span>貼り付け</span><textarea id="imText" style="min-height:170px" placeholder="harness &quot;例&quot; v1 … / { &quot;nodes&quot;: … } / https://…#s=…"></textarea></label>`;
+  h+=`<div class="row"><button class="primary" id="imGo">読み込む</button><button id="imFile">ファイルから</button></div>`;
+  h+=`<div class="mini" id="imInfo"></div>`;
+  openSheet(h);bindClose();
+  $("#imGo").onclick=async()=>{
+    const t=$("#imText").value.trim();
+    if(!t)return $("#imInfo").textContent="何も貼られていない";
+    const m=/#s=([A-Za-z0-9\-_]+)/.exec(t);
+    if(m){try{const sp=await decodeShare(m[1]);setSpecObj(sp);fitView();closeSheet();
+        setHint("共有リンクから取り込んだ");return;}catch(e){return $("#imInfo").textContent="リンクを復元できない: "+(e.message||e);}}
+    const r=importText(t,"貼り付け");
+    if(!r.ok)return $("#imInfo").textContent=r.message;
+    closeSheet();
+  };
+  $("#imFile").onclick=()=>$("#fileIn").click();
+}
+$("#fileIn").onchange=async ev=>{
+  const f=ev.target.files&&ev.target.files[0];if(!f)return;
+  const text=await f.text();const r=importText(text,f.name);
+  const info=$("#imInfo");if(info)info.textContent=r.ok?`${f.name} を読み込んだ`:r.message;
+  if(r.ok)closeSheet();
+  ev.target.value="";
+};
+/* --- 診断（機械チェック → 必要ならAIにも見せる） --- */
+let reviewCtl=null;
+function openReviewSheet(){
+  const F=reviewSpec(Ed.spec);
+  const n={error:F.filter(x=>x.level==="error").length,warn:F.filter(x=>x.level==="warn").length,info:F.filter(x=>x.level==="info").length};
+  const mark={error:"✗",warn:"⚠",info:"·"};
+  const col={error:"var(--err)",warn:"var(--warn)",info:"var(--sub)"};
+  let h=head("診断");
+  h+=`<div class="mini">まず機械で確実に分かることを出す。そのうえでAIに構造を見てもらえる。</div>`;
+  h+=`<div class="tot" style="margin:8px 0"><span>問題 <b>${n.error}</b></span><span>注意 <b>${n.warn}</b></span><span>参考 <b>${n.info}</b></span></div>`;
+  h+=F.length?`<div class="diag">`+F.map(f=>`<div style="color:${col[f.level]}">${mark[f.level]} ${f.node?esc(f.node)+": ":""}${esc(f.message)}</div>`).join("")+`</div>`
+    :`<div class="diag">機械チェックでは問題なし</div>`;
+  const provs=Object.keys(Ed.spec.providers||{});
+  h+=`<h3 style="margin-top:14px">AIに構造を見てもらう</h3>`;
+  if(!provs.length)h+=`<div class="mini">providers がまだ無い。Providerを決めて「Specのproviders.localに書き込む」を押すと使える。</div>`;
+  else{
+    h+=fld("どのモデルに見せるか",sel("__revProv",provs[0],provs.map(pv=>({v:pv,t:pv+"（"+((Ed.spec.providers[pv]||{}).adapter||"?")+"）"}))));
+    h+=`<div class="row"><button class="primary" id="revGo">見てもらう</button><button id="revStop" class="danger" disabled>中止</button></div>`;
+    h+=`<pre class="diag" id="revOut" style="display:none"></pre>`;
+  }
+  openSheet(h);bindClose();
+  const go=$("#revGo");if(!go)return;
+  go.onclick=async()=>{
+    const pid=$("#sheetBody").querySelector('[data-f="__revProv"]').value;
+    const def=Object.assign({},(Ed.spec.providers||{})[pid]);
+    const ad=PROVIDERS[def.adapter];
+    if(!ad)return;
+    const outEl=$("#revOut");outEl.style.display="";outEl.textContent="";
+    go.disabled=true;$("#revStop").disabled=false;
+    reviewCtl=makeController({});
+    const hsl=(()=>{try{return specToHSL(Ed.spec);}catch(e){return JSON.stringify(Ed.spec,null,1);}})();
+    const findings=F.length?F.map(f=>`- [${f.level}] ${f.node?f.node+": ":""}${f.message}`).join("\n"):"（なし）";
+    const messages=[
+      {role:"system",content:"あなたはAIワークフローの設計レビュアー。日本語で簡潔に答える。断定できないことは書かない。"},
+      {role:"user",content:
+        `次はノードを繋いで作ったAIの処理手順（HSL表記）です。構造の良し悪しを見て、直す価値のある点を5つ以内の箇条書きで挙げてください。\n`+
+        `各項目は「どこが / なぜ困るか / どう直すか」を1行ずつ。\n\n`+
+        `=== ハーネス ===\n${hsl}\n=== 機械チェックの結果 ===\n${findings}\n`}];
+    try{
+      let handle=null;
+      if(ad.ensureLoaded){outEl.textContent="モデルを用意中…\n";
+        handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:ad.id,model:def.model}),ad,reviewCtl.signal,
+          st=>{outEl.textContent=`モデルを用意中… ${Math.round((st.progress||0)*100)}% ${st.text||""}\n`;});
+        outEl.textContent="";}
+      const res=await ad.invoke({input:{messages},model:def.model,generation:Object.assign({maxTokens:400,temperature:0.3},def.generation||{}),
+        schema:null,signal:reviewCtl.signal,handle,providerDef:def,node:{id:"__review"},inputs:{},ex:{iteration:1},
+        onToken:t=>{outEl.textContent+=t;outEl.scrollTop=outEl.scrollHeight;}});
+      if(res&&res.cancelled)outEl.textContent+="\n（中止した）";
+      else if(res&&res.output){
+        if(!outEl.textContent)outEl.textContent=rvToText(res.output);
+        const u=res.usage||{};
+        outEl.textContent+=`\n\n— ${pid} / in ${u.inputTokens==null?"?":u.inputTokens} out ${u.outputTokens==null?"?":u.outputTokens} tokens`;
+      }
+    }catch(e){outEl.textContent+=`\n✗ ${e.code||"ERROR"}: ${e.message||e}`;}
+    finally{go.disabled=false;$("#revStop").disabled=true;reviewCtl=null;}
+  };
+  $("#revStop").onclick=()=>{if(reviewCtl)reviewCtl.abort();};
+}
+$("#btnExport").onclick=openExportSheet;
+$("#btnImport").onclick=openImportSheet;
+$("#btnReview").onclick=openReviewSheet;
+/* 共有リンクで開かれたとき */
+async function loadFromHash(){
+  const m=/^#s=([A-Za-z0-9\-_]+)$/.exec(location.hash||"");
+  if(!m)return false;
+  try{const sp=await decodeShare(m[1]);setSpecObj(sp);fitView();
+    setHint("共有リンクから読み込んだ（この端末には保存されていない）");
+    document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.classList.remove("on"));
+    return true;}
+  catch(e){setHint("共有リンクを読めない: "+(e.message||e));return false;}
+}
 $("#spec").addEventListener("input",()=>{
   let o;try{o=JSON.parse($("#spec").value);}catch(e){$("#vErr").textContent="⚠ JSON: "+e.message;return;}
   setSpecObj(o,{keepText:true});
@@ -1655,7 +2087,7 @@ $("#run").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResum
 $("#cancel").onclick=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
 $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
-setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");fitView();renderTotals();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
+setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");loadFromHash();fitView();renderTotals();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 
 /* ---- 自己テスト ---- */
 const enc=s=>new TextEncoder().encode(s);
@@ -1871,6 +2303,23 @@ export async function CreateMLCEngine(model,opt){
       run.status==="cancelled"&&globalThis.__wllmInterrupt>=1&&!!rec&&rec.status==="cancelled"
       &&run.errors.length===0&&run.deliveries.filter(d=>d.fromNodeId==="a").length===0);
   }}
+ // 29 HSL: 全ての例で 書き出し→読み込み が往復する
+ {const bad=[];
+  for(const[k,sp]of Object.entries(EX)){const d=hslRoundTripDiff(sp);if(d)bad.push(k+": "+d.slice(0,2).join(" / "));}
+  ok("29 HSL往復: 全"+Object.keys(EX).length+"例が書き出し→読み込みで元に戻る",bad.length===0);
+  if(bad.length)out.push(`<span style="color:#7a828c">    ${esc?esc(bad[0]):bad[0]}</span>`);}
+ // 30 HSL: 読める文面になっていて、未知のキーも落ちない
+ {const sp=JSON.parse(JSON.stringify(EX.exL3));
+  sp.nodes[1].未知キー={a:1};sp.edges[0].未知辺キー="x";sp.metadata.作者="tk";
+  const t=specToHSL(sp);const back=hslToSpec(t);
+  ok("30 HSL: node/edge行が読める形で出る・未知キーも往復する",
+    /^node ans: llm local$/m.test(t)&&/^in -> ans\b/m.test(t)&&/^ans -> good if /m.test(t)
+    &&JSON.stringify(back.nodes[1].未知キー)==='{"a":1}'&&back.edges[0].未知辺キー==="x"&&back.metadata.作者==="tk");}
+ // 31 HSL: 壊れた入力は行番号付きで拒否する
+ {const cases=[["node a: llm\n  知らない設定 1","知らない設定"],["  system \"x\"","字下げ"],["a -> b if","値"]];
+  let allRej=true,lineOK=false;
+  for(const[src,_]of cases){try{hslToSpec(src);allRej=false;}catch(e){if(e.code!=="HSL_PARSE_ERROR")allRej=false;if(e.line>0)lineOK=true;}}
+  ok("31 HSL: 壊れた記述は HSL_PARSE_ERROR（行番号つき）",allRej&&lineOK);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${(e&&e.message)||JSON.stringify(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

@@ -4,7 +4,10 @@ LLMオーケストレーター。**ハーネス（AIの処理手順）** を画�
 複数のLLM/VLMを連携させて動かす。ローカルLLMとクラウドLLMを同じインターフェースで混在できる。
 
 **タップとドラッグで組める。** ノードを置き、ポートをタップしてつなぎ、ノードをタップして中身を決める。
-iPhone でもPCでも同じ操作。組んだものは HarnessSpec（JSON）としていつでも見られる。
+iPhone でもPCでも同じ操作。
+
+**組んだハーネスは言語（HSL）として書き出せる。** テキストなので人に渡せるし、リンク1本で別の端末でも開ける。
+取り込んで直し、構造の良し悪しを機械とAIの両方に診てもらえる。
 
 **LLMをアプリに内蔵している。** サーバもAPIキーも要らず、ブラウザの中だけで推論する
 （WebLLM/WebGPU。本体はこのリポジトリに同梱、モデルは初回だけ端末にDLして保存）。
@@ -16,7 +19,7 @@ iPhone でもPCでも同じ操作。組んだものは HarnessSpec（JSON）と�
 
 ---
 
-## 1. 現状 — v0.6.0 ノードエディタ
+## 1. 現状 — v0.7.0 書き出しと診断
 
 | 段階 | 状態 |
 |---|---|
@@ -25,9 +28,10 @@ iPhone でもPCでも同じ操作。組んだものは HarnessSpec（JSON）と�
 | Runtime v0.3.1（直列・並列・Loop×並列・Join・型契約・Checkpoint/Resume） | 実装済み |
 | Provider層 v0.4.0（mock / OpenAI互換ローカル / WebLLM） | 実装済み |
 | 内蔵LLM v0.5.0（本体同梱・Worker実行・端末チェック・モデル常駐） | 実装済み |
-| **ノードエディタ v0.6.0（タップとドラッグで組む・実行状態を図に出す）** | **いまここ** |
+| ノードエディタ v0.6.0（タップとドラッグで組む・実行状態を図に出す） | 実装済み |
+| **HSL・共有・診断 v0.7.0（言語で書き出す/取り込む・リンク共有・構造診断・AIレビュー）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
-| ハーネスの書き出しと共有・AIによるハーネス自体の診断 | これから |
+
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
 
 ---
@@ -56,7 +60,82 @@ iPhone でもPCでも同じ操作。組んだものは HarnessSpec（JSON）と�
 
 ---
 
-## 3. 3つの adapter
+## 3. 書き出す・共有する・診てもらう
+
+![書き出し](docs/export-sheet.png)
+
+### HSL（Harness Spec Language）
+
+組んだハーネスを、人が読み書きできる行指向のテキストにする。値はすべて JSON リテラルなので、
+**書き出して読み直すと元に戻る**（全11例で往復を検証済み）。
+
+```
+# hsl/1
+harness "Loop×並列" v1
+
+provider local = webllm model "SmolLM2-360M-Instruct-q4f16_1-MLC" useWorker true
+
+node seed: input
+node gate: llm local
+  system "日本語の編集者。"
+  prompt "これを直して: {{{in}}}"
+  prefix "【必ず守る】箇条書きにしない。"
+  gen {"maxTokens":200,"temperature":0.6}
+  route parallel failure fail_fast
+node critic: llm local
+  schema {"type":"object","required":["score"]}
+  route first_match on_no_match error
+node out: output
+
+seed -> gate
+gate -> A
+A -> jn.items position 0
+critic -> gate loop rev max 3 until "critic.out.score>=8"
+critic -> out else priority 1
+
+layout gate 20,142
+```
+
+| 行 | 意味 |
+|---|---|
+| `harness "名前" v1` | ハーネスの名前と版 |
+| `provider <id> = <adapter> <key> <値>…` | プロバイダの宣言 |
+| `var <名前> = <値>` | 実行時に使う変数 |
+| `node <id>: <種類> [provider]` | ノード。続く字下げ行がその中身 |
+| `  system / prompt / prefix / suffix` | プロンプトの各部 |
+| `  gen {…} / schema {…} / route …` | 生成パラメータ・出力契約・出口の扱い |
+| `A -> B[.port] [if "式"] [else] [loop <id> max N until "式"] [position N] [transform X]` | つながり |
+| `layout <id> x,y` | 図の中の位置 |
+
+知らないキーも `set <key> <値>` として往復するので、**書き出しで情報が落ちない**。
+落ちる場合は書き出し画面が警告を出す（そのときは JSON を使う）。
+
+### 共有と取り込み
+
+- **共有リンク** — Spec を deflate して URL の `#s=…` に載せる。Loop×並列の例で689文字。
+  リンクを開いた端末にそのまま図が出る（サーバに何も置かない）。
+- **ファイル** — `.hsl` / `.json` で保存、ファイルから読み込み。
+- **貼り付け** — HSL でも JSON でも共有リンクでも、貼れば読む（どちらとして読んだかを表示する）。
+
+### 診断
+
+**機械で確実に分かることを先に出す。** AIに聞くのはそのあと。
+
+| 見るもの | 例 |
+|---|---|
+| 到達性 | 入力から辿り着けないノード、出力に届かない行き止まり |
+| 繋がり | Join の items が many でない、まとめ方(op)が無い |
+| 式の参照先 | 存在しないノードを見ている条件式 |
+| 出力契約 | `x.out.score` を見ているのに `x` に schema が無い（JSONで返る保証がない） |
+| ループ | `until` の無い loop は必ず max 回まわる |
+| その他 | プロンプトが空、maxTokens 未設定、使われていない provider、validate のエラー全部 |
+
+そのうえで **AIに構造を見てもらう**。現在のハーネスを HSL にして、機械チェックの結果と一緒に
+選んだプロバイダ（内蔵LLMでもOllamaでも）に渡し、返答を流しながら表示する。
+
+---
+
+## 4. 3つの adapter
 
 | adapter | 中身 | 料金 | 必要なもの |
 |---|---|---|---|
@@ -98,7 +177,7 @@ OOM後はユーザーが明示 Retry（`iteration` / `loopInstanceId` は増え�
 
 ---
 
-## 4. ローカルLLMの繋ぎ方
+## 5. ローカルLLMの繋ぎ方
 
 ### Ollama
 
@@ -145,7 +224,7 @@ Workerが作れない・本体が読めない場合、**勝手に別経路へ落
 
 ---
 
-## 5. Spec の書き方
+## 6. Spec の書き方
 
 ```jsonc
 {
@@ -187,7 +266,7 @@ Workerが作れない・本体が読めない場合、**勝手に別経路へ落
 
 ---
 
-## 6. Runtime の3責務分離
+## 7. Runtime の3責務分離
 
 ```
 ExecutionInstance = 個々の実行（control-flow）  pending|ready|running|completed|failed|cancelling|cancelled
@@ -204,7 +283,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 
 ---
 
-## 7. 画面
+## 8. 画面
 
 | パネル | 何が見えるか |
 |---|---|
@@ -219,14 +298,27 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 
 ---
 
-## 8. テスト
+## 9. テスト
 
 ```
 node tests/harness-runtime.mjs      # 自己テスト28件（Runtime回帰15 + Provider契約13）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
+node tests/harness-share.mjs        # 書き出し・共有リンク・取り込み・診断を通しで操作
 ```
+
+### harness-share.mjs が見るもの
+
+| 見るもの | 期待 |
+|---|---|
+| HSL書き出し | `harness` / `node` / `loop … until` の行が出て、**往復の警告が無い** |
+| ファイル保存 | 保存された中身が `# hsl/1` で始まる |
+| 共有リンク | 圧縮されたURLができ、**別タブで開くと同じ Spec に戻る**（1文字も違わない） |
+| HSLを貼る | 手書きのHSLが取り込め、**そのまま実行して success になる** |
+| リンクを貼る | URL文字列からも復元する |
+| 診断 | 孤立ノードと、存在しないノードを見ている条件式を指摘する |
+| AIレビュー | 選んだプロバイダに投げて応答とトークン数が出る |
 
 ### harness-editor.mjs が見るもの
 
