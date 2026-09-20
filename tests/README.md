@@ -8,6 +8,7 @@ node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに�
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
 node tests/harness-share.mjs        # 書き出し・共有リンク・取り込み・診断を通しで操作
+node tests/harness-ai-loop.mjs      # AIに直させて口に入れる往復（ローカルLLMはstubで代用）
 ```
 
 必要なもの: Node 22 以上と Playwright（Chromium）。
