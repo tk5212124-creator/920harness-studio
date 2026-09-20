@@ -104,11 +104,16 @@ R['⑦ q4f32'] = { 前: n1, 後: n2 };
 ok.f32 = n2 > n1;
 await p.uncheck('#mdlF32'); await p.waitForTimeout(200);
 
-// ⑧ 「これを使う」で providers.local が内蔵LLMになる
-await tap('#mdlList .mrow:nth-child(3) button[data-act="use"]');
+// ⑧ どのモデルを使うかはノード編集で決める（パネルに「使う」「起動」は無い）
+R['⑧ パネルに残っているボタン'] = [...new Set(await p.$$eval('#mdlList .mrow button', e => e.map(x => x.dataset.act)))];
+ok.noUseBtn = !R['⑧ パネルに残っているボタン'].includes('use');
+await tap('.nd[data-id="a"]');
+await p.selectOption('[data-f="__prov"]', '__webllm'); await p.waitForTimeout(250);
+await p.selectOption('[data-f="model"]', 'Llama-3.2-1B-Instruct-q4f16_1-MLC'); await p.waitForTimeout(250);
 const s8 = await spec();
-R['⑧ これを使う'] = s8.providers.local;
-ok.use = s8.providers.local.adapter === 'webllm' && /Llama/.test(s8.providers.local.model);
+R['⑧ ノードで選んだモデル'] = { provider: s8.providers.local, ノード: s8.nodes.find(n => n.id === 'a').model };
+ok.use = s8.providers.local.adapter === 'webllm' && /Llama/.test(R['⑧ ノードで選んだモデル'].ノード);
+await tap('#shClose');
 
 // ⑨ ダウンロード: この環境では重み置き場に届かないので、固まらず理由が出る
 await tap('#mdlList .mrow:nth-child(1) button[data-act="get"]');
@@ -158,11 +163,26 @@ ok.outReason = R['⑫ 届かなかった出力'].出力欄.includes('届かな�
   && R['⑫ 届かなかった出力'].状態行.includes('PROVIDER_ERROR');
 
 // ⑬ Gemma は窓サイズの上書きを付けて使う（両方が正だと起動できないため）
-await tap('#mdlList .mrow:nth-child(2) button[data-act="use"]');
+//    ノードでモデルを選んだときも上書きが付き、他のモデルには連れて行かない
+await tap('.nd[data-id="a"]');
+await p.selectOption('[data-f="__prov"]', '__webllm'); await p.waitForTimeout(250);
+await p.selectOption('[data-f="model"]', 'gemma3-1b-it-q4f16_1-MLC'); await p.waitForTimeout(250);
 const s13 = await spec();
-R['⑬ Gemmaのoverrides'] = s13.providers.local;
-ok.gemmaOverride = /gemma/.test(s13.providers.local.model) && s13.providers.local.overrides
-  && s13.providers.local.overrides.sliding_window_size === -1;
+const n13 = s13.nodes.find(n => n.id === 'a');
+R['⑬ Gemmaのoverrides'] = { ノード: n13.overrides, provider既定: s13.providers.local.model,
+  実際に渡る: await p.evaluate(() => effectiveOverrides(
+      JSON.parse(document.querySelector('#spec').value).providers.local,
+      JSON.parse(document.querySelector('#spec').value).nodes.find(n => n.id === 'a'))),
+  別モデルに連れて行かない: await p.evaluate(() => effectiveOverrides(
+      { adapter: 'webllm', model: 'gemma3-1b-it-q4f16_1-MLC', overrides: { sliding_window_size: -1 } },
+      { id: 'x', model: 'SmolLM2-360M-Instruct-q4f16_1-MLC' })) };
+ok.gemmaOverride = n13.overrides && n13.overrides.sliding_window_size === -1
+  && R['⑬ Gemmaのoverrides'].実際に渡る.sliding_window_size === -1
+  && R['⑬ Gemmaのoverrides'].別モデルに連れて行かない === null;
+await p.selectOption('[data-f="model"]', 'SmolLM2-360M-Instruct-q4f16_1-MLC'); await p.waitForTimeout(250);
+R['⑬ 別モデルに戻すと消える'] = (await spec()).nodes.find(n => n.id === 'a').overrides || '（無し）';
+ok.gemmaOverrideOff = R['⑬ 別モデルに戻すと消える'] === '（無し）';
+await tap('#shClose');
 
 // ⑭ 保存先の状況が出る
 await p.waitForFunction(() => /使用|保存/.test(document.querySelector('#mdlStore').textContent), null, { timeout: 10000 });

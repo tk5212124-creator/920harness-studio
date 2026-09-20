@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 入出力とモデル v0.9.0</title>
+<title>Harness Studio — ノードごとのモデルと合流 v0.10.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -92,12 +92,13 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.9.0 · 入出力とモデル</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.10.0 · ノードごとのモデルと合流</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
 <div class="card" style="margin-bottom:16px"><h2>入出力</h2>
 <div id="ioIn"></div>
+<div class="row"><button class="primary" id="runTop">実行</button><button id="cancelTop" class="danger" disabled>Cancel</button></div>
 <div class="mini" id="ioStatus"></div>
 <div id="ioOut"></div>
 <div class="mini">入力ノード・出力ノードを足したり消したりすると、ここも増えたり減ったりする。入力は「ノードの名前」で渡る。</div>
@@ -455,6 +456,15 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
 - input は1つ、output は1つ以上。すべてのノードが input から辿れて output に届くこと。
 - 出口が2本以上あるノードには route を必ず書く（書かないとエラーになる）。
 - join に入る線には position 0,1,2… を必ず付け、join には inputs の items を書く。
+- 1つの入口に2本以上の線を入れるなら、その node に inputs {"<入口名>":{"type":"any","cardinality":"many"}} を書き、
+  線に position 0,1,2… を付ける（書かないとエラーになる）。
+- **合流は「同じ分岐から出た線」どうしでしかできない。** 2本以上の出口を持つノード（=分岐）が2つあって、
+  その両方から同じ入口に線を入れると、実行時に揃わず DEADLOCK になる。
+  1つの出力を2か所で合流させたいときは、**Join を1つだけ置いて、そこから配る**:
+    A -> jn.items position 0     ← A の出口は1本だけ
+    B -> jn.items position 1     ← B の出口も1本だけ
+    jn -> 判断                    ← 分岐するのは Join（route parallel failure fail_fast を書く）
+    jn -> 方法
 - 条件式で使えるのは <node>.out / <node>.meta.len / <node>.meta.tokens / run.* / vars.* / input.*。
   比較は == != < <= > >=、論理は && || !、関数は len() has() regex() count() min() max()。
 - <node>.out.<フィールド> を見るなら、その node に schema を書く（JSONで返る保証がないため）。
@@ -662,7 +672,8 @@ function checkSchema(v,sc,path){
 /* --- ModelManager: unloaded / loading / ready / error --- */
 const ModelManager={
   states:{},
-  key(def){return [def.adapter||"?",def.endpoint||"",def.model||"",def.transport||"",def.moduleSource||"",def.useWorker===false?"w0":"w1"].join("|");},
+  key(def){return [def.adapter||"?",def.endpoint||"",def.model||"",def.transport||"",def.moduleSource||"",def.useWorker===false?"w0":"w1",
+    def.overrides?JSON.stringify(def.overrides):""].join("|");},
   get(def){return this.states[this.key(def)]||{status:"unloaded",progress:0,text:"",loadCount:0};},
   reset(){this.states={};},
   async ensureLoaded(def,adapter,signal,onProgress){
@@ -1079,10 +1090,18 @@ function buildMessages(node,inputs,ex,run){
   messages.push({role:"user",content:user});
   return messages;
 }
+/* モデルごとの起動オプション上書き。ノードでモデルを変えたら、providerの上書きは連れて行かない
+   （例: gemma は sliding_window_size を -1 にしないと起動しない。SmolLM2 にそれを付ける意味は無い） */
+function effectiveOverrides(def,node){
+  const base=(node.model&&def.model&&node.model!==def.model)?{}:(def.overrides||{});
+  const o=Object.assign({},base,node.overrides||{});
+  return Object.keys(o).length?o:null;
+}
 async function invokeNode(spec,run,node,inputs,ex,ctl,log){
   const {adapter,def}=resolveProvider(spec,node);
   def.adapter=def.adapter||adapter.id;
   const model=node.model||def.model||null;
+  const ov=effectiveOverrides(def,node);if(ov)def.overrides=ov;else delete def.overrides;
   const generation=Object.assign({},def.generation||{},node.generation||{});
   const schema=node.schema||def.schema||null;
   const signal=ctl?ctl.signal:undefined;
@@ -1103,6 +1122,27 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
 }
 
 /* ---- validation ---- */
+/* Delivery が属する分岐グループの起点を、配線だけから決める。
+   Runtime は「同じ分岐グループから来た Delivery しか1つの Execution に揃えない」ため、
+   1つの入口に別々の分岐から線が入っていると、実行時に barrier が成立しない（DEADLOCK）。
+   それを描いた時点・取り込んだ時点で分かるようにする。 */
+function deliveryOrigin(spec,edge,seen){
+  seen=seen||new Set();
+  const from=edge.from.node;
+  const outs=(spec.edges||[]).filter(e=>e.from.node===from&&!e.loop);
+  if(outs.length>1)return "分岐: "+from;                 // ここで新しい分岐グループが始まる
+  const ins=(spec.edges||[]).filter(e=>e.to.node===from&&!e.loop);
+  if(!ins.length)return "起点";
+  if(seen.has(from))return "loop: "+from;
+  seen.add(from);
+  return deliveryOrigin(spec,ins[0],seen);               // 合流点は手前の起点を引き継ぐ
+}
+function confluenceConflict(spec,nodeId,port){
+  const es=(spec.edges||[]).filter(e=>e.to.node===nodeId&&(e.to.port||"in")===port&&!e.loop);
+  if(es.length<2)return null;
+  const origins=[...new Set(es.map(e=>deliveryOrigin(spec,e)))];
+  return origins.length>1?origins:null;
+}
 function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)){errs.push("nodes無し");return errs;}
   const ids=new Set();spec.nodes.forEach(n=>{if(!n.id)errs.push("id無し");if(ids.has(n.id))errs.push("id重複: "+n.id);ids.add(n.id);});
   const nodeIds=new Set(spec.nodes.map(n=>n.id));
@@ -1141,6 +1181,8 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     const card=node&&node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
     const allCond=nonLoop.every(e=>e.if||e.else);
     if(nonLoop.length>1&&card!=="many"&&!allCond)errs.push("many以外への複数incoming: "+key);
+    if(nonLoop.length>1&&!allCond){const cf=confluenceConflict(spec,nid,port);
+      if(cf)errs.push(`合流できない配線: ${key} — 別々の分岐（${cf.join(" / ")}）から来ているので実行時に揃わない。手前で Join を1つ共有する`);}
     if(card==="many"&&nonLoop.length>1){const pos=nonLoop.map(e=>e.position);if(pos.some(p=>p==null))errs.push("position未指定: "+key);
       else{if(new Set(pos).size!==pos.length)errs.push("position重複: "+key);const sorted=[...pos].sort((a,b)=>a-b);for(let i=0;i<sorted.length;i++)if(sorted[i]!==i){errs.push("position gap: "+key);break;}}}});
   spec.nodes.forEach(n=>{if(n.type==="join"&&n.op==="template"){
@@ -1438,7 +1480,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -1676,7 +1718,20 @@ function setSpecObj(spec,opt){
 function syncFromCanvas(){$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();}
 function showErrs(){
   let errs=[];try{errs=validate(Ed.spec);}catch(e){errs=["spec不正: "+(e.message||e)];}
-  $("#vErr").textContent=errs.length?("⚠ "+errs.slice(0,4).join("\n⚠ ")+(errs.length>4?`\n…他${errs.length-4}件`:"")):"";
+  const box=$("#vErr");
+  box.innerHTML=errs.length?("⚠ "+errs.slice(0,4).map(esc).join("\n⚠ ")+(errs.length>4?`\n…他${errs.length-4}件`:"")):"";
+  // 入口の合流（many以外への複数incoming / 合流できない配線）は、その場で直せるようにする
+  const targets=[];
+  for(const m of errs){
+    const r=/^many以外への複数incoming: (.+)\.([^.]+)$/.exec(m)||/^合流できない配線: (.+)\.([^.\s]+) —/.exec(m);
+    if(r&&!targets.some(t=>t.id===r[1]&&t.port===r[2]))targets.push({id:r[1],port:r[2]});}
+  if(targets.length){
+    const row=document.createElement("div");row.className="row";
+    const b=document.createElement("button");b.id="vFixFanIn";b.className="primary";
+    b.textContent=targets.length>1?`入口の合流を直す（${targets.length}か所）`:`${targets[0].id} の入口をまとめる`;
+    b.onclick=()=>askFanIn(targets,()=>{syncFromCanvas();setHint(`入口の合流を直した`);});
+    row.appendChild(b);box.appendChild(row);
+  }
   return errs;
 }
 /* --- 描画 --- */
@@ -1848,14 +1903,103 @@ $("#cv").addEventListener("wheel",ev=>{ev.preventDefault();
   Ed.view.x=ox-(ox-Ed.view.x)*(k/Ed.view.k);Ed.view.y=oy-(oy-Ed.view.y)*(k/Ed.view.k);Ed.view.k=k;applyView();},{passive:false});
 
 /* --- つなぐ --- */
+const portCard=(nodeId,port)=>{const n=nodeById(nodeId);return n&&n.inputs&&n.inputs[port]&&n.inputs[port].cardinality;};
+const edgesInto=(nodeId,port)=>(Ed.spec.edges||[]).filter(e=>e.to.node===nodeId&&(e.to.port||"in")===port&&!e.loop);
+// その入口を「複数受け取る」に変える（position を振り直す）
+function makePortMany(nodeId,port){
+  const n=nodeById(nodeId);if(!n)return;
+  n.inputs=n.inputs||{};n.inputs[port]=Object.assign({type:"any"},n.inputs[port]||{},{cardinality:"many"});
+  edgesInto(nodeId,port).forEach((e,i)=>{e.position=i;});
+}
+// その入口の手前に Join を挟む（元の線は Join へ付け替える）
+function insertJoin(nodeId,port){
+  const ins=edgesInto(nodeId,port);if(!ins.length)return null;
+  const jid=newId("jn");
+  const jn={id:jid,type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}};
+  Ed.spec.nodes.push(jn);
+  ins.forEach((e,i)=>{e.to={node:jid,port:"items"};e.position=i;});
+  Ed.spec.edges.push({from:{node:jid,port:"out"},to:{node:nodeId,port}});
+  const p0=posOf(nodeId);layout()[jid]=freeSpot(Ed.dir==="tb"?p0.x:p0.x-190,Ed.dir==="tb"?p0.y-100:p0.y,jid);
+  return jid;
+}
+// 入口に2本以上入っている所（条件分岐で1本しか流れない所は除く）
+function fanInTargets(){
+  const out=[],seen=new Set();
+  for(const e of Ed.spec.edges||[]){
+    if(e.loop)continue;const port=e.to.port||"in";const k=e.to.node+"."+port;
+    if(seen.has(k))continue;seen.add(k);
+    const es=edgesInto(e.to.node,port);
+    if(es.length>1&&!es.every(x=>x.if||x.else))out.push({id:e.to.node,port});
+  }
+  return out;
+}
+const srcKeyOf=t=>edgesInto(t.id,t.port).map(e=>e.from.node+"#"+(e.from.port||"out")).sort().join(",");
+// 出どころの組み合わせが同じ入口は、同じ直し方で一度に直す（Joinを共有する）
+function fanInGroups(seeds){
+  const all=fanInTargets();
+  const seedKeys=[...new Set((seeds&&seeds.length?seeds:all).map(srcKeyOf))];
+  return seedKeys.map(k=>{const targets=all.filter(t=>srcKeyOf(t)===k);
+    return{key:k,targets,srcs:targets.length?edgesInto(targets[0].id,targets[0].port).map(e=>e.from.node):[],
+      conflict:targets.some(t=>!!confluenceConflict(Ed.spec,t.id,t.port))};});
+}
+// そのグループの入口を、1つの Join に集めてから配る（別々の分岐から来ていても揃う形になる）
+function insertSharedJoin(g){
+  if(!g.targets.length)return null;
+  const jid=newId("jn");
+  const jn={id:jid,type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}};
+  Ed.spec.nodes.push(jn);
+  const srcs=edgesInto(g.targets[0].id,g.targets[0].port).map(e=>({node:e.from.node,port:e.from.port||"out"}));
+  for(const t of g.targets){
+    Ed.spec.edges=Ed.spec.edges.filter(e=>!(e.to.node===t.id&&(e.to.port||"in")===t.port&&!e.loop));
+    const n=nodeById(t.id);
+    if(n&&n.inputs&&n.inputs[t.port]){delete n.inputs[t.port];if(!Object.keys(n.inputs).length)delete n.inputs;}
+  }
+  srcs.forEach((sp,i)=>Ed.spec.edges.push({from:{node:sp.node,port:sp.port},to:{node:jid,port:"items"},position:i}));
+  for(const t of g.targets)Ed.spec.edges.push({from:{node:jid,port:"out"},to:{node:t.id,port:t.port}});
+  const p0=posOf(g.targets[0].id);
+  layout()[jid]=freeSpot(Ed.dir==="tb"?p0.x:p0.x-190,Ed.dir==="tb"?p0.y-100:p0.y,jid);
+  return jid;
+}
+/* 入口の合流をどう受け取るか聞く。勝手には決めない。
+   別々の分岐から来ている合流は「まとめて受け取る」だけでは実行時に揃わない（barrier未成立）ので出さない。 */
+function askFanIn(seeds,cb){
+  const gs=fanInGroups(seeds);
+  const anyConflict=gs.some(g=>g.conflict);
+  const lines=gs.map(g=>`・${g.targets.map(t=>t.id+(t.port==="in"?"":"."+t.port)).join(" / ")} ← ${g.srcs.join(", ")}`
+    +(g.conflict?"（別々の分岐から来ている）":"")).join("<br>");
+  const n=gs.reduce((a,g)=>a+g.targets.length,0);
+  const h=head(n>1?`${n}か所の入口に複数の線が入っている`:`${gs[0]&&gs[0].targets[0]?gs[0].targets[0].id:""} の入口に2本目が入った`)+
+    `<div class="mini">1つの入口に複数の線を入れるには、受け取り方を決める必要がある（勝手には決めない）。<br>${lines}</div>`+
+    (anyConflict?`<div class="mini" style="color:var(--warn)">別々の分岐から来ている合流は、そのまま複数受け取りにしても実行時に揃わない（DEADLOCK）。手前で Join を1つ共有する形にする。</div>`:"")+
+    `<div class="palette" style="margin-top:10px">`+
+    (anyConflict?"":`<button id="miMany"><b>まとめて受け取る</b><small>つないだ順に1つの文としてまとめて渡す（入口を複数OKにする）</small></button>`)+
+    `<button id="miJoin"><b>Joinでまとめる</b><small>手前に Join ノードを作る。同じ出どころの合流は1つの Join を共有する</small></button></div>`;
+  openSheet(h);bindClose();
+  const many=$("#miMany");
+  if(many)many.onclick=()=>{gs.forEach(g=>g.targets.forEach(t=>makePortMany(t.id,t.port)));closeSheet();cb&&cb("many");};
+  $("#miJoin").onclick=()=>{
+    const made=gs.map(g=>({jid:insertSharedJoin(g),outs:g.targets.length})).filter(x=>x.jid);
+    closeSheet();
+    // Join が2つ以上に配るなら、その配り方もユーザーが決める
+    const need=made.find(x=>x.outs>1);
+    if(need)askRouting(need.jid,()=>cb&&cb("join",need.jid));
+    else cb&&cb("join",made[0]&&made[0].jid);
+  };
+}
 function connect(from,to){
   if(from===to)return setHint("同じノードには繋げない");
   const tn=nodeById(to);const port=(tn&&tn.type==="join")?"items":"in";
   const es=Ed.spec.edges=Ed.spec.edges||[];
   if(es.some(e=>e.from.node===from&&e.to.node===to&&(e.to.port||"in")===port))return setHint("同じ辺がもうある");
+  const already=edgesInto(to,port).length;
   const edge={from:{node:from,port:"out"},to:{node:to,port}};
-  if(port==="items"){edge.position=es.filter(e=>e.to.node===to&&(e.to.port||"in")==="items").length;}
+  if(port==="items"){edge.position=already;}
   es.push(edge);
+  // 入口が2本目になったら、受け取り方を聞く（描けるのに実行できない状態を作らない）
+  if(port!=="items"&&already>=1&&portCard(to,port)!=="many"){
+    askFanIn([{id:to,port}],()=>{syncFromCanvas();setHint(`${to} の入口をまとめた`);});
+    syncFromCanvas();return;
+  }
   const outs=outEdges(from).filter(e=>!e.loop);
   const src=nodeById(from);
   if(outs.length>1&&!(src.routing&&src.routing.mode)){
@@ -1906,14 +2050,24 @@ function bindFields(obj,after){
 function openNodeSheet(id){
   const n=nodeById(id);if(!n)return;
   const provs=Object.keys(Ed.spec.providers||{});
-  const provOpts=[{v:"",t:"(未設定)"}].concat(provs.map(p=>({v:p,t:p+"（"+((Ed.spec.providers[p]||{}).adapter||"?")+"）"}))).concat([{v:"__mock",t:"mock（テスト用・推論しない）"}]);
+  const provOpts=[{v:"",t:"(未設定)"}]
+    .concat(provs.map(p=>({v:p,t:p+"（"+((Ed.spec.providers[p]||{}).adapter||"?")+"）"})))
+    .concat([{v:"__webllm",t:"＋ 内蔵LLM（この端末で動く）"},{v:"__mock",t:"mock（テスト用・推論しない）"}]);
   const provVal=n.provider||(n.mock?"__mock":"");
+  const provDef=n.provider?(Ed.spec.providers||{})[n.provider]:null;
+  const provAdapter=provDef&&provDef.adapter;
   let h=head("ノード: "+id);
   h+=fld("ID",txt("id",n.id));
   h+=fld("種類",`<input type="text" value="${esc(n.type||"llm")}" disabled>`);
   if(n.type==="llm"||n.type===undefined){
     h+=fld("Provider",sel("__prov",provVal,provOpts));
-    h+=fld("モデル（provider既定を上書き）",txt("model",n.model,"空ならprovider側の設定"));
+    // モデルは一覧から選ぶ（providerの種類で中身が変わる）
+    if(provAdapter==="webllm"||provAdapter==="openai_local"){
+      const list=provAdapter==="webllm"?webllmModelOptions():OPENAI_LOCAL_MODELS.map(x=>({v:x,t:x}));
+      const opts=[{v:"",t:`（providerの既定: ${(provDef&&provDef.model)||"未設定"}）`}].concat(list);
+      if(n.model&&!list.some(o=>o.v===n.model))opts.push({v:n.model,t:n.model+"（いま入っている値）"});
+      h+=fld("このノードで使うモデル",sel("model",n.model||"",opts));
+    }else if(provAdapter)h+=fld("モデル（provider既定を上書き）",txt("model",n.model,"空ならprovider側の設定"));
     h+=fld("system",area("prompt.system",getP(n,"prompt.system"),"役割の指定"));
     h+=fld("本文テンプレ（{{{run_input.question}}} や {{{in}}} が使える）",
       area("prompt.template.value",getP(n,"prompt.template.value"),"空なら前のノードの出力をそのまま渡す"));
@@ -1948,10 +2102,27 @@ function openNodeSheet(id){
   const pv=$("#sheetBody").querySelector('[data-f="__prov"]');
   if(pv)pv.onchange=()=>{
     if(pv.value==="__mock"){delete n.provider;n.mock=n.mock||{text:"(mock)"};}
+    else if(pv.value==="__webllm"){
+      // 内蔵LLMを使う宣言が無ければ作る（中身は Spec に書かれるので見える）
+      const sp=Ed.spec;sp.providers=sp.providers||{};
+      let pid=Object.keys(sp.providers).find(k=>(sp.providers[k]||{}).adapter==="webllm");
+      if(!pid){pid="local";
+        const first=(customModels[0]&&customModels[0].id)||MODEL_CATALOG[0].id;
+        sp.providers[pid]=Object.assign({},webllmDef(first),{generation:{maxTokens:160,temperature:0.7}});}
+      delete n.mock;n.provider=pid;
+    }
     else if(pv.value===""){delete n.provider;}
     else{delete n.mock;n.provider=pv.value;}
     syncFromCanvas();openNodeSheet(n.id);
   };
+  // 内蔵LLMはモデルごとに起動オプションの上書きが要る（gemma など）。選んだ時点で Spec に書く
+  const mv=$("#sheetBody").querySelector('select[data-f="model"]');
+  if(mv&&provAdapter==="webllm")mv.addEventListener("change",()=>{
+    const c=n.model?customById(n.model):null;
+    const o=Object.assign({},(n.model?modelOverrides(n.model):null)||{},(c&&c.overrides)||{});
+    if(Object.keys(o).length)n.overrides=o;else delete n.overrides;
+    syncFromCanvas();
+  });
   const sc=$("#sheetBody").querySelector('[data-json="schema"]');
   if(sc)sc.oninput=()=>{
     const v=sc.value.trim();
@@ -2225,6 +2396,10 @@ $("#spec").addEventListener("input",()=>{
 
 
 const setState=t=>$("#stateline").textContent="state: "+t;
+function setRunUI(running){
+  for(const id of ["#run","#runTop"]){const b=$(id);if(b)b.disabled=running;}
+  for(const id of ["#cancel","#cancelTop"]){const b=$(id);if(b)b.disabled=!running;}
+}
 let cur=null,ctl=null;
 function parseSpec(){let spec;try{spec=JSON.parse($("#spec").value);}catch(e){log("err","JSON: "+e.message);return null;}const errs=validate(spec);if(errs.length){errs.forEach(e=>log("err","VALIDATE: "+e));return null;}return spec;}
 function updateResume(){const cp=store.load();$("#resume").disabled=!(cp&&cp.status!=="success"&&cp.resumable);
@@ -2253,7 +2428,7 @@ function report(){setState(`${cur.status} | calls=${cur.totals.apiCalls} iterTot
   if(cur.status==="failed")log("err","── failed ── "+JSON.stringify(cur.errors));
   if(cur.status==="cancelled")log("cp","── cancelled（部分出力は破棄）──");
   if(cur.status==="paused")log("cp","── paused（Resume可）──");
-  renderTotals();renderIO();updateResume();$("#cancel").disabled=true;$("#run").disabled=false;}
+  renderTotals();renderIO();updateResume();setRunUI(false);}
 function newCtl(){return makeController({
   onToken:(nodeId,t)=>{onToken(nodeId,t);edToken(nodeId,t);},
   onProgress:()=>renderProvState(),
@@ -2340,6 +2515,14 @@ function loadCustomModels(){try{return JSON.parse(localStorage.getItem(CUSTOM_KE
 function saveCustomModels(){try{localStorage.setItem(CUSTOM_KEY,JSON.stringify(customModels));}catch(e){}}
 let customModels=loadCustomModels();
 const customById=id=>customModels.find(m=>m.id===id);
+function webllmModelOptions(){
+  const out=customModels.map(m=>({v:m.id,t:m.id+"（自前）"}));
+  for(const m of MODEL_CATALOG){
+    out.push({v:m.id,t:`${m.id}${mdlCache[m.id]?" ✔端末にある":""}（約${m.vram}MB）`});
+    if(m.f32)out.push({v:m.f32,t:`${m.f32}${mdlCache[m.f32]?" ✔端末にある":""}（f16不要・約${Math.round(m.vram*1.35)}MB）`});
+  }
+  return out;
+}
 const mdlCache={};       // id -> 端末にあるか（調べたものだけ）
 function webllmDef(id){const d={adapter:"webllm",model:id,useWorker:true,indexedDB:true,moduleSource:wlSrc};
   const ov=modelOverrides(id);if(ov)d.overrides=ov;
@@ -2359,7 +2542,6 @@ function renderModels(){
     rows.push({...m,quant:"q4f16"});
     if(showF32&&m.f32)rows.push({...m,id:m.f32,quant:"q4f32",vram:Math.round(m.vram*1.35)});
   }
-  const using=currentModelId();
   const box=$("#mdlList");box.innerHTML="";
   for(const m of rows){
     const st=ModelManager.get(webllmDef(m.id));
@@ -2371,15 +2553,14 @@ function renderModels(){
     if(cached===true)tags.push('<span class="mtag on">端末にある</span>');
     if(cached===false)tags.push('<span class="mtag">未取得</span>');
     if(st.status==="ready")tags.push('<span class="mtag on">起動済み</span>');
-    if(using===m.id)tags.push('<span class="mtag use">これを使う設定</span>');
+
     const d=document.createElement("div");d.className="mrow";
     d.innerHTML=`<div class="mname"><b>${esc(m.id)}</b><small>${esc(m.note)}</small>`
       +`<div style="margin-top:3px">${tags.join(" ")}</div>`
       +`<div class="mstat" data-stat="${esc(m.id)}">${esc(busy?(mdlActive.text||"開始"):(mdlLast[m.id]||""))}</div></div>`
       +`<div class="mbtns">`
       +(busy?`<button data-act="stop" data-id="${esc(m.id)}" class="danger">中止</button>`
-            :`<button data-act="get" data-id="${esc(m.id)}"${mdlActive?" disabled":""}>${cached===true?"起動する":"ダウンロード"}</button>`
-             +`<button data-act="use" data-id="${esc(m.id)}">これを使う</button>`
+            :(cached===true?"":`<button data-act="get" data-id="${esc(m.id)}"${mdlActive?" disabled":""}>ダウンロード</button>`)
              +`<button data-act="test" data-id="${esc(m.id)}"${mdlActive?" disabled":""}>動作確認</button>`
              +`<button data-act="del" data-id="${esc(m.id)}" class="danger"${mdlActive?" disabled":""}>削除</button>`
              +(m.mine?`<button data-act="unreg" data-id="${esc(m.id)}"${mdlActive?" disabled":""}>登録を消す</button>`:""))
@@ -2407,13 +2588,6 @@ async function modelAction(act,id,btn){
   if(act==="stop"){if(mdlCtl)mdlCtl.abort();setRowStat(id,"中止を要求した…");return;}
   if(mdlActive&&act!=="use")return setMdlMsg("いま別のモデルを用意中。中止するか、終わるまで待つ");
   try{
-    if(act==="use"){
-      const spec=Ed.spec;spec.providers=spec.providers||{};
-      spec.providers.local=Object.assign({},spec.providers.local||{},def,{generation:{maxTokens:160,temperature:0.7}});
-      setSpecObj(spec);setAdapter("webllm");$("#model").value=id;renderModels();
-      setMdlMsg(`providers.local = ${id}。ハーネスの llm ノードで provider に local を選べば、この端末のモデルで動く`);
-      return;
-    }
     if(act==="unreg"){
       customModels=customModels.filter(x=>x.id!==id);saveCustomModels();renderModels();
       setMdlMsg(`${id} の登録を消した（端末に落とした重みは「削除」で消す）`);return;
@@ -2439,7 +2613,7 @@ async function modelAction(act,id,btn){
     mdlCache[id]=true;setMdlBar(1);
     if(act==="get"){
       setRowStat(id,`✔ 起動した（${loadSec}秒）`,true);
-      setMdlMsg(`✔ ${id} を起動した（${loadSec}秒）。「動作確認」で実際に1文生成できる`);
+      setMdlMsg(`✔ ${id} を端末に用意した（${loadSec}秒）。ノード編集の「このノードで使うモデル」から選べる`);
       log("ok",`✔ ${id} ready (${loadSec}s)`);return;
     }
     // 動作確認: 実際に1回推論して速さを測る
@@ -2583,24 +2757,33 @@ $("#mdlScan").onclick=async()=>{
   }catch(e){setMdlMsg("調べられない: "+((e&&e.message)||e));}
   finally{b.disabled=false;renderModels();}
 };
-async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec)return;
+/* 実行できない理由を、押した場所のすぐそばに出す（「押しても動かない」を作らない） */
+function noteBlocked(){
+  let errs=[];try{errs=validate(JSON.parse($("#spec").value));}catch(e){errs=["JSONとして読めない: "+(e.message||e)];}
+  const st=$("#ioStatus");
+  if(st)st.textContent="実行できない — 先に直すところがある: "+(errs[0]||"検証エラー")+(errs.length>1?`（他${errs.length-1}件）`:"");
+  setHint("実行できない: "+(errs[0]||"検証エラー"));
+  const box=$("#vErr");if(box&&box.textContent.trim())box.scrollIntoView({block:"center"});
+}
+async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec){noteBlocked();return;}
   store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
-  $("#cancel").disabled=false;$("#run").disabled=true;setState("running");
+  setRunUI(true);setState("running");
   try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+(e.message||e));}
   report();}
-async function stepOne(){const spec=parseSpec();if(!spec)return;
+async function stepOne(){const spec=parseSpec();if(!spec){noteBlocked();return;}
   if(!cur||cur.status!=="running"){clearLog();clearStream();store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();}
   const r=await processOneWorkItem(spec,cur,store,log,ctl);log("cp",`  ▸ work: ${r.kind}`);report();}
 async function doResume(){clearLog();const cp=store.load();if(!cp){log("err","Checkpointなし");return;}if(cp.status==="success"){log("err","terminal success はResume不可");return;}
   const spec=parseSpec();if(!spec)return;if(canonSpec(spec)!==cp.specCanon){log("err","Spec変更のためResume拒否（自動移行しない）");return;}
   cur=cp;ctl=newCtl();log("cp",`▣ Resume: status=${cp.status} queue先頭=${JSON.stringify(cp.workQueue[0])}`);
-  $("#cancel").disabled=false;try{await resumeRun(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+(e.message||e));}report();}
+  setRunUI(true);try{await resumeRun(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+(e.message||e));}report();}
 async function doRetry(){const spec=parseSpec();if(!spec||!cur)return;
   const failed=Object.values(cur.executions).find(e=>e.status==="failed");if(!failed){log("err","failedなExecutionが無い");return;}
-  log("cp",`▣ Retry: ${failed.execId}（iteration不変・attempt+1）`);ctl=newCtl();$("#cancel").disabled=false;
+  log("cp",`▣ Retry: ${failed.execId}（iteration不変・attempt+1）`);ctl=newCtl();setRunUI(true);
   try{await retryExecution(spec,cur,failed.execId,store,log,ctl);}catch(e){log("err","例外: "+(e.message||e));}report();}
-$("#run").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResume;$("#retry").onclick=doRetry;
-$("#cancel").onclick=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
+$("#run").onclick=runAll;$("#runTop").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResume;$("#retry").onclick=doRetry;
+const doCancel=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
+$("#cancel").onclick=doCancel;$("#cancelTop").onclick=doCancel;
 $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
 setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");loadFromHash();fitView();renderTotals();renderIO();renderModels();updateStorageInfo();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
@@ -2836,6 +3019,36 @@ export async function CreateMLCEngine(model,opt){
   let allRej=true,lineOK=false;
   for(const[src,_]of cases){try{hslToSpec(src);allRej=false;}catch(e){if(e.code!=="HSL_PARSE_ERROR")allRej=false;if(e.line>0)lineOK=true;}}
   ok("31 HSL: 壊れた記述は HSL_PARSE_ERROR（行番号つき）",allRej&&lineOK);}
+ // 32 合流できる配線か（別々の分岐からの合流は静的に落とす）
+ {const mk=(edges,forkAB)=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+   nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+     {id:"A",type:"llm",provider:"m",mock:{tag:"A"},...(forkAB?{routing:{mode:"parallel",failurePolicy:"fail_fast"}}:{})},
+     {id:"B",type:"llm",provider:"m",mock:{tag:"B"},...(forkAB?{routing:{mode:"parallel",failurePolicy:"fail_fast"}}:{})},
+     {id:"C",type:"llm",provider:"m",mock:{echoInput:true},inputs:{in:{type:"any",cardinality:"many"}}},
+     {id:"D",type:"llm",provider:"m",mock:{echoInput:true},inputs:{in:{type:"any",cardinality:"many"}}},
+     {id:"out",type:"output"}],edges});
+  const base=[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+    {from:{node:"A",port:"out"},to:{node:"C",port:"in"},position:0},{from:{node:"B",port:"out"},to:{node:"C",port:"in"},position:1},
+    {from:{node:"C",port:"out"},to:{node:"out",port:"in"}}];
+  const same=validate(mk(base,false));
+  const cross=validate(mk(base.concat([{from:{node:"A",port:"out"},to:{node:"D",port:"in"},position:0},
+    {from:{node:"B",port:"out"},to:{node:"D",port:"in"},position:1}]),true));
+  ok("32 合流: 同じ分岐からはOK・別々の分岐からは静的にエラー",
+    same.length===0&&cross.filter(e=>/^合流できない配線/.test(e)).length===2);}
+ // 33 Joinを1つ共有した形は実際に流れる（別々の分岐の合流を直した後の形）
+ {const sp={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+   nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+     {id:"A",type:"llm",provider:"m",mock:{tag:"A"}},{id:"B",type:"llm",provider:"m",mock:{tag:"B"}},
+     {id:"jn",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}},routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+     {id:"C",type:"llm",provider:"m",mock:{echoInput:true}},{id:"D",type:"llm",provider:"m",mock:{echoInput:true}},
+     {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"jn",port:"items"},position:0},{from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:1},
+     {from:{node:"jn",port:"out"},to:{node:"C",port:"in"}},{from:{node:"jn",port:"out"},to:{node:"D",port:"in"}},
+     {from:{node:"C",port:"out"},to:{node:"out",port:"in"}}]};
+  const r=await fullRun(sp,{});
+  const both=["C","D"].every(id=>(r.nodeRuns[id]||[]).some(h=>h.status==="success"));
+  ok("33 合流: Joinを1つ共有すれば2か所に配っても揃う",validate(sp).length===0&&r.status==="success"&&both);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${(e&&e.message)||JSON.stringify(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
