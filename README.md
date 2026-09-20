@@ -252,6 +252,8 @@ models.txt
 - **wasm（`model_lib`）は差し替えない。** WebLLM が元から持っているものを使い、**重みのURLだけ**を差し替える。
 - アプリは起動時に `models_index.json` を読み、載っているモデルに
   **`このサイトから取れる`** を付ける。落とすときの取得先もこのサイトになる（同一オリジンなので速い）。
+- **取得先が変わっても、端末にある分は落とし直さない。** すでに HuggingFace から落としてあるモデルは
+  そのまま使う（ログと進捗に「端末にある前の取得分」と出す）。削除は両方まとめて消す。
 - **HuggingFace に届かないときは、アプリ本体のデプロイは止めない。** `models_index.json` に載らないだけで、
   端末は今までどおり HuggingFace から直接落とす（ログに `::warning::` が出る）。
 - 取ってきたモデルは Actions のキャッシュに入るので、毎回のデプロイで落とし直さない。
@@ -613,7 +615,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト35件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2 + Join/失敗の文2）
+node tests/harness-runtime.mjs      # 自己テスト39件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2 + Join/失敗の文2 + JSON強制と取得先4）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
@@ -747,6 +749,9 @@ MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデ�
 - 29–31: HSL の往復（全例ロスレス / 未知キー保持 / 壊れた記述は行番号付きで拒否）
 - 32–33: **合流の可否**（別々の分岐からの合流は静的にエラー / Joinを1つ共有した形は実際に流れる）
 - 34–35: **Joinのまとめ方**（markdown / csv / キー付き・必ず付ける文）と**失敗の文**（何が読めなかったかを言う）
+- 36–37: 内蔵LLMのJSON強制（`response_format.schema` を文字列で渡す / schema が無いときは付けない）
+- 38: `maxTokens` で切れたときは「切れた」と言う
+- 39: 取得先が変わっても端末にある分を使う（落とし直させない）
 
 ### 本物のモデルでの確認（GitHub Actions）
 

@@ -977,7 +977,7 @@ function mapWebLLMError(e,def){
    weightsUrl があれば、そのモデルの重みだけ自前の置き場（このサイトなど）から取る。
    wasm（model_lib）は WebLLM が元から持っているものをそのまま使う。 */
 const SITE_WEIGHTS={};   // model_id -> このページが配っている重みのURL（models_index.json から入る）
-function weightsUrlFor(def){return def.weightsUrl||SITE_WEIGHTS[def.model]||null;}
+function weightsUrlFor(def){if(def.noSite)return null;return def.weightsUrl||SITE_WEIGHTS[def.model]||null;}
 function buildAppConfig(m,def){
   const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
   const wu=weightsUrlFor(def);
@@ -1008,6 +1008,18 @@ const WebLLMProvider={
     if(def.overrides&&appConfig.model_list)
       appConfig.model_list=appConfig.model_list.map(r=>r.model_id===def.model
         ?Object.assign({},r,{overrides:Object.assign({},r.overrides||{},def.overrides)}):r);
+    // 取得先を変えただけで落とし直しにならないように、端末にある方を優先する
+    let from=wURL?"このサイト":"配布元";
+    if(wURL&&typeof m.hasModelInCache==="function"){
+      try{
+        if(!(await m.hasModelInCache(def.model,appConfig))){
+          const plain=buildAppConfig(m,Object.assign({},def,{weightsUrl:null,noSite:true}));
+          if(await m.hasModelInCache(def.model,plain)){
+            appConfig.model_list=plain.model_list;from="端末にある前の取得分";}
+        }else from="端末にある分（このサイトから落としたもの）";
+      }catch(_){}
+    }
+    onProgress&&onProgress({progress:0.04,text:"重みの置き場: "+from});
     // 進み具合を見張る。一定時間まったく進まなければ「進まない」と伝えて打ち切る
     const stallMs=def.stallMs||120000;
     let lastAt=Date.now(),stallIv=null;
@@ -1108,13 +1120,19 @@ const WebLLMProvider={
   // 端末に保存済みかを見る／消す（モデルは数百MBなので出し入れできるようにする）
   async cacheStatus(def){
     const m=await loadWebLLMModule(webllmModuleUrl(def));
-    const appConfig=buildAppConfig(m,def);
-    return{cached:await m.hasModelInCache(def.model,appConfig)};
+    if(await m.hasModelInCache(def.model,buildAppConfig(m,def)))return{cached:true,from:"site"};
+    if(weightsUrlFor(def)){   // 取得先を変える前に落としたものが残っていないか
+      const plain=buildAppConfig(m,Object.assign({},def,{weightsUrl:null,noSite:true}));
+      if(await m.hasModelInCache(def.model,plain))return{cached:true,from:"upstream"};
+    }
+    return{cached:false,from:null};
   },
   async deleteCache(def){
     const m=await loadWebLLMModule(webllmModuleUrl(def));
-    const appConfig=buildAppConfig(m,def);
-    await m.deleteModelAllInfoInCache(def.model,appConfig);
+    await m.deleteModelAllInfoInCache(def.model,buildAppConfig(m,def));
+    if(weightsUrlFor(def)){   // 取得先が変わる前に落としたものも消す
+      try{await m.deleteModelAllInfoInCache(def.model,buildAppConfig(m,Object.assign({},def,{weightsUrl:null,noSite:true})));}catch(_){}
+    }
     ModelManager.reset();
     return true;
   },
@@ -3293,7 +3311,14 @@ const localSpec=(over,nodeOver)=>({metadata:{version:"1"},
     &&u.startsWith("PRE\n\n")&&u.endsWith("\n\nSUF")&&u.includes('5 > 3 & "引用"')&&u.includes("<b>太字</b>"));}
  // 27/28 webllm adapter（engineを差し替えてAPI形だけ検証。実WebGPU推論はGPUのある実機で確認する）
  {const src=`
+export const prebuiltAppConfig={model_list:[
+  {model_id:"stub-model",model:"https://huggingface.co/x/stub-model",model_lib:"https://example.invalid/stub.wasm"}]};
+export async function hasModelInCache(id,appConfig){
+  const r=(appConfig.model_list||[]).find(x=>x.model_id===id);
+  return !!r&&r.model===globalThis.__wllmCachedUrl;
+}
 export async function CreateMLCEngine(model,opt){
+  globalThis.__wllmLastAppConfig=opt&&opt.appConfig;
   if(opt&&opt.initProgressCallback)opt.initProgressCallback({progress:0.5,text:"stub 50%"});
   return {interruptGenerate(){globalThis.__wllmInterrupt=(globalThis.__wllmInterrupt||0)+1;},
     chat:{completions:{async create(o){
@@ -3317,6 +3342,7 @@ export async function CreateMLCEngine(model,opt){
     const why=(typeof navigator!=="undefined"&&navigator.gpu)?"stubモジュールをimportできない環境":"navigator.gpu が無い環境";
     skip("27 webllm: streaming/usage",why);skip("28 webllm: decode中cancel→interruptGenerate",why);
     skip("36 webllm: response_format.schema",why);skip("37 webllm: schema無しでは付けない",why);
+    skip("39 webllm: 端末にある分を使う",why);
   }else{
     globalThis.__wllmTokens=["ブ","ラ","ウ","ザ"];globalThis.__wllmDelay=0;globalThis.__wllmInterrupt=0;
     ModelManager.reset();
@@ -3345,6 +3371,23 @@ export async function CreateMLCEngine(model,opt){
     await fullRun(spT,{});
     ok("37 webllm: schemaが無いときは response_format を付けない",
       !(globalThis.__wllmLastOpt||{}).response_format);
+    // 39 取得先を変えても、端末にすでにある分を使う（落とし直させない）
+    {const SITE="https://example.test/models/stub-model/resolve/main/";
+     const base={adapter:"webllm",model:"stub-model",moduleUrl:url,useWorker:false,weightsUrl:SITE};
+     const urlOf=()=>((globalThis.__wllmLastAppConfig||{}).model_list||[]).find(r=>r.model_id==="stub-model").model;
+     globalThis.__wllmCachedUrl=null;ModelManager.reset();globalThis.__wllmLastAppConfig=null;
+     await ModelManager.ensureLoaded(base,PROVIDERS.webllm,undefined,null);
+     const a=urlOf();                       // どちらにも無い → このサイトから取る
+     globalThis.__wllmCachedUrl="https://huggingface.co/x/stub-model";ModelManager.reset();globalThis.__wllmLastAppConfig=null;
+     await ModelManager.ensureLoaded(base,PROVIDERS.webllm,undefined,null);
+     const b=urlOf();                       // 前に配布元から落としてある → それを使う
+     const st=await PROVIDERS.webllm.cacheStatus(base);
+     globalThis.__wllmCachedUrl=SITE;ModelManager.reset();globalThis.__wllmLastAppConfig=null;
+     await ModelManager.ensureLoaded(base,PROVIDERS.webllm,undefined,null);
+     const c=urlOf();                       // このサイトから落としてある → そのまま
+     ok("39 webllm: 取得先が変わっても端末にある分を使う（無ければこのサイトから取る）",
+       a===SITE&&b==="https://huggingface.co/x/stub-model"&&c===SITE&&st.cached===true&&st.from==="upstream");
+     globalThis.__wllmCachedUrl=null;ModelManager.reset();}
   }}
  // 29 HSL: 全ての例で 書き出し→読み込み が往復する
  {const bad=[];
