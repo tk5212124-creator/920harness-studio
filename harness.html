@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 確認を減らして迷わせない v0.16.0</title>
+<title>Harness Studio — 確認を減らして迷わせない v0.16.1</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -93,7 +93,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.16.0 · 確認を減らして迷わせない</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.16.1 · 確認を減らして迷わせない</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -155,6 +155,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="canvas" id="cv"><div id="world"><svg id="edges"></svg><div id="nodes"></div></div>
 <div class="fab"><button id="zIn" title="拡大">＋</button><button id="zOut" title="縮小">−</button><button id="zFit" title="全体">⤢</button></div>
 </div>
+<div class="mini" id="nowSpec"></div>
 <div class="hintbar" id="hint"></div>
 <div class="row"><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button></div>
 <input type="file" id="fileIn" accept=".hsl,.json,.txt,text/plain,application/json" style="display:none">
@@ -1964,8 +1965,16 @@ function setSpecObj(spec,opt){
   Ed.spec=spec;ensureLayout();
   if(!(opt&&opt.keepText))$("#spec").value=JSON.stringify(spec,null,2);
   edRender();showErrs();renderIO();if(typeof renderModels==="function")renderModels();
+  showNow();
 }
-function syncFromCanvas(){$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();}
+function syncFromCanvas(){$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();showNow();}
+/* いま図に載っているハーネスを、常に見える場所に書く（「反映されていない？」を作らない） */
+function showNow(){
+  const el=$("#nowSpec");if(!el)return;
+  const sp=Ed.spec||{};
+  el.textContent=`いま開いているハーネス: ${(sp.metadata&&sp.metadata.name)||"名前なし"}`
+    +`（ノード${(sp.nodes||[]).length}・線${(sp.edges||[]).length}${sp.providers?"・provider "+Object.keys(sp.providers).join(",") :""}）`;
+}
 /* 出力の形。内蔵LLMでは schema が文法になるので、ここで選んだ形しか出せなくなる。
    （プロンプトに「JSON形式で出力すること」と書いても、縛りにはならない） */
 const SCHEMA_PRESETS=[

@@ -99,6 +99,8 @@ await p.waitForTimeout(300);
 await tap('#viewSeg button[data-v="editor"]');
 R['⑥ 貼った直後'] = { 図: await canvasIds(), 出力欄: await p.$$eval('#ioOut [data-out]', e => e.map(x => x.dataset.out)),
   お知らせ: (await p.textContent('#hint')).replace(/\s+/g, ' ').slice(0, 50) };
+R['⑥ いま開いているハーネス'] = (await p.textContent('#nowSpec')).replace(/\s+/g, ' ');
+ok.nowLine = R['⑥ いま開いているハーネス'].includes('貼ったハーネス') && R['⑥ いま開いているハーネス'].includes('ノード3');
 ok.jsonApplied = JSON.stringify(R['⑥ 貼った直後'].図) === JSON.stringify(['in', 'a', 'res'])
   && JSON.stringify(R['⑥ 貼った直後'].出力欄) === JSON.stringify(['res'])
   && R['⑥ 貼った直後'].お知らせ.includes('貼ったハーネス');
