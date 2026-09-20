@@ -42,33 +42,20 @@ R['① 実行'] = (await p.textContent('#stateline')).slice(0, 90);
 R['① 出力欄'] = (await p.textContent('#ioOut [data-out="out"]')).replace(/\s+/g, ' ').slice(0, 70);
 ok.manyRun = R['① 実行'].includes('success') && R['① 出力欄'].includes('A1') && R['① 出力欄'].includes('B1');
 
-// ② すでに壊れているSpecを取り込むと、その場で直せるボタンが出る
+// ② すでに壊れているSpecを取り込むと、1タップで直せる
 const 壊れた = JSON.parse(JSON.stringify(合流前));
 壊れた.edges.push({ from: { node: "B", port: "out" }, to: { node: "C", port: "in" } });
 await paste(壊れた);
 R['② 取り込み直後の検証'] = (await vErr()).slice(0, 60);
 const fixBtn = p.locator('#vFixFanIn');
 ok.fixOffered = (await fixBtn.count()) === 1 && (await fixBtn.textContent()).includes('C の入口');
-await fixBtn.tap(); await p.waitForTimeout(150);
-await tap('#miMany');
+await fixBtn.tap(); await p.waitForTimeout(200);
 R['② 直した後の検証'] = (await vErr()).trim() || '（エラーなし）';
-ok.fixed = R['② 直した後の検証'] === '（エラーなし）';
-
-// ③ 「Joinを挟む」を選ぶと Join ノードができて、そのまま実行できる
-await paste(壊れた);
-await tap('#vFixFanIn');
-await tap('#miJoin');
-const s3 = await spec();
-const jn = s3.nodes.find(n => n.type === 'join');
-R['③ 挟んだJoin'] = { id: jn && jn.id, op: jn && jn.op,
-  Joinへの線: s3.edges.filter(e => jn && e.to.node === jn.id).map(e => `${e.from.node}#${e.position}`),
-  Joinから: s3.edges.filter(e => jn && e.from.node === jn.id).map(e => e.to.node), 検証: (await vErr()).trim() };
-ok.join = !!jn && R['③ 挟んだJoin'].Joinへの線.length === 2 && R['③ 挟んだJoin'].Joinから[0] === 'C'
-  && R['③ 挟んだJoin'].検証 === '';
+ok.fixed = R['② 直した後の検証'] === '（エラーなし）' && !(await p.isVisible('#sheet.show'));
 await tap('#run');
 await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
-R['③ 実行'] = (await p.textContent('#stateline')).slice(0, 60);
-ok.joinRun = R['③ 実行'].includes('success');
+R['② 実行'] = (await p.textContent('#stateline')).slice(0, 40);
+ok.fixedRun = R['② 実行'].includes('success');
 
 // ④ ノード編集で「内蔵LLM」を選ぶと providers ができ、モデルを一覧から選べる
 await paste(合流前);
@@ -100,34 +87,35 @@ R['⑥ 実行できないときの表示'] = (await p.textContent('#ioStatus')).
 ok.blockedShown = R['⑥ 実行できないときの表示'].includes('実行できない')
   && R['⑥ 実行できないときの表示'].includes('複数incoming');
 
-// ⑦ 別々の分岐から来ている2本目は、確認を出さずに Join を1つ挟む
+// ⑦ 別々の分岐から来ている2本目も、そのまま繋げて実行できる（Joinを作らない）
 const 別分岐 = {
   metadata: { name: "別分岐", version: "1" }, providers: { m: { adapter: "mock" } },
   nodes: [{ id: "in", type: "input", routing: { mode: "parallel", failurePolicy: "fail_fast" } },
           { id: "A", type: "llm", provider: "m", mock: { tag: "A" }, routing: { mode: "parallel", failurePolicy: "fail_fast" } },
           { id: "B", type: "llm", provider: "m", mock: { tag: "B" }, routing: { mode: "parallel", failurePolicy: "fail_fast" } },
           { id: "X", type: "llm", provider: "m", mock: { echoInput: true }, inputs: { in: { type: "any", cardinality: "many" } } },
-          { id: "Y", type: "llm", provider: "m", mock: { echoInput: true } },
+          { id: "Y", type: "llm", provider: "m", mock: { echoPrompt: true } },
           { id: "out", type: "output" }],
   edges: [{ from: { node: "in", port: "out" }, to: { node: "A", port: "in" } },
           { from: { node: "in", port: "out" }, to: { node: "B", port: "in" } },
           { from: { node: "A", port: "out" }, to: { node: "X", port: "in" }, position: 0 },
           { from: { node: "B", port: "out" }, to: { node: "X", port: "in" }, position: 1 },
           { from: { node: "A", port: "out" }, to: { node: "Y", port: "in" } },
-          { from: { node: "X", port: "out" }, to: { node: "out", port: "in" } }] };
+          { from: { node: "Y", port: "out" }, to: { node: "out", port: "in" } }] };
 await paste(別分岐);
 await tap('.nd[data-id="B"] .port.pout');
 await tap('.nd[data-id="Y"] .port.pin');      // B → Y（A と B は別々の分岐）
 R['⑦ 繋いだ直後'] = (await p.textContent('#hint')).replace(/\s+/g, ' ').slice(0, 50);
-ok.autoJoin = !(await p.isVisible('#sheet.show')) && R['⑦ 繋いだ直後'].includes('Join');
 const s7b = await spec();
-R['⑦ できたJoin'] = { join: s7b.nodes.filter(n => n.type === 'join').map(n => n.id), 検証: (await vErr()).trim() || '（エラーなし）' };
-ok.autoJoinOk = R['⑦ できたJoin'].join.length >= 1 && R['⑦ できたJoin'].検証 === '（エラーなし）';
-await tap('#reset');
+R['⑦ 図の中身'] = { joinができていない: !s7b.nodes.some(n => n.type === 'join'),
+  Yの入口: s7b.nodes.find(n => n.id === 'Y').inputs, 検証: (await vErr()).trim() || '（エラーなし）' };
+ok.noAutoJoin = !(await p.isVisible('#sheet.show')) && R['⑦ 図の中身'].joinができていない
+  && R['⑦ 図の中身'].Yの入口.in.cardinality === 'many' && R['⑦ 図の中身'].検証 === '（エラーなし）';
 await tap('#run');
 await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
-R['⑦ 実行'] = (await p.textContent('#stateline')).slice(0, 40);
-ok.autoJoinRun = R['⑦ 実行'].includes('success');
+R['⑦ 実行'] = (await p.textContent('#stateline')).slice(0, 60);
+R['⑦ Yが受け取った'] = (await p.textContent('#ioOut [data-out="out"]')).replace(/\s+/g, ' ').slice(0, 40);
+ok.crossRun = R['⑦ 実行'].includes('success') && R['⑦ Yが受け取った'].includes('A1') && R['⑦ Yが受け取った'].includes('B1');
 
 // ⑧ まとめて受け取ったあと、受け取り方をノード編集で変えられる
 await paste(合流前);

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 確認を減らして迷わせない v0.16.1</title>
+<title>Harness Studio — どこから来た線でも合流できる v0.17.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -93,7 +93,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.16.1 · 確認を減らして迷わせない</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.17.0 · どこから来た線でも合流できる</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -525,13 +525,8 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
 - join に入る線には position 0,1,2… を必ず付け、join には inputs の items を書く。
 - 1つの入口に2本以上の線を入れるなら、その node に inputs {"<入口名>":{"type":"any","cardinality":"many"}} を書き、
   線に position 0,1,2… を付ける（書かないとエラーになる）。
-- **合流は「同じ分岐から出た線」どうしでしかできない。** 2本以上の出口を持つノード（=分岐）が2つあって、
-  その両方から同じ入口に線を入れると、実行時に揃わず DEADLOCK になる。
-  1つの出力を2か所で合流させたいときは、**Join を1つだけ置いて、そこから配る**:
-    A -> jn.items position 0     ← A の出口は1本だけ
-    B -> jn.items position 1     ← B の出口も1本だけ
-    jn -> 判断                    ← 分岐するのは Join（route parallel failure fail_fast を書く）
-    jn -> 方法
+- 合流したノードは、入ってきた値を1つの文にまとめて受け取る。まとめ方は merge で決める
+  （書かなければ改行でつなぐ）。別々の分岐から来ていてもよい。
 - 条件式で使えるのは <node>.out / <node>.meta.len / <node>.meta.tokens / run.* / vars.* / input.*。
   比較は == != < <= > >=、論理は && || !、関数は len() has() regex() count() min() max()。
 - 出力の形を縛りたいときは schema を書く（内蔵LLMでは文法として強制される。プロンプトに「JSONで出せ」と
@@ -1353,8 +1348,6 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     const card=node&&node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
     const allCond=nonLoop.every(e=>e.if||e.else);
     if(nonLoop.length>1&&card!=="many"&&!allCond)errs.push("many以外への複数incoming: "+key);
-    if(nonLoop.length>1&&!allCond){const cf=confluenceConflict(spec,nid,port);
-      if(cf)errs.push(`合流できない配線: ${key} — 別々の分岐（${cf.join(" / ")}）から来ているので実行時に揃わない。手前で Join を1つ共有する`);}
     if(card==="many"&&nonLoop.length>1){const pos=nonLoop.map(e=>e.position);if(pos.some(p=>p==null))errs.push("position未指定: "+key);
       else{if(new Set(pos).size!==pos.length)errs.push("position重複: "+key);const sorted=[...pos].sort((a,b)=>a-b);for(let i=0;i<sorted.length;i++)if(sorted[i]!==i){errs.push("position gap: "+key);break;}}}});
   // 条件式が <node>.out.<項目> を見ているのに、その node が JSON を返す保証が無い
@@ -1442,7 +1435,23 @@ function buildCtx(run,spec,activeLoopInstance){
   for(const n of spec.nodes)root[n.id]=nodeView(run,n.id);return{root};}
 
 /* ---- EdgeDelivery matching ---- */
-function deliveryMatchesExec(d,ex){return NN(d.activationId)===NN(ex.activationId)&&NN(d.loopInstanceId)===NN(ex.loopInstanceId)&&NN(d.iteration)===NN(ex.iteration);}
+function deliveryMatchesExec(d,ex,ignoreActivation){
+  if(!ignoreActivation&&NN(d.activationId)!==NN(ex.activationId))return false;
+  return NN(d.loopInstanceId)===NN(ex.loopInstanceId)&&NN(d.iteration)===NN(ex.iteration);}
+/* 「別々の分岐から来た線が1つの入口に入る」ノード。
+   ここだけは分岐グループをまたいで1つの実行に揃える（揃えないと永久に待つ＝DEADLOCK）。
+   ループの回や、どの繰り返しかは引き続き区別する（混ざらない）。 */
+function isConfluenceNode(spec,nodeId){
+  const byPort={};
+  for(const e of spec.edges||[]){if(e.loop||e.to.node!==nodeId)continue;
+    (byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);}
+  for(const es of Object.values(byPort)){
+    if(es.length<2)continue;
+    if(new Set(es.map(e=>deliveryOrigin(spec,e))).size>1)return true;
+  }
+  return false;
+}
+const MERGE_ACT=nodeId=>"merge#"+nodeId;
 function applyEdgeAndValidate(rv,edge,toNode,toPort){
   if(rv===undefined)return undefined;
   let v=rv;
@@ -1460,11 +1469,12 @@ function applyEdgeAndValidate(rv,edge,toNode,toPort){
   return v;
 }
 function resolveInputsForExec(run,spec,ex){const node=spec.nodes.find(n=>n.id===ex.nodeId);
+  const conf=isConfluenceNode(spec,ex.nodeId);
   const inE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&!e.loop);const byPort={};for(const e of inE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
   const loopInE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&e.loop);for(const e of loopInE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
   const inputs={};
   for(const[port,es]of Object.entries(byPort)){es.sort((a,b)=>(a.position||0)-(b.position||0));const card=node&&node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
-    const ds=run.deliveries.filter(d=>d.toNodeId===ex.nodeId&&d.toPort===port&&deliveryMatchesExec(d,ex));
+    const ds=run.deliveries.filter(d=>d.toNodeId===ex.nodeId&&d.toPort===port&&deliveryMatchesExec(d,ex,conf));
     if(card==="many"){
       const perEdge={};for(const d of ds){perEdge[d.edgeId]=d;}
       const picked=Object.values(perEdge).sort((a,b)=>a.position-b.position);
@@ -1472,15 +1482,16 @@ function resolveInputsForExec(run,spec,ex){const node=spec.nodes.find(n=>n.id===
     else{const first=ds[0];if(first){const e=(spec.edges||[])[parseInt(String(first.edgeId).slice(1))];inputs[port]=applyEdgeAndValidate(first.runtimeValue,e||{},node,port);}else inputs[port]=undefined;}}
   return inputs;}
 function execInputsReady(run,spec,ex){const node=spec.nodes.find(n=>n.id===ex.nodeId);
+  const conf=isConfluenceNode(spec,ex.nodeId);
   const inE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId);if(inE.length===0)return true;
   const byPort={};for(const e of inE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
   for(const[port,es]of Object.entries(byPort)){const card=node&&node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
     const nonLoopEdges=es.filter(e=>!e.loop);
     if(card==="many"){
-      const ok=nonLoopEdges.every(e=>{const eid=edgeIdOf(spec,e);return run.deliveries.some(d=>d.edgeId===eid&&d.toNodeId===ex.nodeId&&d.toPort===port&&deliveryMatchesExec(d,ex));});
+      const ok=nonLoopEdges.every(e=>{const eid=edgeIdOf(spec,e);return run.deliveries.some(d=>d.edgeId===eid&&d.toNodeId===ex.nodeId&&d.toPort===port&&deliveryMatchesExec(d,ex,conf));});
       if(!ok)return false;
     }else{
-      const ds=run.deliveries.filter(d=>d.toNodeId===ex.nodeId&&d.toPort===port&&deliveryMatchesExec(d,ex));
+      const ds=run.deliveries.filter(d=>d.toNodeId===ex.nodeId&&d.toPort===port&&deliveryMatchesExec(d,ex,conf));
       if(ds.length<1)return false;
     }}
   return true;}
@@ -1503,8 +1514,11 @@ function resolveTargetContext(run,spec,fromExec,edge,loopEntries){
     if(!iid){iid=entry.loopId+"#"+(++run.loopSeq);run.loopInstances[iid]={loopId:entry.loopId,activationId:act,iteration:1,active:true};run.iterationTotal++;}
     return{activationId:fromExec.activationId,loopInstanceId:iid,iteration:run.loopInstances[iid].iteration};}
   return{activationId:fromExec.activationId,loopInstanceId:fromExec.loopInstanceId,iteration:fromExec.iteration};}
-function enqueueTo(run,spec,edge,ctx){const dup=Object.values(run.executions).find(x=>x.nodeId===edge.to.node&&x.status==="ready"&&NN(x.activationId)===NN(ctx.activationId)&&NN(x.loopInstanceId)===NN(ctx.loopInstanceId)&&NN(x.iteration)===NN(ctx.iteration));
-  if(dup)return dup;return makeExec(run,edge.to.node,ctx);}
+function enqueueTo(run,spec,edge,ctx){
+  // 別々の分岐から来る合流ノードは、分岐ごとに実行を作らず1つにまとめる
+  const c=isConfluenceNode(spec,edge.to.node)?Object.assign({},ctx,{activationId:MERGE_ACT(edge.to.node)}):ctx;
+  const dup=Object.values(run.executions).find(x=>x.nodeId===edge.to.node&&x.status==="ready"&&NN(x.activationId)===NN(c.activationId)&&NN(x.loopInstanceId)===NN(c.loopInstanceId)&&NN(x.iteration)===NN(c.iteration));
+  if(dup)return dup;return makeExec(run,edge.to.node,c);}
 
 /* Join のまとめ方。text になる op（concat/markdown/csv/template）では
    prefix / suffix（必ず付ける文）を前後に足せる。json になる op では使えない（黙って無視しない）。 */
@@ -2062,8 +2076,9 @@ function showErrs(){
       if(!fixes.some(f=>f.key==="schema:"+id))fixes.push({key:"schema:"+id,label:`${id} に schema を付ける`,
         act:()=>addSchemaFor(id)});continue;}
   }
-  if(fanIn.length)fixes.unshift({key:"fanin",label:fanIn.length>1?`入口の合流を直す（${fanIn.length}か所）`:`${fanIn[0].id} の入口をまとめる`,
-    act:()=>askFanIn(fanIn,()=>{syncFromCanvas();setHint("入口の合流を直した");}),id:"vFixFanIn"});
+  if(fanIn.length)fixes.unshift({key:"fanin",label:fanIn.length>1?`入口をまとめて受け取る（${fanIn.length}か所）`:`${fanIn[0].id} の入口をまとめて受け取る`,
+    act:()=>{fanIn.forEach(t=>makePortMany(t.id,t.port));syncFromCanvas();
+      setHint("入口をまとめて受け取るようにした（渡し方はノードをタップして変えられる）");},id:"vFixFanIn"});
   if(fixes.length){
     const row=document.createElement("div");row.className="row";
     fixes.forEach((f,i)=>{const b=document.createElement("button");
@@ -2294,60 +2309,6 @@ function fanInTargets(){
   }
   return out;
 }
-const srcKeyOf=t=>edgesInto(t.id,t.port).map(e=>e.from.node+"#"+(e.from.port||"out")).sort().join(",");
-// 出どころの組み合わせが同じ入口は、同じ直し方で一度に直す（Joinを共有する）
-function fanInGroups(seeds){
-  const all=fanInTargets();
-  const seedKeys=[...new Set((seeds&&seeds.length?seeds:all).map(srcKeyOf))];
-  return seedKeys.map(k=>{const targets=all.filter(t=>srcKeyOf(t)===k);
-    return{key:k,targets,srcs:targets.length?edgesInto(targets[0].id,targets[0].port).map(e=>e.from.node):[],
-      conflict:targets.some(t=>!!confluenceConflict(Ed.spec,t.id,t.port))};});
-}
-// そのグループの入口を、1つの Join に集めてから配る（別々の分岐から来ていても揃う形になる）
-function insertSharedJoin(g){
-  if(!g.targets.length)return null;
-  const jid=newId("jn");
-  const srcs0=edgesInto(g.targets[0].id,g.targets[0].port).map(e=>e.from.node);
-  const jn={id:jid,type:"join",op:"markdown",labels:srcs0,inputs:{items:{type:"any",cardinality:"many"}}};
-  Ed.spec.nodes.push(jn);
-  const srcs=edgesInto(g.targets[0].id,g.targets[0].port).map(e=>({node:e.from.node,port:e.from.port||"out"}));
-  for(const t of g.targets){
-    Ed.spec.edges=Ed.spec.edges.filter(e=>!(e.to.node===t.id&&(e.to.port||"in")===t.port&&!e.loop));
-    const n=nodeById(t.id);
-    if(n&&n.inputs&&n.inputs[t.port]){delete n.inputs[t.port];if(!Object.keys(n.inputs).length)delete n.inputs;}
-  }
-  srcs.forEach((sp,i)=>Ed.spec.edges.push({from:{node:sp.node,port:sp.port},to:{node:jid,port:"items"},position:i}));
-  for(const t of g.targets)Ed.spec.edges.push({from:{node:jid,port:"out"},to:{node:t.id,port:t.port}});
-  const p0=posOf(g.targets[0].id);
-  layout()[jid]=freeSpot(Ed.dir==="tb"?p0.x:p0.x-190,Ed.dir==="tb"?p0.y-100:p0.y,jid);
-  return jid;
-}
-/* 入口の合流をどう受け取るか聞く。勝手には決めない。
-   別々の分岐から来ている合流は「まとめて受け取る」だけでは実行時に揃わない（barrier未成立）ので出さない。 */
-function askFanIn(seeds,cb){
-  const gs=fanInGroups(seeds);
-  const anyConflict=gs.some(g=>g.conflict);
-  const lines=gs.map(g=>`・${g.targets.map(t=>t.id+(t.port==="in"?"":"."+t.port)).join(" / ")} ← ${g.srcs.join(", ")}`
-    +(g.conflict?"（別々の分岐から来ている）":"")).join("<br>");
-  const n=gs.reduce((a,g)=>a+g.targets.length,0);
-  const h=head(n>1?`${n}か所の入口に複数の線が入っている`:`${gs[0]&&gs[0].targets[0]?gs[0].targets[0].id:""} の入口に2本目が入った`)+
-    `<div class="mini">1つの入口に複数の線を入れるには、受け取り方を決める必要がある（勝手には決めない）。<br>${lines}</div>`+
-    (anyConflict?`<div class="mini" style="color:var(--warn)">別々の分岐から来ている合流は、そのまま複数受け取りにしても実行時に揃わない（DEADLOCK）。手前で Join を1つ共有する形にする。</div>`:"")+
-    `<div class="palette" style="margin-top:10px">`+
-    (anyConflict?"":`<button id="miMany"><b>まとめて受け取る</b><small>つないだ順に1つの文としてまとめて渡す（入口を複数OKにする）</small></button>`)+
-    `<button id="miJoin"><b>Joinでまとめる</b><small>手前に Join ノードを作る。同じ出どころの合流は1つの Join を共有する</small></button></div>`;
-  openSheet(h);bindClose();
-  const many=$("#miMany");
-  if(many)many.onclick=()=>{gs.forEach(g=>g.targets.forEach(t=>makePortMany(t.id,t.port)));closeSheet();cb&&cb("many");};
-  $("#miJoin").onclick=()=>{
-    const made=gs.map(g=>({jid:insertSharedJoin(g),outs:g.targets.length})).filter(x=>x.jid);
-    closeSheet();
-    // Join が2つ以上に配るなら、その配り方もユーザーが決める
-    const need=made.find(x=>x.outs>1);
-    if(need)askRouting(need.jid,()=>cb&&cb("join",need.jid));
-    else cb&&cb("join",made[0]&&made[0].jid);
-  };
-}
 function connect(from,to){
   if(from===to)return setHint("同じノードには繋げない");
   const tn=nodeById(to);const port=(tn&&tn.type==="join")?"items":"in";
@@ -2357,23 +2318,12 @@ function connect(from,to){
   const edge={from:{node:from,port:"out"},to:{node:to,port}};
   if(port==="items"){edge.position=already;}
   es.push(edge);
-  // 入口が2本目になったら、そのまま受け取れる形にする（毎回の確認は出さない）
-  //   ・同じ分岐から来ている → その入口を「まとめて受け取る」にする（受け取り方はノード編集で変えられる）
-  //   ・別々の分岐から来ている → そのままでは実行時に揃わないので、手前に Join を1つ作って共有する
+  // 入口が2本目になったら、そのまま受け取れる形にする（確認は出さない）。
+  // どう1つの文にするかはノード編集の「複数の入力が来たときの受け取り方」で決まる（既定は改行でつなぐ）
   if(port!=="items"&&already>=1&&portCard(to,port)!=="many"){
     makePortMany(to,port);
-    const g=fanInGroups([{id:to,port}])[0];
-    if(g&&g.conflict){
-      const jid=insertSharedJoin(g);
-      syncFromCanvas();
-      if(jid&&outEdges(jid).filter(e=>!e.loop).length>1&&!(nodeById(jid).routing||{}).mode){
-        nodeById(jid).routing={mode:"parallel",failurePolicy:"fail_fast"};syncFromCanvas();
-      }
-      setHint(`別々の分岐から来ているので Join（${jid}）を1つ挟んだ`);
-    }else{
-      syncFromCanvas();
-      setHint(`${to} に2本目を繋いだ（まとめて受け取る。渡し方はノードをタップして変えられる）`);
-    }
+    syncFromCanvas();
+    setHint(`${to} に2本目を繋いだ（まとめて受け取る。渡し方はノードをタップして変えられる）`);
     return;
   }
   const outs=outEdges(from).filter(e=>!e.loop);
@@ -3681,22 +3631,23 @@ export async function CreateMLCEngine(model,opt){
   let allRej=true,lineOK=false;
   for(const[src,_]of cases){try{hslToSpec(src);allRej=false;}catch(e){if(e.code!=="HSL_PARSE_ERROR")allRej=false;if(e.line>0)lineOK=true;}}
   ok("31 HSL: 壊れた記述は HSL_PARSE_ERROR（行番号つき）",allRej&&lineOK);}
- // 32 合流できる配線か（別々の分岐からの合流は静的に落とす）
- {const mk=(edges,forkAB)=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+ // 32 別々の分岐から来た線が1つの入口に入っても、1つの実行に揃う（前はDEADLOCKだった）
+ {const mk=()=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
    nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
-     {id:"A",type:"llm",provider:"m",mock:{tag:"A"},...(forkAB?{routing:{mode:"parallel",failurePolicy:"fail_fast"}}:{})},
-     {id:"B",type:"llm",provider:"m",mock:{tag:"B"},...(forkAB?{routing:{mode:"parallel",failurePolicy:"fail_fast"}}:{})},
-     {id:"C",type:"llm",provider:"m",mock:{echoInput:true},inputs:{in:{type:"any",cardinality:"many"}}},
-     {id:"D",type:"llm",provider:"m",mock:{echoInput:true},inputs:{in:{type:"any",cardinality:"many"}}},
-     {id:"out",type:"output"}],edges});
-  const base=[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
-    {from:{node:"A",port:"out"},to:{node:"C",port:"in"},position:0},{from:{node:"B",port:"out"},to:{node:"C",port:"in"},position:1},
-    {from:{node:"C",port:"out"},to:{node:"out",port:"in"}}];
-  const same=validate(mk(base,false));
-  const cross=validate(mk(base.concat([{from:{node:"A",port:"out"},to:{node:"D",port:"in"},position:0},
-    {from:{node:"B",port:"out"},to:{node:"D",port:"in"},position:1}]),true));
-  ok("32 合流: 同じ分岐からはOK・別々の分岐からは静的にエラー",
-    same.length===0&&cross.filter(e=>/^合流できない配線/.test(e)).length===2);}
+     {id:"A",type:"llm",provider:"m",mock:{tag:"A"},routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+     {id:"B",type:"llm",provider:"m",mock:{tag:"B"},routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+     {id:"C",type:"llm",provider:"m",mock:{echoPrompt:true},inputs:{in:{type:"any",cardinality:"many"}}},
+     {id:"D",type:"llm",provider:"m",mock:{echoPrompt:true},inputs:{in:{type:"any",cardinality:"many"}}},
+     {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"C",port:"in"},position:0},{from:{node:"B",port:"out"},to:{node:"C",port:"in"},position:1},
+     {from:{node:"A",port:"out"},to:{node:"D",port:"in"},position:0},{from:{node:"B",port:"out"},to:{node:"D",port:"in"},position:1},
+     {from:{node:"C",port:"out"},to:{node:"out",port:"in"}}]});
+  const sp=mk();const errs=validate(sp);const r=await fullRun(sp,{});
+  const c=((r.nodeRuns.C||[])[0]||{}).out,d=((r.nodeRuns.D||[])[0]||{}).out;
+  ok("32 合流: 別々の分岐から来ても1つの実行に揃う（Joinを挟まなくてよい）",
+    errs.length===0&&r.status==="success"&&c&&c.value==="A1\nB1"&&d&&d.value==="A1\nB1"
+    &&(r.nodeRuns.C||[]).length===1&&(r.nodeRuns.D||[]).length===1);}
  // 33 Joinを1つ共有した形は実際に流れる（別々の分岐の合流を直した後の形）
  {const sp={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
    nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
