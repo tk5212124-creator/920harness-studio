@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — このサイトからモデルを配る v0.12.0</title>
+<title>Harness Studio — 最初から本物のローカルLLM v0.13.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -93,7 +93,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.12.0 · このサイトからモデルを配る</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.13.0 · 最初から本物のローカルLLM</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -971,11 +971,14 @@ function mapWebLLMError(e,def){
 /* WebLLM に渡す設定。重みの取得先を差し替えるのはここだけにする。
    weightsUrl があれば、そのモデルの重みだけ自前の置き場（このサイトなど）から取る。
    wasm（model_lib）は WebLLM が元から持っているものをそのまま使う。 */
+const SITE_WEIGHTS={};   // model_id -> このページが配っている重みのURL（models_index.json から入る）
+function weightsUrlFor(def){return def.weightsUrl||SITE_WEIGHTS[def.model]||null;}
 function buildAppConfig(m,def){
   const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
-  if(def.weightsUrl&&appConfig.model_list)
+  const wu=weightsUrlFor(def);
+  if(wu&&appConfig.model_list)
     appConfig.model_list=appConfig.model_list.map(r=>r.model_id===def.model
-      ?Object.assign({},r,{model:def.weightsUrl}):r);
+      ?Object.assign({},r,{model:wu}):r);
   return appConfig;
 }
 const WebLLMProvider={
@@ -986,6 +989,7 @@ const WebLLMProvider={
         message:"WebGPUが使えない端末・ブラウザ（「端末チェック」で詳細が出る）"};
     const url=webllmModuleUrl(def);
     onProgress&&onProgress({progress:0.02,text:"WebLLM本体を読み込み中"});
+    const wURL=weightsUrlFor(def);
     const m=await loadWebLLMModule(url);
     const appConfig=buildAppConfig(m,def);
     // 自分で置いたモデル（GitHub Pages・自前サーバなど）を一覧に足す
@@ -1038,7 +1042,7 @@ const WebLLMProvider={
         worker.addEventListener("message",onMsg);worker.addEventListener("error",onErr);
         if(signal)signal.addEventListener("abort",()=>{done();rej(abortError());},{once:true});
       });
-      onProgress&&onProgress({progress:0.05,text:"Worker起動OK"});
+      onProgress&&onProgress({progress:0.05,text:"Worker起動OK"+(wURL?"（重みはこのサイトから）":"")});
       const failed=new Promise((_,rej)=>{
         worker.addEventListener("error",ev=>{rej({code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
           message:"Worker内でエラー: "+(ev.message||"(詳細なし)")+"｜「Workerで動かす」を外して再試行できる"});},{once:true});
@@ -1167,7 +1171,8 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
   const attempt=ex.attempts[ex.attempts.length-1];
   let handle=null;
   if(adapter.ensureLoaded){
-    log&&log("prov",`⚙ ${adapter.id}: ${model} をロード確認`);
+    log&&log("prov",`⚙ ${adapter.id}: ${model} をロード確認`
+      +(adapter.id==="webllm"&&typeof SITE_WEIGHTS!=="undefined"&&SITE_WEIGHTS[model]?"（重みはこのサイトから）":""));
     handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:adapter.id,model}),adapter,signal,ctl&&ctl.onProgress);
   }
   const res=await adapter.invoke({
@@ -2738,6 +2743,8 @@ async function loadSiteModels(){
     if(!r.ok)return;
     const j=await r.json();
     siteModels=(j.models||[]).map(m=>({id:m.id,mb:m.mb,url:new URL(m.path,location.href).href}));
+    for(const k of Object.keys(SITE_WEIGHTS))delete SITE_WEIGHTS[k];
+    for(const m of siteModels)SITE_WEIGHTS[m.id]=m.url;   // 実行時もこのサイトから取る
   }catch(e){siteModels=[];}
   const el=document.querySelector("#mdlSite");
   if(el)el.innerHTML=siteModels.length

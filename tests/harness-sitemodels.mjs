@@ -66,6 +66,16 @@ R['④ 配っていないとき'] = (await p2.textContent('#mdlList')).includes(
 ok.absent = R['④ 配っていないとき'] === false;
 await p2.close();
 
+// ⑤ 実行したときも、重みはこのサイトに取りに行く（Specのproviderに書いていなくても）
+asked.length = 0;
+await p.click('#run');
+await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 90000 });
+R['⑤ 実行の結末'] = (await p.textContent('#stateline')).slice(0, 60);
+R['⑤ 実行で取りに行った先'] = [...new Set(asked.filter(u => u.startsWith('/models/')))].slice(0, 2);
+R['⑤ ログ'] = (await p.textContent('#log')).split('\n').filter(l => /ロード確認/.test(l))[0] || '';
+ok.runFetch = R['⑤ 実行で取りに行った先'].some(u => u.includes('/models/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/'))
+  && R['⑤ ログ'].includes('このサイトから');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

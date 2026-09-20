@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.12.0 このサイトからモデルを配る
+## 1. 現状 — v0.13.0 最初から本物のローカルLLM
 
 | 段階 | 状態 |
 |---|---|
@@ -38,7 +38,8 @@ iPhone でもPCでも同じ操作。
 | 入出力とモデル v0.9.0（入力/出力ノードに連動する欄・Gemma/Qwen/Llamaを端末に落とす） | 実装済み |
 | ノードごとのモデルと合流 v0.10.0（ノード編集でモデルを選ぶ・1つの入口に複数の線を入れる） | 実装済み |
 | 読める失敗とまとめ方 v0.11.0（失敗の理由を必ず文で出す・出たエラーをその場で直す・Joinのまとめ方と追加文言・線の形） | 実装済み |
-| **このサイトからモデルを配る v0.12.0（重みを GitHub Pages に載せる・HuggingFaceに行かずに落とせる）** | **いまここ** |
+| このサイトからモデルを配る v0.12.0（重みを GitHub Pages に載せる・HuggingFaceに行かずに落とせる） | 実装済み |
+| **最初から本物のローカルLLM v0.13.0（既定が内蔵LLM・JSON強制の不具合修正・調査用の出力ボタン・実推論のCI）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -68,6 +69,29 @@ iPhone でもPCでも同じ操作。
   どちらかを選ぶまで線は張らない。すでにそうなっている Spec を取り込んだときは、
   検証エラーの横に**その場で直せるボタン**が出る（`入口の合流を直す（2か所）`）。
 
+### 最初に出るもの（既定）
+
+- **例は「内蔵LLM直列」**（`in → write(内蔵LLM) → out`）。**mock ではない**ので、
+  何も押さずにそのまま実行できる（初回はモデルの取得が走る）。
+- **既定のモデルは `SmolLM2-360M-Instruct-q4f16_1-MLC`**。このサイトが配っているので
+  HuggingFace に行かずに落とせる。一覧では **`最初から選ばれている`** と出る。
+- **起動時にモデルを勝手に読み込まない。** 選ばれているだけで、実行したときに初めて取得・起動する。
+- **起動時に「端末に何があるか」を自動で調べる**（押さないと分からないと「更新したら消えた」ように見えるため）。
+- ユーザーがノードで別のモデルを選んでいれば、それを勝手に書き換えない（`node.model` が優先）。
+
+### うまくいかないときに渡せる形で出す
+
+実行ログの下に **「ログをコピー / ログを保存 / まとめてコピー / まとめて保存」** がある。
+「まとめて」は次を1つの文にする（画面を選択してコピーする必要をなくす）:
+
+```
+版・URL・端末(UserAgent)・WebGPUの対応・このサイトが配るモデル・端末にあるモデル
+状態（state / 実行できない理由 / 検証エラー / 失敗の中身）
+入力・実行ログ・Spec（HSL）・Spec（JSON）
+```
+
+外部のLLMに貼ればそのまま相談できる（HSLの文法も同じ形で出している）。
+
 ### 失敗したときに何が起きたか分かるようにする
 
 **`[object Object]` を出さない。** 失敗の理由は必ず文にする。特に条件式が読めなかったときは、
@@ -94,6 +118,17 @@ critic: REFERENCE_ERROR critic → out の if の式が読めない: "critic.out
 `{"type":"object","required":["score"],"properties":{"score":{}}}` を作って付け、
 **「必ず JSON だけで答える。形式: {"score": …}」** をそのノードの suffix にも入れる
 （schema だけだと小さいモデルは従いにくいため）。
+
+### JSONで縛る（内蔵LLM）
+
+内蔵LLMでは **文法（grammar）で本当にJSONを強制できる**。`schema` を書いたノードは、
+WebLLM に `response_format: {type:"json_object", schema:"<schemaのJSON文字列>"}` を渡す。
+
+**schema を文字列で渡さないと落ちる。** WebLLM 0.2.85 は `type:"json_object"` のとき
+`compileJSONSchema(responseFormat.schema)` を呼ぶので、`schema` が無いと C++ 側で
+`GrammarMatcherInitError: Cannot pass non-string to std::string` になる
+（実機で出た事故。v0.13.0 で修正）。組み立てられない schema のときは、
+`SCHEMA_VALIDATION_ERROR` として「schema を簡単にする / 外して文章で受ける」まで出す。
 
 ### 合流できる配線・できない配線（実行時にDEADLOCKにしないための規則）
 
@@ -580,6 +615,7 @@ node tests/harness-io-models.mjs    # 入出力パネルの連動と、モデル
 node tests/harness-fanin.mjs        # 1つの入口に複数の線（合流）・ノードごとのモデル選択・入力直下の実行
 node tests/harness-fixflow.mjs      # 失敗の理由・エラーをその場で直す・Joinのまとめ方・線の形
 node tests/harness-sitemodels.mjs   # このサイトが配るモデル（取得先が本当に切り替わるか）
+MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
 
 ### harness-io-models.mjs が見るもの
