@@ -20,7 +20,9 @@ permissions:
 jobs:
   real:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
+    env:
+      E2E_MODEL: SmolLM2-360M-Instruct-q4f32_1-MLC
     steps:
       - uses: actions/checkout@v4
 
@@ -32,41 +34,43 @@ jobs:
         run: |
           set -e
           npm init -y >/dev/null
-          npm install --no-audit --no-fund playwright@1.49.0
+          npm install --no-audit --no-fund playwright@1.56.1
           npx playwright install --with-deps chromium
 
+      # ソフトウェア実装のWebGPU（SwiftShader）は shader-f16 を持たないので、
+      # CIでは f16 のいらない q4f32 版で確かめる（コードの経路は同じ）。
       - name: モデルの置き場をキャッシュから戻す
         id: mcache
         uses: actions/cache@v4
         with:
-          path: .modelcache
-          key: mlc-models-${{ hashFiles('models.txt') }}
+          path: .modele2e
+          key: mlc-e2e-${{ env.E2E_MODEL }}
 
       - name: モデルを取ってくる
         if: steps.mcache.outputs.cache-hit != 'true'
         run: |
           set -e
           python -m pip install --quiet --upgrade huggingface_hub
-          python tools/models.py fetch
+          python tools/models.py fetch1 "mlc-ai/$E2E_MODEL" ".modele2e/$E2E_MODEL"
 
       - name: 取れているか確かめる
         run: |
           set -e
-          d=.modelcache/SmolLM2-360M-Instruct-q4f16_1-MLC
+          d=".modele2e/$E2E_MODEL"
+          rm -rf "$d/.cache"
           ls -la "$d" | head -20
           test -s "$d/mlc-chat-config.json"
           test -s "$d/ndarray-cache.json"
+          test -s "$d/tokenizer.json"
           test -n "$(ls "$d"/params_shard_*.bin 2>/dev/null)"
           test -z "$(find "$d" -type f -size 0)"
           du -sh "$d"
 
       - name: 本物のモデルで推論する（素の生成 / JSON強制）
-        env:
-          MODEL_DIR: .modelcache/SmolLM2-360M-Instruct-q4f16_1-MLC
-          MODEL_ID: SmolLM2-360M-Instruct-q4f16_1-MLC
         run: |
           set -e
-          export MODEL_DIR="$PWD/$MODEL_DIR"
+          export MODEL_DIR="$PWD/.modele2e/$E2E_MODEL"
+          export MODEL_ID="$E2E_MODEL"
           node tests/harness-real-llm.mjs
 
       - name: 重みを Git に入れていないことを確かめる

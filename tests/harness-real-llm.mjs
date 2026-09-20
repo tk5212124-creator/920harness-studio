@@ -43,17 +43,36 @@ const srv = http.createServer((req, res) => {
 await new Promise(r => srv.listen(0, '127.0.0.1', r));
 const PORT = srv.address().port;
 
-const b = await chromium.launch({ ...(CHROMIUM ? { executablePath: CHROMIUM } : {}),
-  args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader', '--enable-features=Vulkan',
-         '--enable-dawn-features=allow_unsafe_apis'] });
-const p = await (await b.newContext({ viewport: { width: 1100, height: 1000 } })).newPage();
-const errs = []; p.on('pageerror', e => errs.push(String(e)));
+// GPUの無い機械ではソフトウェア実装(SwiftShader)でWebGPUを動かす。
+// 効く組み合わせが環境で違うので、adapterが取れるまで順に試す。
+const ARGSETS = [
+  ['--enable-unsafe-webgpu', '--use-angle=swiftshader', '--enable-features=Vulkan'],
+  ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-angle=swiftshader', '--enable-features=Vulkan'],
+  ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--use-vulkan=swiftshader', '--enable-features=Vulkan,VulkanFromANGLE'],
+  ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader'],
+];
+let b = null, p = null, diag = null, usedArgs = null;
+const errs = [];
+for (const args of ARGSETS) {
+  const cand = await chromium.launch({ ...(CHROMIUM ? { executablePath: CHROMIUM } : {}),
+    args: [...args, '--enable-dawn-features=allow_unsafe_apis'] });
+  const page = await (await cand.newContext({ viewport: { width: 1100, height: 1000 } })).newPage();
+  await page.goto(`http://127.0.0.1:${PORT}/harness.html`);
+  await page.waitForFunction(() => window.__selfTest, null, { timeout: 30000 });
+  const d = await page.evaluate(() => webgpuDiagnostics().then(x => ({ webgpu: x.webgpu, adapter: x.adapter, f16: x.f16, adapterError: x.adapterError })));
+  console.log('試した起動オプション:', args.join(' '), '->', JSON.stringify(d));
+  if (d.adapter) { b = cand; p = page; diag = d; usedArgs = args; break; }
+  await cand.close();
+}
+if (!p) {
+  console.log('SKIP: この機械では WebGPU の adapter が取れない（GPUもソフトウェア実装も無い）');
+  srv.close(); process.exit(0);
+}
+p.on('pageerror', e => errs.push(String(e)));
 p.on('console', m => { if (/GrammarMatcher|WindowSize|Error/i.test(m.text())) console.log('   [console]', m.text().slice(0, 160)); });
-await p.goto(`http://127.0.0.1:${PORT}/harness.html`);
-await p.waitForFunction(() => window.__selfTest, null, { timeout: 30000 });
 const R = {}, ok = {};
-
-R['端末'] = await p.evaluate(() => webgpuDiagnostics().then(d => ({ webgpu: d.webgpu, adapter: d.adapter, f16: d.f16 })));
+R['端末'] = diag;
+R['起動オプション'] = usedArgs.join(' ');
 
 const run = async (schema) => p.evaluate(async ({ id, schema, port }) => {
   const def = { adapter: 'webllm', model: id, useWorker: false, indexedDB: true, moduleSource: 'vendor',

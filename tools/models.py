@@ -43,6 +43,14 @@ def fetch():
         shutil.rmtree(os.path.join(CACHE, mid, ".cache"), ignore_errors=True)
 
 
+def fetch_one(repo, dest):
+    """1つだけ取ってくる（CIの実推論テスト用）。"""
+    from huggingface_hub import snapshot_download
+    print(f"== {repo} -> {dest}", flush=True)
+    snapshot_download(repo_id=repo, local_dir=dest)
+    shutil.rmtree(os.path.join(dest, ".cache"), ignore_errors=True)
+
+
 def stage():
     out = []
     for repo, mid in entries():
@@ -69,8 +77,12 @@ if __name__ == "__main__":
         fetch()
     elif cmd == "stage":
         stage()
+    elif cmd == "fetch1":
+        if len(sys.argv) != 4:
+            sys.exit("使い方: tools/models.py fetch1 <HFのリポジトリ> <保存先>")
+        fetch_one(sys.argv[2], sys.argv[3])
     elif cmd == "list":
         for repo, mid in entries():
             print(repo, mid)
     else:
-        sys.exit("使い方: tools/models.py fetch|stage|list")
+        sys.exit("使い方: tools/models.py fetch|fetch1|stage|list")
