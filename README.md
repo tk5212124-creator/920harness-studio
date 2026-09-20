@@ -114,6 +114,25 @@ critic: REFERENCE_ERROR critic → out の if の式が読めない: "critic.out
 ⚠ loop[revise] の until が critic.out.score を見ているのに critic に schema が無い（文章で返るとこの式は読めない）: critic
 ```
 
+**schema があっても、その項目の型が決まっていないと同じことが起きる。** 実機では
+`{"score": "..."}`（プロンプトに書いた `…` をそのまま書き写した文字列）が返ってきて、
+`critic.out.score >= 8` が比べられず落ちた。**数と比べているのに型が数でない**のも配線だけで分かるので、
+これも検証エラーにする:
+
+```
+⚠ loop[revise] の until が critic.out.score を数と比べているのに、critic の schema で "score" の型が数になっていない（文字列で返ると比べられない）: critic
+```
+
+**指示の例には本物の値を書く。** `{"score": …}` のような穴埋め記号は、小さいモデルが
+**そのまま書き写す**（実際に起きた）。いまは `例: {"score": 7}` と書く。
+
+**実行時に外れたときも、返ってきた値をそのまま見せる**:
+
+```
+critic: EXPRESSION_EVALUATION_ERROR loop[revise] の until の式が読めない: "critic.out.score >= 8"
+  — "..."（文字列） は数として比べられない。返すノードの schema でその項目を integer / number にすると数で返る
+```
+
 このエラーには **「critic に schema を付ける」ボタン**が出る。押すと、式が読んでいる項目から
 `{"type":"object","required":["score"],"properties":{"score":{}}}` を作って付け、
 **「必ず JSON だけで答える。形式: {"score": …}」** をそのノードの suffix にも入れる
@@ -615,7 +634,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト39件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2 + Join/失敗の文2 + JSON強制と取得先4）
+node tests/harness-runtime.mjs      # 自己テスト40件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2 + Join/失敗の文2 + JSON強制と取得先4）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
@@ -752,6 +771,7 @@ MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデ�
 - 36–37: 内蔵LLMのJSON強制（`response_format.schema` を文字列で渡す / schema が無いときは付けない）
 - 38: `maxTokens` で切れたときは「切れた」と言う
 - 39: 取得先が変わっても端末にある分を使う（落とし直させない）
+- 40: schema の型が緩いと配線だけで落とす／実行時は返ってきた値を文で言う
 
 ### 本物のモデルでの確認（GitHub Actions）
 

@@ -214,7 +214,22 @@ function parseE(tk){let p=0;const pk=()=>tk[p],eat=()=>tk[p++];const ex=v=>{cons
     else if(pk().v==="("){if(n.type!=="Id")throw{code:"EXPRESSION_NOT_ALLOWED"};eat();const a=[];if(pk()&&pk().v!==")"){a.push(or());while(pk()&&pk().v===","){eat();a.push(or());}}ex(")");n={type:"Call",name:n.name,args:a};}else break;}return n;}
   function pr(){const x=pk();if(!x)throw{code:"EXPRESSION_PARSE_ERROR"};if(x.t==="num"){eat();return{type:"Lit",v:x.v};}if(x.t==="str"){eat();return{type:"Lit",v:x.v};}if(x.t==="bool"){eat();return{type:"Lit",v:x.v};}if(x.t==="null"){eat();return{type:"Lit",v:null};}if(x.t==="id"){eat();return{type:"Id",name:x.v};}if(x.v==="("){eat();const e=or();ex(")");return e;}if(x.v==="["){eat();const els=[];if(pk()&&pk().v!=="]"){els.push(or());while(pk()&&pk().v===","){eat();els.push(or());}}ex("]");return{type:"Array",els};}throw{code:"EXPRESSION_PARSE_ERROR"};}
   const ast=or();if(p<tk.length)throw{code:"EXPRESSION_PARSE_ERROR"};return ast;}
-function evalExpr(ast,ctx){const S=v=>{if(typeof v!=="string")throw{code:"EXPRESSION_EVALUATION_ERROR"};return v;};const N=v=>{if(typeof v!=="number")throw{code:"EXPRESSION_EVALUATION_ERROR"};return v;};const A=v=>{if(!Array.isArray(v))throw{code:"EXPRESSION_EVALUATION_ERROR"};return v;};const B=v=>{if(v!==true&&v!==false)throw{code:"EXPRESSION_EVALUATION_ERROR"};return v;};
+/* 値をそのまま見せる（何と比べようとしたのかが分かるように） */
+function showVal(v){
+  if(v===ABSENT)return "（値が無い）";
+  if(v===null)return "null";
+  if(typeof v==="string")return `"${v.length>24?v.slice(0,24)+"…":v}"（文字列）`;
+  if(typeof v==="number")return `${v}（数）`;
+  if(typeof v==="boolean")return `${v}（真偽値）`;
+  if(Array.isArray(v))return `配列（${v.length}個）`;
+  return "JSON（"+Object.keys(v||{}).slice(0,4).join(", ")+"）";
+}
+function evalExpr(ast,ctx){
+  const S=v=>{if(typeof v!=="string")throw{code:"EXPRESSION_EVALUATION_ERROR",message:`${showVal(v)} は文字列として扱えない`};return v;};
+  const N=v=>{if(typeof v!=="number")throw{code:"EXPRESSION_EVALUATION_ERROR",
+    message:`${showVal(v)} は数として比べられない`+(typeof v==="string"?"。返すノードの schema でその項目を integer / number にすると数で返る":"")};return v;};
+  const A=v=>{if(!Array.isArray(v))throw{code:"EXPRESSION_EVALUATION_ERROR",message:`${showVal(v)} は配列ではない`};return v;};
+  const B=v=>{if(v!==true&&v!==false)throw{code:"EXPRESSION_EVALUATION_ERROR",message:`${showVal(v)} は true/false ではない`};return v;};
   const fns={len:a=>Array.isArray(a)?a.length:[...S(a)].length,has:a=>a!==ABSENT&&a!==null&&a!==undefined,regex:(t,p)=>new RegExp(S(p)).test(S(t)),count:(arr,v)=>A(arr).filter(x=>x===v).length,min:(...a)=>Math.min(...a.map(N)),max:(...a)=>Math.max(...a.map(N)),json_parse:t=>JSON.parse(S(t)),json_stringify:v=>JSON.stringify(v)};
   // 参照が外れたときは「何が無かったか」を必ず文にする（[object Object] を出さない）
   const near=(o,k)=>Object.keys(o||{}).slice(0,8).join(", ")||"（空）";
@@ -1288,7 +1303,18 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
        if(nd.mock&&(nd.mock.fixed!==undefined||nd.mock.scoreByIteration!==undefined||nd.mock.echoInput))continue;
        if(nd.type!=="llm"&&nd.type!==undefined&&nd.type!=="tool")continue;
        const key=`${m[1]}.out.${m[2]}`;if(seen.has(key))continue;seen.add(key);
-       errs.push(`${where} が ${key} を見ているのに ${m[1]} に schema が無い（文章で返るとこの式は読めない）: ${m[1]}`);}}}
+       errs.push(`${where} が ${key} を見ているのに ${m[1]} に schema が無い（文章で返るとこの式は読めない）: ${m[1]}`);}}
+   // schema はあるが、その項目の型が決まっていないと "…" のような文字列で返ってくる
+   const reNum=/\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*out\s*\.\s*([A-Za-z0-9_$]+)\s*(?:==|!=|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?)/g;
+   const seen2=new Set();
+   for(const{src,where}of exprs){let m;reNum.lastIndex=0;
+     while((m=reNum.exec(String(src)))){
+       const nd=spec.nodes.find(x=>x.id===m[1]);if(!nd||!nd.schema)continue;
+       const pr=(nd.schema.properties||{})[m[2]];
+       const t=pr&&pr.type;
+       if(t==="integer"||t==="number")continue;
+       const key=`${m[1]}.out.${m[2]}`;if(seen2.has(key))continue;seen2.add(key);
+       errs.push(`${where} が ${key} を数と比べているのに、${m[1]} の schema で "${m[2]}" の型が数になっていない（文字列で返ると比べられない）: ${m[1]}`);}}}
   spec.nodes.forEach(n=>{if(n.type!=="join")return;
     const OPS=["json_array","concat","markdown","csv","json_object","template"];
     if(!n.op)errs.push("join に op（まとめ方）が無い: "+n.id);
@@ -1887,13 +1913,18 @@ function addSchemaFor(id){
         }}}
     return {};
   };
-  n.schema={type:"object",required:f,properties:Object.fromEntries(f.map(k=>[k,typeOf(k)]))};
+  const prev=(n.schema&&typeof n.schema==="object")?n.schema:{};
+  const props=Object.assign({},prev.properties||{});
+  for(const k of f)props[k]=Object.assign({},props[k]||{},typeOf(k));      // 既にある指定は消さない
+  const req=[...new Set([...(prev.required||[]),...f])];
+  n.schema=Object.assign({},prev,{type:"object",required:req,properties:props});
   // 何を返すかをLLMにも伝える（schema だけだと小さいモデルは従いにくい）
-  const jp=k=>{const t=(n.schema.properties[k]||{}).type;
-    return t==="integer"?"整数":t==="number"?"数":t==="string"?"文字列":t==="boolean"?"true か false":"…";};
-  const ask=`必ず JSON だけで答える。余計な文は書かない。形式: {${f.map(k=>`"${k}": ${jp(k)}`).join(", ")}}`;
+  // 例には本物の値を書く。「…」のような穴埋め記号は、小さいモデルがそのまま書き写してしまう
+  const sample=k=>{const t=(n.schema.properties[k]||{}).type;
+    return t==="integer"?"7":t==="number"?"7.5":t==="string"?'"ここに文字列"':t==="boolean"?"true":"7";};
+  const ask=`必ず JSON だけで答える。余計な文は書かない。例: {${f.map(k=>`"${k}": ${sample(k)}`).join(", ")}}`;
   n.prompt=n.prompt||{};
-  if(!n.prompt.suffix)n.prompt.suffix=ask;
+  if(!n.prompt.suffix||/必ず JSON だけで答える/.test(n.prompt.suffix))n.prompt.suffix=ask;
   syncFromCanvas();setHint(`${id} に schema（${f.join(", ")}）を付けた`);
 }
 function showErrs(){
@@ -1911,7 +1942,8 @@ function showErrs(){
       const id=r[1];
       if(!fixes.some(f=>f.key==="route:"+id))fixes.push({key:"route:"+id,label:`${id} の出口の流し方を決める`,
         act:()=>askRouting(id,()=>{syncFromCanvas();setHint(`${id} の出口の流し方を決めた`);})});continue;}
-    if((r=/が (.+?)\.(.+?) を見ているのに .+ に schema が無い.*: (.+)$/.exec(m))){
+    if((r=/が (.+?)\.(.+?) を見ているのに .+ に schema が無い.*: (.+)$/.exec(m))
+      ||(r=/が (.+?)\.(.+?) を数と比べているのに.*: (.+)$/.exec(m))){
       const id=r[3];
       if(!fixes.some(f=>f.key==="schema:"+id))fixes.push({key:"schema:"+id,label:`${id} に schema を付ける`,
         act:()=>addSchemaFor(id)});continue;}
@@ -3132,6 +3164,7 @@ $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();cle
 
 setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("webllm");loadEx("exW1");loadFromHash();fitView();renderTotals();renderIO();renderModels();updateStorageInfo();
 loadSiteModels().then(scanModels);        // 何が端末にあるかを最初に調べる（押さなくても分かるように）
+webgpuDiagnostics().then(d=>{lastDiag=d;}).catch(()=>{});   // 端末の対応状況（調査用メモに載せる）
 setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 
 /* ---- 自己テスト ---- */
@@ -3456,7 +3489,7 @@ export async function CreateMLCEngine(model,opt){
     &&badPrefix.length===1&&/prefix\/suffix/.test(badPrefix[0]));}
  // 35 失敗は必ず読める文になる（[object Object] を出さない）
  {const sp={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
-   nodes:[{id:"in",type:"input"},{id:"c",type:"llm",provider:"m",mock:{fixed:{note:"x"}},schema:{type:"object"},routing:{mode:"first_match",onNoMatch:"error"}},{id:"out",type:"output"}],
+   nodes:[{id:"in",type:"input"},{id:"c",type:"llm",provider:"m",mock:{fixed:{note:"x"}},schema:{type:"object",properties:{score:{type:"integer"}}},routing:{mode:"first_match",onNoMatch:"error"}},{id:"out",type:"output"}],
    edges:[{from:{node:"in",port:"out"},to:{node:"c",port:"in"}},
      {from:{node:"c",port:"out"},to:{node:"out",port:"in"},priority:0,if:"c.out.score >= 8"}]};
   const r=await fullRun(sp,{});
@@ -3472,6 +3505,22 @@ export async function CreateMLCEngine(model,opt){
   const m=(caught||{}).message||"";
   ok("38 JSON: maxTokensで切れたときは「切れた」と言う（読めないとは言わない）",
     !!caught&&caught.code==="SCHEMA_VALIDATION_ERROR"&&m.includes("maxTokens 40")&&m.includes("途中で切れた"));}
+ // 40 schema の型が緩いと文字列で返る。配線だけで落とし、値も文で言う
+ {const sp={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+   nodes:[{id:"in",type:"input"},
+     {id:"c",type:"llm",provider:"m",mock:{fixed:{score:"..."}},routing:{mode:"first_match",onNoMatch:"error"},
+      schema:{type:"object",required:["score"],properties:{score:{}}}},
+     {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"c",port:"in"}},
+     {from:{node:"c",port:"out"},to:{node:"out",port:"in"},priority:0,if:"c.out.score >= 8"}]};
+  const v1=validate(sp).filter(e=>/型が数になっていない/.test(e));
+  const sp2=JSON.parse(JSON.stringify(sp));sp2.nodes[1].schema.properties.score={type:"integer"};
+  const v2=validate(sp2);
+  const r=await fullRun(sp2,{});                 // 型を書いても mock は文字列を返す→実行時の文言を見る
+  const msg=(r.errors[0]||{}).message||"";
+  ok("40 schema の型: 緩いと配線だけで落とす／実行時は返ってきた値を文で言う",
+    v1.length===1&&v2.length===0&&r.status==="failed"
+    &&/"\.\.\."（文字列）/.test(msg)&&/integer/.test(msg));}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

@@ -50,7 +50,7 @@ ok.readableErr = !R['② 失敗の説明'].includes('[object Object]') && R['②
 // ②-2 JSONで返ってきても項目が足りないとき、何が無かったかを言う（[object Object] にしない）
 const 項目ちがい = JSON.parse(JSON.stringify(実機));
 const c2 = 項目ちがい.nodes.find(n => n.id === 'critic');
-c2.mock = { fixed: { note: "よい" } }; c2.schema = { type: "object" };
+c2.mock = { fixed: { note: "よい" } }; c2.schema = { type: "object", properties: { score: { type: "integer" } } };
 R['②-2 実行した結果'] = await p.evaluate(async sp => {
   const r = await fullRun(sp, { in: "Q" });
   return { status: r.status, err: r.errors[0], 検証: validate(sp) };
@@ -60,6 +60,21 @@ ok.exprErr = R['②-2 実行した結果'].検証.length === 0 && R['②-2 実�
   && /あるのは: note/.test(R['②-2 実行した結果'].err.message)
   && R['②-2 実行した結果'].err.message.includes('critic.out.score>=8')
   && !R['②-2 実行した結果'].err.message.includes('[object Object]');
+
+// ②-3 schema はあっても型が緩いと "…" のような文字列が返る。これも実行前に止めて直せる
+const 型が緩い = JSON.parse(JSON.stringify(実機));
+const c3 = 型が緩い.nodes.find(n => n.id === 'critic');
+c3.schema = { type: "object", required: ["score"], properties: { score: {} } };   // 型が無い
+c3.mock = { fixed: { score: "..." } };                                            // 実機で返ってきた値
+await paste(型が緩い);
+R['②-3 取り込み直後'] = (await vErr()).slice(0, 120);
+ok.looseCaught = R['②-3 取り込み直後'].includes('数と比べているのに');
+await p.locator('#vErr button').filter({ hasText: 'schema' }).first().tap(); await p.waitForTimeout(250);
+const s23 = await spec();
+R['②-3 直した後'] = { 型: s23.nodes.find(n => n.id === 'critic').schema.properties.score,
+  例: (s23.nodes.find(n => n.id === 'critic').prompt || {}).suffix, 検証: (await vErr()).trim() || '（エラーなし）' };
+ok.looseFixed = R['②-3 直した後'].型.type === 'integer' && R['②-3 直した後'].検証 === '（エラーなし）'
+  && /例: \{"score": 7\}/.test(R['②-3 直した後'].例);
 
 // ③ 出口が2本以上あるのに流し方が無い → その場で決められる
 await paste({ metadata: { name: "分岐", version: "1" }, providers: { m: { adapter: "mock" } },
