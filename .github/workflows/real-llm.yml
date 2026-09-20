@@ -12,6 +12,7 @@ on:
       - 'harness.html'
       - 'vendor/**'
       - 'tests/harness-real-llm.mjs'
+      - 'tests/harness-real-wllama.mjs'
       - '.github/workflows/real-llm.yml'
 
 permissions:
