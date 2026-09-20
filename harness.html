@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AI Harness — Local Provider v0.4.0</title>
+<title>Harness Studio — 内蔵ローカルLLM v0.5.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -30,20 +30,33 @@ code{background:var(--code-bg);padding:1px 4px;border-radius:4px;font-size:12px}
 table{width:100%;border-collapse:collapse;font-size:12px;font-family:ui-monospace,monospace}
 th,td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}th{color:var(--sub);font-weight:600}
 td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-cancelled{color:var(--warn)}
+.ck{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--sub);white-space:nowrap}
+.diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>AI Harness <span style="color:var(--sub);font-size:14px">v0.4.0 · Local Provider</span></h1>
-<div class="tag">Provider抽象（mock / OpenAI互換ローカル / WebLLM）· signal+onToken · ModelManager · JSON schema契約 · Runtimeは adapter 種別を知らない</div>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.5.0 · 内蔵ローカルLLM</span></h1>
+<div class="tag">WebLLM本体を同梱（CDN不要）· Workerで推論 · 端末チェック · モデルは端末に保存 · Provider抽象（内蔵 / OpenAI互換ローカル / mock）· Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
 <div class="card" style="margin-bottom:16px"><h2>Provider（ローカルLLM）</h2>
 <div class="row"><div class="seg" id="adapterSeg">
-<button data-ad="mock" class="on">mock</button><button data-ad="openai_local">OpenAI互換ローカル</button><button data-ad="webllm">WebLLM（WebGPU）</button>
+<button data-ad="mock" class="on">mock</button><button data-ad="openai_local">OpenAI互換ローカル</button><button data-ad="webllm">内蔵LLM（WebGPU）</button>
 </div></div>
 <div class="row">
 <label class="f" id="epWrap">endpoint<input type="text" id="endpoint" value="http://localhost:11434/v1" spellcheck="false"></label>
 <label class="f">model<input type="text" id="model" value="qwen2.5:3b" spellcheck="false" list="modelList"></label>
 <datalist id="modelList"></datalist>
+</div>
+<div id="webllmBox" style="display:none">
+<div class="row">
+<div class="seg" id="wlSrcSeg"><button data-src="vendor" class="on">本体は同梱版</button><button data-src="cdn">本体はCDN</button></div>
+<label class="ck"><input type="checkbox" id="wlWorker" checked>Workerで動かす</label>
+<label class="ck"><input type="checkbox" id="wlIdb" checked>IndexedDBに保存</label>
+</div>
+<div class="row">
+<button id="wlDiag">端末チェック</button><button id="wlModels">モデル一覧を読む</button><button id="wlCache">保存状況</button><button id="wlDel" class="danger">モデルを削除</button>
+</div>
+<pre class="diag" id="diagOut" style="display:none"></pre>
 </div>
 <div class="row">
 <button id="probe">接続 / モデルロード</button><button id="writeSpec">Specのproviders.localに書き込む</button>
@@ -56,7 +69,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="grid">
 <div class="card"><h2>HarnessSpec（JSON）</h2>
 <div class="row"><div class="seg" id="exSeg">
-<button data-ex="exL1">ローカル直列</button><button data-ex="exL2">ローカル並列+Join</button><button data-ex="exL3">JSON契約+文字数分岐</button><button data-ex="exL4">ローカル改稿ループ</button>
+<button data-ex="exW1">内蔵LLM直列</button><button data-ex="exL1">ローカル直列</button><button data-ex="exL2">ローカル並列+Join</button><button data-ex="exL3">JSON契約+文字数分岐</button><button data-ex="exL4">ローカル改稿ループ</button>
 </div></div>
 <div class="row"><div class="seg" id="exSeg2">
 <button data-ex="ex1" class="on">mock改稿ループ</button><button data-ex="ex5">mock並列</button><button data-ex="ex7">mock Loop×並列</button><button data-ex="ex2">mock分岐</button><button data-ex="ex8">mock template</button><button data-ex="ex9">mock fail_fast</button>
@@ -83,7 +96,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 </div>
 <script>
 "use strict";
-const CP_KEY="harness_vslice_cp_v040";
+const CP_KEY="harness_vslice_cp_v050";
 const ABSENT=Symbol("absent");
 /* ---- 式評価 ---- */
 const OPS2=["&&","||","==","!=","<=",">="],OPS1=["+","-","*","/","%","<",">"];
@@ -203,7 +216,7 @@ function checkSchema(v,sc,path){
 /* --- ModelManager: unloaded / loading / ready / error --- */
 const ModelManager={
   states:{},
-  key(def){return (def.adapter||"?")+"|"+(def.endpoint||"")+"|"+(def.model||"")+"|"+(def.transport||"");},
+  key(def){return [def.adapter||"?",def.endpoint||"",def.model||"",def.transport||"",def.moduleSource||"",def.useWorker===false?"w0":"w1"].join("|");},
   get(def){return this.states[this.key(def)]||{status:"unloaded",progress:0,text:"",loadCount:0};},
   reset(){this.states={};},
   async ensureLoaded(def,adapter,signal,onProgress){
@@ -345,33 +358,133 @@ const OpenAILocalProvider={
 };
 function stripFence(t){const s=String(t).trim();const m=s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);return m?m[1]:s;}
 
-/* --- adapter: webllm（ブラウザ内WebGPU推論・CDN読み込み・ビルド不要） --- */
+/* --- adapter: webllm（ブラウザ内WebGPU推論。本体は同梱、モデルは端末にDLして常駐） --- */
 const WEBLLM_CDN="https://esm.run/@mlc-ai/web-llm";
-const WEBLLM_MODELS=["Qwen2.5-0.5B-Instruct-q4f16_1-MLC","Qwen2.5-1.5B-Instruct-q4f16_1-MLC","Llama-3.2-1B-Instruct-q4f16_1-MLC","gemma-2-2b-it-q4f16_1-MLC"];
+const WEBLLM_VENDOR="vendor/web-llm/index.js";
+// 端末が小さくても載る候補（vram_required_MB は prebuiltAppConfig の値）
+const WEBLLM_MODELS=[
+  "SmolLM2-360M-Instruct-q4f16_1-MLC",
+  "SmolLM2-360M-Instruct-q4f32_1-MLC",
+  "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+  "Qwen2.5-0.5B-Instruct-q4f32_1-MLC",
+  "TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC-1k",
+  "gemma3-1b-it-q4f16_1-MLC",
+  "Llama-3.2-1B-Instruct-q4f16_1-MLC"
+];
+const WEBLLM_VRAM={"SmolLM2-360M-Instruct-q4f16_1-MLC":376,"SmolLM2-360M-Instruct-q4f32_1-MLC":580,
+  "Qwen2.5-0.5B-Instruct-q4f16_1-MLC":945,"Qwen2.5-0.5B-Instruct-q4f32_1-MLC":1060,
+  "TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC-1k":675,"gemma3-1b-it-q4f16_1-MLC":711,
+  "Llama-3.2-1B-Instruct-q4f16_1-MLC":879};
 const _webllmMods={};
+function webllmModuleUrl(def){
+  if(def.moduleUrl)return def.moduleUrl;                       // 明示指定（テスト・上書き）
+  if(def.moduleSource==="cdn")return WEBLLM_CDN;
+  return (typeof location!=="undefined")?new URL(WEBLLM_VENDOR,location.href).href:WEBLLM_VENDOR;
+}
+async function loadWebLLMModule(url){
+  if(_webllmMods[url])return _webllmMods[url];
+  try{_webllmMods[url]=await import(url);}
+  catch(e){
+    const local=/^file:/.test(String(url));
+    throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
+      message:`WebLLM本体を読み込めない (${url}): ${e.message||e}`+
+        (local?"｜file:// で開くと同梱版はimportできない。CDNに切り替えるか、http(s)で配信されたページを使う":"")};
+  }
+  return _webllmMods[url];
+}
+// 端末の素性を測る（WebGPU・f16・バッファ上限・保存容量）。推測せず実測値だけを返す
+async function webgpuDiagnostics(){
+  const r={ua:(typeof navigator!=="undefined"?navigator.userAgent:"-"),
+    secureContext:(typeof isSecureContext!=="undefined")?isSecureContext:null,
+    worker:(typeof Worker!=="undefined"),webgpu:!!(typeof navigator!=="undefined"&&navigator.gpu),
+    adapter:false,adapterError:null,features:[],limits:{},storage:null,f16:false};
+  if(r.webgpu){
+    try{
+      const a=await navigator.gpu.requestAdapter();
+      if(a){
+        r.adapter=true;r.features=[...a.features].sort();
+        for(const k of ["maxBufferSize","maxStorageBufferBindingSize","maxComputeWorkgroupStorageSize","maxComputeInvocationsPerWorkgroup"])
+          if(a.limits&&a.limits[k]!=null)r.limits[k]=a.limits[k];
+        if(a.info)r.adapterInfo={vendor:a.info.vendor||"",architecture:a.info.architecture||"",description:a.info.description||""};
+      }else r.adapterError="requestAdapter() が null（GPUを取得できない）";
+    }catch(e){r.adapterError=String(e&&e.message||e);}
+  }
+  r.f16=r.features.includes("shader-f16");
+  try{if(navigator.storage&&navigator.storage.estimate){const s=await navigator.storage.estimate();
+    r.storage={quotaMB:Math.round((s.quota||0)/1e6),usageMB:Math.round((s.usage||0)/1e6)};}}catch(e){}
+  return r;
+}
+function diagnosisText(d){
+  const L=[];
+  L.push(`WebGPU: ${d.webgpu?"あり":"なし"}${d.adapter?" / adapter取得OK":(d.adapterError?" / "+d.adapterError:"")}`);
+  if(d.adapterInfo)L.push(`GPU: ${[d.adapterInfo.vendor,d.adapterInfo.architecture,d.adapterInfo.description].filter(Boolean).join(" ")||"(不明)"}`);
+  L.push(`shader-f16: ${d.f16?"対応（q4f16モデルが使える）":"非対応（q4f32モデルを選ぶ）"}`);
+  if(d.limits.maxBufferSize)L.push(`maxBufferSize: ${Math.round(d.limits.maxBufferSize/1e6)}MB / maxStorageBufferBindingSize: ${Math.round((d.limits.maxStorageBufferBindingSize||0)/1e6)}MB`);
+  if(d.storage)L.push(`端末の保存容量: 使用 ${d.storage.usageMB}MB / 上限 ${d.storage.quotaMB}MB`);
+  L.push(`Worker: ${d.worker?"使える":"使えない"} / secureContext: ${d.secureContext}`);
+  L.push(`UA: ${d.ua}`);
+  if(!d.webgpu)L.push("→ この端末では WebLLM は動かない。OpenAI互換ローカル（別端末のサーバ）を使う。");
+  else if(!d.adapter)L.push("→ WebGPUはあるがGPUを取得できない。ブラウザの設定・省電力モード・別タブの占有を確認する。");
+  else if(!d.f16)L.push("→ q4f32 のモデル（SmolLM2-360M-Instruct-q4f32_1-MLC など）を選ぶ。");
+  else L.push("→ WebLLM を動かせる見込み。まずは一番小さい SmolLM2-360M（約376MB）から試す。");
+  return L.join("\n");
+}
+function mapWebLLMError(e,def){
+  const msg=String(e&&e.message||e);
+  if(/shader-f16|f16/i.test(msg)&&/support|feature|require/i.test(msg))
+    return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"この端末は shader-f16 に非対応。q4f32 のモデルを選ぶ: "+msg};
+  if(/Unable to find model record|not found in model_list|Cannot find model/i.test(msg))
+    return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:false,message:`モデルID "${def&&def.model}" が一覧に無い: `+msg};
+  if(/quota|storage|QuotaExceeded/i.test(msg))
+    return{code:"RESOURCE_EXHAUSTED",stage:"model_load",retryable:true,providerState:"needs_reset",message:"端末の保存容量が足りない: "+msg};
+  if(oomLike(msg))
+    return{code:"RESOURCE_EXHAUSTED",stage:"model_load",retryable:true,providerState:"needs_reset",message:msg};
+  if(/fetch|network|Failed to load|ERR_|CORS|Load model/i.test(msg))
+    return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"モデルの取得に失敗（通信かストレージ）: "+msg};
+  return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:msg};
+}
 const WebLLMProvider={
-  id:"webllm",label:"WebLLM（ブラウザ内・WebGPU）",models:WEBLLM_MODELS,
+  id:"webllm",label:"WebLLM（アプリ内蔵・WebGPU）",models:WEBLLM_MODELS,
   async ensureLoaded(def,onProgress,signal){
     if(typeof navigator==="undefined"||!navigator.gpu)
-      throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:false,message:"WebGPUが使えない（Chrome/Edge系の対応版が必要）"};
-    onProgress&&onProgress({progress:0.02,text:"WebLLM読み込み中"});
-    const url=def.cdn||WEBLLM_CDN;
-    if(!_webllmMods[url]){
-      try{_webllmMods[url]=await import(url);}
-      catch(e){throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"WebLLMのCDN読み込み失敗: "+(e.message||e)};}
-    }
+      throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:false,
+        message:"WebGPUが使えない端末・ブラウザ（「端末チェック」で詳細が出る）"};
+    const url=webllmModuleUrl(def);
+    onProgress&&onProgress({progress:0.02,text:"WebLLM本体を読み込み中"});
+    const m=await loadWebLLMModule(url);
+    const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
+    const opts={appConfig,initProgressCallback:r=>onProgress&&onProgress({progress:r.progress,text:r.text})};
+    if(signal&&signal.aborted)throw abortError();
+    const useWorker=def.useWorker!==false;
+    let worker=null;
     try{
-      const engine=await _webllmMods[url].CreateMLCEngine(def.model,{initProgressCallback:r=>onProgress&&onProgress({progress:r.progress,text:r.text})});
-      if(signal&&signal.aborted)throw abortError();
-      return engine;
+      if(!useWorker){
+        const engine=await m.CreateMLCEngine(def.model,opts);
+        return{engine,mod:m,appConfig,worker:null,moduleUrl:url};
+      }
+      // Worker で動かす（iOSで画面が固まらないように）。失敗時に黙って同スレッドへ落とさない
+      const src=`import * as webllm from ${JSON.stringify(url)};\n`+
+        `const h=new webllm.WebWorkerMLCEngineHandler();\nself.onmessage=e=>h.onmessage(e);\n`;
+      try{worker=new Worker(URL.createObjectURL(new Blob([src],{type:"text/javascript"})),{type:"module"});}
+      catch(e){throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:false,
+        message:"Workerを作れない: "+(e.message||e)+"｜「Workerで動かす」を外すと同じスレッドで試せる"};}
+      let workerErr=null;
+      const failed=new Promise((_,rej)=>{
+        worker.addEventListener("error",ev=>{workerErr=ev;rej({code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
+          message:"Worker内でエラー: "+(ev.message||"(詳細なし)")+"｜「Workerで動かす」を外して再試行できる"});},{once:true});
+        if(signal)signal.addEventListener("abort",()=>rej(abortError()),{once:true});
+      });
+      const engine=await Promise.race([m.CreateWebWorkerMLCEngine(worker,def.model,opts),failed]);
+      return{engine,mod:m,appConfig,worker,moduleUrl:url};
     }catch(e){
+      if(worker)try{worker.terminate();}catch(_){}
       if(isAbort(e))throw e;
-      if(oomLike(e.message))throw{code:"RESOURCE_EXHAUSTED",stage:"model_load",retryable:true,providerState:"needs_reset",message:String(e.message||e)};
-      throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:String(e.message||e)};
+      if(e&&e.code)throw e;
+      throw mapWebLLMError(e,def);
     }
   },
   async invoke(req){
-    const engine=req.handle;
+    const h=req.handle;const engine=h&&h.engine;
     if(!engine)throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"engine未ロード"};
     const opt={messages:req.input.messages,stream:true,stream_options:{include_usage:true},
       max_tokens:req.generation.maxTokens!=null?req.generation.maxTokens:256,
@@ -379,9 +492,9 @@ const WebLLMProvider={
     if(req.generation.topP!=null)opt.top_p=req.generation.topP;
     if(req.schema)opt.response_format={type:"json_object"};
     let partial="",text="",usage=null,onAbort=null;
-    // decode 中の停止は待たずに engine へ伝える（in-flight cooperative cancellation）
-    if(req.signal){onAbort=()=>{try{engine.interruptGenerate();}catch(_){}};req.signal.addEventListener("abort",onAbort,{once:true});
-      if(req.signal.aborted)onAbort();}
+    // decode中の停止は次のchunkを待たずにengineへ伝える（in-flight cooperative cancellation）
+    if(req.signal){onAbort=()=>{try{engine.interruptGenerate();}catch(_){}};
+      req.signal.addEventListener("abort",onAbort,{once:true});if(req.signal.aborted)onAbort();}
     try{
       const stream=await engine.chat.completions.create(opt);
       for await(const chunk of stream){
@@ -397,6 +510,27 @@ const WebLLMProvider={
     }finally{if(onAbort&&req.signal)req.signal.removeEventListener("abort",onAbort);}
     if(req.signal&&req.signal.aborted)return{cancelled:true,partial};
     return OpenAILocalProvider.finish(text,usage,req,null);
+  },
+  // 端末に保存済みかを見る／消す（モデルは数百MBなので出し入れできるようにする）
+  async cacheStatus(def){
+    const m=await loadWebLLMModule(webllmModuleUrl(def));
+    const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
+    return{cached:await m.hasModelInCache(def.model,appConfig)};
+  },
+  async deleteCache(def){
+    const m=await loadWebLLMModule(webllmModuleUrl(def));
+    const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
+    await m.deleteModelAllInfoInCache(def.model,appConfig);
+    ModelManager.reset();
+    return true;
+  },
+  async modelList(def){
+    const m=await loadWebLLMModule(webllmModuleUrl(def));
+    const LLM=(m.ModelType&&m.ModelType.LLM!=null)?m.ModelType.LLM:0;
+    return (m.prebuiltAppConfig.model_list||[])
+      .filter(x=>x.model_type==null||x.model_type===LLM)
+      .map(x=>({id:x.model_id,vram:x.vram_required_MB,low:!!x.low_resource_required}))
+      .sort((a,b)=>(a.vram||1e9)-(b.vram||1e9));
   }
 };
 const PROVIDERS={mock:MockProvider,openai_local:OpenAILocalProvider,webllm:WebLLMProvider};
@@ -780,7 +914,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -800,15 +934,20 @@ function onToken(nodeId,t){
 
 /* --- Provider フォーム --- */
 let adapterId="mock";
+let wlSrc="vendor";
 function providerDefFromForm(){
   const def={adapter:adapterId};
   if(adapterId!=="mock"){def.model=$("#model").value.trim();}
   if(adapterId==="openai_local")def.endpoint=$("#endpoint").value.trim();
+  if(adapterId==="webllm"){def.moduleSource=wlSrc;def.useWorker=$("#wlWorker").checked;def.indexedDB=$("#wlIdb").checked;}
   return def;
 }
-function fillModels(){
+function showDiag(t){const el=$("#diagOut");el.style.display="";el.textContent=t;}
+function fillModels(models){
   const dl=$("#modelList");dl.innerHTML="";
-  (PROVIDERS[adapterId].models||[]).forEach(m=>{const o=document.createElement("option");o.value=m;dl.appendChild(o);});
+  (models||PROVIDERS[adapterId].models||[]).forEach(m=>{const id=typeof m==="string"?m:m.id;
+    const vram=typeof m==="string"?WEBLLM_VRAM[m]:m.vram;
+    const o=document.createElement("option");o.value=id;if(vram)o.label=`${id}（約${Math.round(vram)}MB）`;dl.appendChild(o);});
   if(adapterId==="webllm"&&!WEBLLM_MODELS.includes($("#model").value))$("#model").value=WEBLLM_MODELS[0];
   if(adapterId==="openai_local"&&WEBLLM_MODELS.includes($("#model").value))$("#model").value=OPENAI_LOCAL_MODELS[0];
 }
@@ -816,12 +955,13 @@ function setAdapter(id){
   adapterId=id;
   document.querySelectorAll("#adapterSeg button").forEach(b=>b.classList.toggle("on",b.dataset.ad===id));
   $("#epWrap").style.display=id==="openai_local"?"":"none";
+  $("#webllmBox").style.display=id==="webllm"?"":"none";
   $("#model").closest("label").style.display=id==="mock"?"none":"";
   fillModels();renderProvState();
   $("#provHint").textContent={
-    mock:"内蔵の決定論モック。Provider抽象の回帰確認用（推論しない・課金なし）。",
+    mock:"決定論モック。Provider抽象の回帰確認用（推論しない・課金なし）。",
     openai_local:"Ollama なら `ollama serve` のうえ `OLLAMA_ORIGINS=* ollama serve` でこのページからのアクセスを許可。LM Studio / llama.cpp server / vLLM も同じ OpenAI互換API で繋がる。",
-    webllm:"ブラウザ内でWebGPU推論。初回はモデルDL（数百MB〜）。APIキー不要・料金0。iOS Safariは小型モデルのみ。"
+    webllm:"アプリ内蔵のLLM。本体はこのページに同梱、モデルは初回だけ端末にDLして保存する（以降オフラインで動く）。サーバもAPIキーも要らない。まず「端末チェック」を押す。"
   }[id];
 }
 function renderProvState(){
@@ -831,6 +971,40 @@ function renderProvState(){
   $("#provBar").style.width=Math.round((st.progress||0)*100)+"%";
   if(st.text&&st.status!=="unloaded")$("#provHint").textContent=st.text;
 }
+$("#wlSrcSeg").onclick=e=>{const b=e.target.closest("button");if(!b)return;wlSrc=b.dataset.src;
+  document.querySelectorAll("#wlSrcSeg button").forEach(x=>x.classList.toggle("on",x.dataset.src===wlSrc));
+  log("prov","WebLLM本体: "+(wlSrc==="cdn"?WEBLLM_CDN:WEBLLM_VENDOR));};
+$("#wlDiag").onclick=async()=>{
+  $("#wlDiag").disabled=true;
+  try{const d=await webgpuDiagnostics();showDiag(diagnosisText(d));log("prov","端末チェック: WebGPU="+d.webgpu+" adapter="+d.adapter+" f16="+d.f16);}
+  catch(e){showDiag("端末チェック失敗: "+(e.message||e));}
+  finally{$("#wlDiag").disabled=false;}
+};
+async function wlRun(btn,fn){const b=$(btn);b.disabled=true;
+  try{await fn();}catch(e){const m=(e&&(e.message||e.code))||String(e);showDiag("失敗: "+m);log("err","✗ "+(e&&e.code||"ERROR")+": "+m);}
+  finally{b.disabled=false;renderProvState();}}
+$("#wlModels").onclick=()=>wlRun("#wlModels",async()=>{
+  const def=providerDefFromForm();
+  showDiag("WebLLM本体を読み込み中…（同梱版は約6.4MB・初回のみ）");
+  const list=await WebLLMProvider.modelList(def);
+  fillModels(list);
+  const small=list.filter(x=>x.vram&&x.vram<1500);
+  showDiag(`モデル ${list.length}件（うち約1.5GB未満 ${small.length}件）。model欄の候補に入れた。\n\n小さい順:\n`+
+    small.slice(0,12).map(x=>`  ${String(Math.round(x.vram)).padStart(5)}MB  ${x.id}${x.low?"  [low_resource]":""}`).join("\n"));
+});
+$("#wlCache").onclick=()=>wlRun("#wlCache",async()=>{
+  const def=providerDefFromForm();
+  if(!def.model)return showDiag("model を入れる");
+  const r=await WebLLMProvider.cacheStatus(def);
+  showDiag(r.cached?`${def.model} は端末に保存済み（次回はDLなしで起動する）`:`${def.model} は未保存。次の「接続 / モデルロード」でDLが走る（約${WEBLLM_VRAM[def.model]||"?"}MB）`);
+});
+$("#wlDel").onclick=()=>wlRun("#wlDel",async()=>{
+  const def=providerDefFromForm();
+  if(!def.model)return showDiag("model を入れる");
+  if(!confirm(`${def.model} の保存データを端末から削除する。次に使うときは再ダウンロードになる。`))return;
+  await WebLLMProvider.deleteCache(def);
+  showDiag(`${def.model} を削除した。`);log("prov","モデル削除: "+def.model);
+});
 $("#adapterSeg").onclick=e=>{const b=e.target.closest("button");if(b)setAdapter(b.dataset.ad);};
 $("#probe").onclick=async()=>{
   const def=providerDefFromForm();const ad=PROVIDERS[adapterId];
@@ -851,7 +1025,17 @@ $("#writeSpec").onclick=()=>{
 
 /* --- examples --- */
 const LOCAL_PROV={local:{adapter:"openai_local",endpoint:"http://localhost:11434/v1",model:"qwen2.5:3b",generation:{maxTokens:256,temperature:0.7}}};
+const WEBLLM_PROV={local:{adapter:"webllm",model:"SmolLM2-360M-Instruct-q4f16_1-MLC",useWorker:true,indexedDB:true,generation:{maxTokens:120,temperature:0.7}}};
 const EX={
+ exW1:{metadata:{name:"内蔵LLM直列",version:"1"},providers:WEBLLM_PROV,
+  nodes:[{id:"in",type:"input"},
+   {id:"write",type:"llm",provider:"local",
+    prompt:{system:"You are a helpful assistant. Answer briefly in Japanese.",
+      template:{syntax:"mustache",mode:"interpolation_only",value:"{{{run_input.question}}}"},
+      suffix:"2文以内で答えて。"},
+    generation:{maxTokens:120,temperature:0.7}},
+   {id:"out",type:"output"}],
+  edges:[{from:{node:"in",port:"out"},to:{node:"write",port:"in"}},{from:{node:"write",port:"out"},to:{node:"out",port:"in"}}]},
  exL1:{metadata:{name:"ローカル直列",version:"1"},providers:LOCAL_PROV,
   vars:{tone:"やさしい日本語で"},
   nodes:[{id:"in",type:"input"},
@@ -914,7 +1098,8 @@ const EX={
 };
 function loadEx(k){$("#spec").value=JSON.stringify(EX[k],null,2);
   document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.classList.toggle("on",b.dataset.ex===k));
-  if(String(k).startsWith("exL")&&adapterId==="mock")setAdapter("openai_local");}
+  if(String(k).startsWith("exW")&&adapterId!=="webllm")setAdapter("webllm");
+  else if(String(k).startsWith("exL")&&adapterId==="mock")setAdapter("openai_local");}
 document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.onclick=()=>loadEx(b.dataset.ex));
 
 const setState=t=>$("#stateline").textContent="state: "+t;
@@ -1164,7 +1349,7 @@ export async function CreateMLCEngine(model,opt){
       try{const u=mk();await import(u);url=u;break;}catch(e){}
     }
   }
-  const wspec=cdn=>({metadata:{version:"1"},providers:{w:{adapter:"webllm",model:"stub-model",cdn}},
+  const wspec=moduleUrl=>({metadata:{version:"1"},providers:{w:{adapter:"webllm",model:"stub-model",moduleUrl,useWorker:false}},
     nodes:[{id:"in",type:"input"},{id:"a",type:"llm",provider:"w"},{id:"out",type:"output"}],
     edges:[{from:{node:"in",port:"out"},to:{node:"a",port:"in"}},{from:{node:"a",port:"out"},to:{node:"out",port:"in"}}]});
   if(!url){

@@ -3,8 +3,8 @@
 LLMオーケストレーター。**ハーネス（AIの処理手順）** をユーザーが組み、複数のLLM/VLMを連携させて動かす。
 ローカルLLMとクラウドLLMを同じインターフェースで混在でき、使用量も管理する。
 
-ファイルは **`harness.html` 1枚だけ**（ビルド不要・外部依存なし・APIキー不要）。
-ダウンロードしてダブルクリックすれば動く。
+**LLMをアプリに内蔵している。** サーバもAPIキーも要らず、ブラウザの中だけで推論する
+（WebLLM/WebGPU。本体はこのリポジトリに同梱、モデルは初回だけ端末にDLして保存）。
 
 公開URL: https://tk5212124-creator.github.io/920harness-studio/
 
@@ -13,14 +13,15 @@ LLMオーケストレーター。**ハーネス（AIの処理手順）** をユ�
 
 ---
 
-## 1. 現状 — v0.4.0 Local Provider
+## 1. 現状 — v0.5.0 内蔵ローカルLLM
 
 | 段階 | 状態 |
 |---|---|
 | HarnessSpec v0.1 文法（Port型 / Provider定義 / Edge・Loop・Condition・Join / context参照） | 凍結済み |
 | Branch Failure Policy v0.3（失敗種別と波及の分離・fail_fast・cancel≠failed・Retry） | 凍結済み |
 | Runtime v0.3.1（直列・並列・Loop×並列・Join・型契約・Checkpoint/Resume） | 実装済み |
-| **Provider層 v0.4.0（mock / OpenAI互換ローカル / WebLLM）** | **このリポジトリ** |
+| Provider層 v0.4.0（mock / OpenAI互換ローカル / WebLLM） | 実装済み |
+| **内蔵LLM v0.5.0（本体同梱・Worker実行・端末チェック・モデル常駐）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 | ノードエディタGUI・ハーネスの書き出しと共有 | これから |
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -33,7 +34,7 @@ LLMオーケストレーター。**ハーネス（AIの処理手順）** をユ�
 |---|---|---|---|
 | `mock` | 内蔵の決定論モック | 0 | なし（Runtime回帰テスト用） |
 | `openai_local` | OpenAI互換のローカルサーバ（Ollama / LM Studio / llama.cpp server / vLLM） | 0 | ローカルで起動したサーバ |
-| `webllm` | ブラウザ内WebGPU推論（`@mlc-ai/web-llm` をCDNから読む） | 0 | WebGPU対応ブラウザ・初回モデルDL |
+| `webllm` | **アプリ内蔵**。ブラウザ内WebGPU推論（`vendor/web-llm` を同梱） | 0 | WebGPU対応ブラウザ・初回モデルDL |
 
 **Runtime は adapter 種別を知らない。** Provider は「推論する / Usageを返す / cancelに応答する /
 失敗理由を返す」だけを担当し、失敗の波及（`fail_fast`）は Runtime の `applyBranchFailurePolicy`
@@ -90,10 +91,29 @@ vLLM も同じ OpenAI互換API なので endpoint を変えるだけ。APIキー
 **LAN内の別マシン（`http://192.168.x.x`）は https ページからは繋がらない**（ブラウザが遮断する）。
 その組み合わせでは `harness.html` をローカルに保存して開く。
 
-### WebLLM
+### 内蔵LLM（サーバ不要・これが本命）
 
-Provider で `WebLLM（WebGPU）` を選ぶ。初回はモデルDL（数百MB〜）が走り、進捗がバーに出る。
-WebGPU依存なので Chrome/Edge系が要る。iOS Safari は小型モデルのみで不安定。
+公開URLを開いて **「内蔵LLM（WebGPU）」** を選ぶだけ。iPhone でも PC でも手順は同じ。
+
+1. **端末チェック** を押す — WebGPUの有無・`shader-f16` 対応・バッファ上限・保存容量を**実測**して出す。
+   推測はしない。ここに出た値がその端末の事実。
+2. 出た結果でモデルを決める
+   - `shader-f16` 対応 → `q4f16_1` のモデル（軽い）
+   - 非対応 → `q4f32_1` のモデル（同じモデルでも容量は増える）
+   - 迷ったら一番小さい `SmolLM2-360M-Instruct-q4f16_1-MLC`（約376MB）から
+3. 例の **内蔵LLM直列** を選ぶ → **実行**
+
+初回だけモデルの重みを HuggingFace から端末にDLする（数百MB）。以降は端末内（IndexedDB）から
+読むのでオフラインでも動く。**保存状況** で入っているか確認でき、**モデルを削除** で消せる。
+
+| 設定 | 意味 |
+|---|---|
+| 本体は同梱版 / CDN | `vendor/web-llm/index.js`（同一オリジン）か、jsDelivr。既定は同梱版。**黙って切り替えない** |
+| Workerで動かす | 推論を Web Worker に逃がして画面を固まらせない。外すと同じスレッドで動く |
+| IndexedDBに保存 | モデルの保存先。Safari では Cache API より確実 |
+
+Workerが作れない・本体が読めない場合、**勝手に別経路へ落とさず失敗理由を出す**（設計方針どおり）。
+`file://` で直接開いたときは同梱版を import できないので、CDN に切り替えるか http(s) 配信のページを使う。
 
 ---
 
@@ -175,7 +195,19 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ```
 node tests/harness-runtime.mjs      # 自己テスト28件（Runtime回帰15 + Provider契約13）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
+node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 ```
+
+### harness-webllm.mjs が見るもの
+
+| 見るもの | 期待 |
+|---|---|
+| 端末チェック | WebGPU・adapter・`shader-f16`・バッファ上限・保存容量が**実測値で**返る |
+| 同梱本体のimport | 同一オリジンから読めて、モデル一覧157件が取れる（CDN不要の証明） |
+| 保存状況 | 未DLなら `cached:false`（IndexedDB経路が動く） |
+| Worker往復 | 存在しないモデルIDで `MODEL_LOAD_FAILED`（Worker起動→本体import→エラー返却が成立） |
+| 重みが取れない環境 | **固まらず** `MODEL_LOAD_FAILED`（0.4秒で失敗を返す） |
+| 例「内蔵LLM直列」 | adapterが内蔵LLMに切り替わり、実行が `failed` で終わる（ハングしない） |
 
 `harness-local-llm.mjs` は node で OpenAI互換のSSEサーバを立て、Chromium から本物の `fetch` で叩く。
 見ているもの:
@@ -206,8 +238,14 @@ node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに�
 
 ### 確認できていないこと
 
-**実GPUでのWebLLM推論は未確認。** 検証環境に GPU が無く
-（`navigator.gpu` はあるが `requestAdapter()` が null）、CDN も届かなかった。
-27–28 は WebLLM のエンジンAPIを差し替えた形の検証で、実モデルのロードと推論そのものは
-WebGPUのある実機で確かめる必要がある。`openai_local` 側の in-flight cancel は
-サーバ側の切断観測まで本物で確認済み。
+**実機での「モデルの重みDL → 実際の推論」は未確認。**
+検証環境からは HuggingFace（重みの置き場）へ通信できず、GPUも swiftshader のソフトウェア実装しかない。
+そのため確認できたのはここまで:
+
+- 同梱した WebLLM 本体が同一オリジンから読め、モデル一覧が取れる ✔
+- Worker が起動し、本体を読み込み、エラーを往復で返す ✔
+- WebGPU の実測値（adapter・features・limits・保存容量）が取れる ✔
+- 重みが取れないときに**固まらず**失敗種別を返す ✔
+- 重みのDLとその後の推論 ✘ ← **実機で最初に確かめること**
+
+`openai_local` 側の in-flight cancel は、サーバ側が切断を観測するところまで本物で確認済み。
