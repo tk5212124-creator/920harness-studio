@@ -117,6 +117,22 @@ R['⑨ ダウンロード'] = (await p.textContent('#mdlMsg')).replace(/\s+/g, '
 ok.download = R['⑨ ダウンロード'].includes('✗') && /MODEL_LOAD_FAILED/.test(R['⑨ ダウンロード'])
   && /取得に失敗|fetch|重み|通信/i.test(R['⑨ ダウンロード']);   // 重み置き場に届かない旨が出る
 
+// ⑩ 通信が止まったまま返ってこない端末でも、待ち続けずに理由を出して操作を戻す
+//    （「押しても何も起きない」の再発防止）
+await p.route('**/vendor/web-llm/index.js', async () => { /* 応答しない */ });
+await p.evaluate(() => { delete _webllmMods[Object.keys(_webllmMods)[0]]; });   // 読み込み済みを捨てる
+const t10 = Date.now();
+await tap('#mdlList .mrow:nth-child(1) button[data-act="get"]');
+const 経過中 = await p.textContent('#mdlList .mrow:nth-child(1) .mstat');
+await p.waitForFunction(() => /✗/.test(document.querySelector('#mdlMsg').textContent), null, { timeout: 60000 });
+R['⑩ 通信が止まる端末'] = { 待った秒数: Math.round((Date.now() - t10) / 1000),
+  待機中の表示: 経過中.slice(0, 30),
+  結果: (await p.textContent('#mdlMsg')).replace(/\s+/g, ' ').slice(0, 70),
+  行に残る: (await p.textContent('#mdlList .mrow:nth-child(1) .mstat')).slice(0, 30),
+  ボタン: await p.locator('#mdlList .mrow:nth-child(1) button[data-act="get"]').isDisabled() ? '押せない' : '押せる' };
+ok.noHang = R['⑩ 通信が止まる端末'].待った秒数 < 50 && R['⑩ 通信が止まる端末'].結果.includes('✗')
+  && R['⑩ 通信が止まる端末'].ボタン === '押せる' && R['⑩ 通信が止まる端末'].行に残る.includes('✗');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

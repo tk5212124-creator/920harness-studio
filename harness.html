@@ -84,6 +84,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .mrow:last-child{border-bottom:0}
 .mname{flex:1 1 160px;min-width:0}.mname b{font-size:13px}.mname small{display:block;color:var(--sub);font-size:11px;line-height:1.45}
 .mbtns{display:flex;gap:6px;flex-wrap:wrap}.mbtns button{padding:5px 10px;font-size:12px}
+.mstat{font-size:11px;color:var(--accent);margin-top:3px;line-height:1.4;word-break:break-word}
 .mtag{font-size:10px;padding:1px 6px;border-radius:99px;border:1px solid var(--line);color:var(--sub);white-space:nowrap}
 .mtag.on{border-color:#9ccfb2;color:var(--ok)}.mtag.use{border-color:var(--accent);color:var(--accent)}
 .ioOut{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:8px 9px;white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto;min-height:34px}
@@ -817,15 +818,25 @@ const WEBLLM_VRAM={"SmolLM2-360M-Instruct-q4f16_1-MLC":376,"SmolLM2-360M-Instruc
   "TinyLlama-1.1B-Chat-v1.0-q4f16_1-MLC-1k":675,"gemma3-1b-it-q4f16_1-MLC":711,
   "Llama-3.2-1B-Instruct-q4f16_1-MLC":879};
 const _webllmMods={};
+// 待ち続けて画面が固まるのを防ぐ。返ってこない通信は理由を付けて打ち切る
+function withTimeout(promise,ms,mkErr){
+  if(!ms)return promise;
+  let t=null;
+  const timer=new Promise((_,rej)=>{t=setTimeout(()=>rej(mkErr()),ms);});
+  return Promise.race([promise,timer]).finally(()=>{if(t)clearTimeout(t);});
+}
 function webllmModuleUrl(def){
   if(def.moduleUrl)return def.moduleUrl;                       // 明示指定（テスト・上書き）
   if(def.moduleSource==="cdn")return WEBLLM_CDN;
   return (typeof location!=="undefined")?new URL(WEBLLM_VENDOR,location.href).href:WEBLLM_VENDOR;
 }
-async function loadWebLLMModule(url){
+async function loadWebLLMModule(url,timeoutMs){
   if(_webllmMods[url])return _webllmMods[url];
-  try{_webllmMods[url]=await import(url);}
+  const ms=timeoutMs||30000;
+  try{_webllmMods[url]=await withTimeout(import(url),ms,()=>({code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
+    message:`WebLLM本体（約6.4MB）を${Math.round(ms/1000)}秒以内に取得できない。通信が止まっている可能性がある。電波の良い所で再試行するか、本体をCDNに切り替える`}));}
   catch(e){
+    if(e&&e.code)throw e;
     const local=/^file:/.test(String(url));
     throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
       message:`WebLLM本体を読み込めない (${url}): ${e.message||e}`+
@@ -894,30 +905,56 @@ const WebLLMProvider={
     onProgress&&onProgress({progress:0.02,text:"WebLLM本体を読み込み中"});
     const m=await loadWebLLMModule(url);
     const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
-    const opts={appConfig,initProgressCallback:r=>onProgress&&onProgress({progress:r.progress,text:r.text})};
+    // 進み具合を見張る。一定時間まったく進まなければ「進まない」と伝えて打ち切る
+    const stallMs=def.stallMs||120000;
+    let lastAt=Date.now(),stallIv=null;
+    const opts={appConfig,initProgressCallback:r=>{lastAt=Date.now();onProgress&&onProgress({progress:r.progress,text:r.text});}};
+    const stall=new Promise((_,rej)=>{
+      stallIv=setInterval(()=>{
+        if(Date.now()-lastAt>stallMs){clearInterval(stallIv);
+          rej({code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
+            message:`${Math.round(stallMs/1000)}秒のあいだ1つも進まなかった。通信が切れているか、端末の空き容量が足りない`});}
+      },2000);
+    });
     if(signal&&signal.aborted)throw abortError();
     const useWorker=def.useWorker!==false;
     let worker=null;
     try{
       if(!useWorker){
-        const engine=await m.CreateMLCEngine(def.model,opts);
+        const engine=await Promise.race([m.CreateMLCEngine(def.model,opts),stall]);
+        clearInterval(stallIv);
         return{engine,mod:m,appConfig,worker:null,moduleUrl:url};
       }
       // Worker で動かす（iOSで画面が固まらないように）。失敗時に黙って同スレッドへ落とさない
       const src=`import * as webllm from ${JSON.stringify(url)};\n`+
-        `const h=new webllm.WebWorkerMLCEngineHandler();\nself.onmessage=e=>h.onmessage(e);\n`;
+        `const h=new webllm.WebWorkerMLCEngineHandler();\nself.onmessage=e=>h.onmessage(e);\n`+
+        `self.postMessage({__hsReady:1});\n`;
       try{worker=new Worker(URL.createObjectURL(new Blob([src],{type:"text/javascript"})),{type:"module"});}
       catch(e){throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:false,
         message:"Workerを作れない: "+(e.message||e)+"｜「Workerで動かす」を外すと同じスレッドで試せる"};}
-      let workerErr=null;
+      const bootMs=def.workerBootMs||20000;
+      // Workerが本当に起動したかを返事で確かめる（黙って起動しない端末があるため）
+      await new Promise((res,rej)=>{
+        const done=()=>{clearTimeout(to);worker.removeEventListener("message",onMsg);worker.removeEventListener("error",onErr);};
+        const onMsg=ev=>{if(ev.data&&ev.data.__hsReady){done();res();}};
+        const onErr=ev=>{done();rej({code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
+          message:"Worker内でエラー: "+((ev&&ev.message)||"(詳細なし)")+"｜「Workerで動かす」を外して再試行できる"});};
+        const to=setTimeout(()=>{done();rej({code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
+          message:`Workerが${Math.round(bootMs/1000)}秒たっても起動しない。「Workerで動かす」のチェックを外して再試行する`});},bootMs);
+        worker.addEventListener("message",onMsg);worker.addEventListener("error",onErr);
+        if(signal)signal.addEventListener("abort",()=>{done();rej(abortError());},{once:true});
+      });
+      onProgress&&onProgress({progress:0.05,text:"Worker起動OK"});
       const failed=new Promise((_,rej)=>{
-        worker.addEventListener("error",ev=>{workerErr=ev;rej({code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
+        worker.addEventListener("error",ev=>{rej({code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
           message:"Worker内でエラー: "+(ev.message||"(詳細なし)")+"｜「Workerで動かす」を外して再試行できる"});},{once:true});
         if(signal)signal.addEventListener("abort",()=>rej(abortError()),{once:true});
       });
-      const engine=await Promise.race([m.CreateWebWorkerMLCEngine(worker,def.model,opts),failed]);
+      const engine=await Promise.race([m.CreateWebWorkerMLCEngine(worker,def.model,opts),failed,stall]);
+      clearInterval(stallIv);
       return{engine,mod:m,appConfig,worker,moduleUrl:url};
     }catch(e){
+      clearInterval(stallIv);
       if(worker)try{worker.terminate();}catch(_){}
       if(isAbort(e))throw e;
       if(e&&e.code)throw e;
@@ -2261,6 +2298,7 @@ function renderModels(){
   for(const m of rows){
     const st=ModelManager.get(webllmDef(m.id));
     const cached=mdlCache[m.id];
+    const busy=mdlActive&&mdlActive.id===m.id;
     const tags=[`<span class="mtag">${esc(m.family)}</span>`,`<span class="mtag">必要メモリ 約${m.vram}MB</span>`];
     if(m.quant==="q4f32")tags.push('<span class="mtag">f16不要</span>');
     if(cached===true)tags.push('<span class="mtag on">端末にある</span>');
@@ -2268,21 +2306,38 @@ function renderModels(){
     if(st.status==="ready")tags.push('<span class="mtag on">起動済み</span>');
     if(using===m.id)tags.push('<span class="mtag use">これを使う設定</span>');
     const d=document.createElement("div");d.className="mrow";
-    d.innerHTML=`<div class="mname"><b>${esc(m.id)}</b><small>${esc(m.note)}</small><div style="margin-top:3px">${tags.join(" ")}</div></div>`
+    d.innerHTML=`<div class="mname"><b>${esc(m.id)}</b><small>${esc(m.note)}</small>`
+      +`<div style="margin-top:3px">${tags.join(" ")}</div>`
+      +`<div class="mstat" data-stat="${esc(m.id)}">${esc(busy?(mdlActive.text||"開始"):(mdlLast[m.id]||""))}</div></div>`
       +`<div class="mbtns">`
-      +`<button data-act="get" data-id="${esc(m.id)}">${cached===true?"起動する":"ダウンロード"}</button>`
-      +`<button data-act="use" data-id="${esc(m.id)}">これを使う</button>`
-      +`<button data-act="test" data-id="${esc(m.id)}">動作確認</button>`
-      +`<button data-act="del" data-id="${esc(m.id)}" class="danger">削除</button>`
+      +(busy?`<button data-act="stop" data-id="${esc(m.id)}" class="danger">中止</button>`
+            :`<button data-act="get" data-id="${esc(m.id)}"${mdlActive?" disabled":""}>${cached===true?"起動する":"ダウンロード"}</button>`
+             +`<button data-act="use" data-id="${esc(m.id)}">これを使う</button>`
+             +`<button data-act="test" data-id="${esc(m.id)}"${mdlActive?" disabled":""}>動作確認</button>`
+             +`<button data-act="del" data-id="${esc(m.id)}" class="danger"${mdlActive?" disabled":""}>削除</button>`)
       +`</div>`;
     box.appendChild(d);
   }
   box.querySelectorAll("button[data-act]").forEach(b=>b.onclick=()=>modelAction(b.dataset.act,b.dataset.id,b));
 }
-let mdlBusy=false;
+let mdlActive=null,mdlCtl=null,mdlTick=null;
+const mdlLast={};   // 行ごとの最後の結果（再描画で消さない）
+function setRowStat(id,t,keep){
+  if(keep)mdlLast[id]=t;
+  const e=$("#mdlList").querySelector(`[data-stat="${CSS.escape(id)}"]`);
+  if(e)e.textContent=t;
+}
+function startTicker(id,getText){
+  const t0=Date.now();
+  const paint=()=>{const sec=Math.round((Date.now()-t0)/1000);
+    const t=`${getText()} ${sec}秒`;if(mdlActive)mdlActive.text=t;setRowStat(id,t);};
+  paint();clearInterval(mdlTick);mdlTick=setInterval(paint,1000);
+  return ()=>{clearInterval(mdlTick);mdlTick=null;return Math.round((Date.now()-t0)/1000);};
+}
 async function modelAction(act,id,btn){
-  if(mdlBusy&&act!=="use")return setMdlMsg("いま別の作業中。終わるまで待つ");
   const def=webllmDef(id);
+  if(act==="stop"){if(mdlCtl)mdlCtl.abort();setRowStat(id,"中止を要求した…");return;}
+  if(mdlActive&&act!=="use")return setMdlMsg("いま別のモデルを用意中。中止するか、終わるまで待つ");
   try{
     if(act==="use"){
       const spec=Ed.spec;spec.providers=spec.providers||{};
@@ -2293,32 +2348,53 @@ async function modelAction(act,id,btn){
     }
     if(act==="del"){
       if(!confirm(`${id} の保存データを端末から消す。次に使うときは再ダウンロードになる。`))return;
-      mdlBusy=true;setMdlMsg("削除中…");
+      mdlActive={id,text:"削除中…"};renderModels();
       await WebLLMProvider.deleteCache(def);
-      mdlCache[id]=false;setMdlMsg(`${id} を削除した`);renderModels();return;
+      mdlCache[id]=false;setMdlMsg(`${id} を削除した`);return;
     }
-    mdlBusy=true;btn.disabled=true;
-    const t0=performance.now();
-    setMdlMsg(`${id} を用意中…（初回はダウンロードが走る。Wi-Fi推奨）`);
-    await ModelManager.ensureLoaded(Object.assign({},def,{adapter:"webllm"}),WebLLMProvider,undefined,
-      st=>{setMdlBar(st.progress);setMdlMsg(`${id}: ${st.text||""} ${Math.round((st.progress||0)*100)}%`);});
-    const loadMs=Math.round(performance.now()-t0);
-    mdlCache[id]=true;setMdlBar(1);renderModels();
-    if(act==="get"){setMdlMsg(`${id} を起動した（${(loadMs/1000).toFixed(1)}秒）。「動作確認」で実際に1文生成できる`);return;}
+    // ここから ダウンロード/起動/動作確認
+    let phase="本体を読み込み中",pct=0;
+    mdlActive={id,text:"開始"};mdlCtl=makeController({});renderModels();
+    const stopTick=startTicker(id,()=>`${phase}${pct?` ${pct}%`:""}`);
+    log("prov",`⚙ ${id}: 用意を開始`);
+    setMdlMsg(`${id} を用意中…（初回はダウンロードが走る。Wi-Fi推奨。進まないときは中止できる）`);
+    let loadSec=0;
+    try{
+      await ModelManager.ensureLoaded(Object.assign({},def,{adapter:"webllm"}),WebLLMProvider,mdlCtl.signal,
+        st=>{pct=Math.round((st.progress||0)*100);phase=st.text||phase;setMdlBar(st.progress);});
+      loadSec=stopTick();
+    }catch(e){stopTick();throw e;}
+    mdlCache[id]=true;setMdlBar(1);
+    if(act==="get"){
+      setRowStat(id,`✔ 起動した（${loadSec}秒）`,true);
+      setMdlMsg(`✔ ${id} を起動した（${loadSec}秒）。「動作確認」で実際に1文生成できる`);
+      log("ok",`✔ ${id} ready (${loadSec}s)`);return;
+    }
     // 動作確認: 実際に1回推論して速さを測る
-    setMdlMsg(`${id} で生成中…`);
+    let n=0;const stopTick2=startTicker(id,()=>`生成中 ${n}トークン`);
     const handle=ModelManager.get(Object.assign({},def,{adapter:"webllm"})).handle;
-    let n=0;const t1=performance.now();
+    const t1=Date.now();
     const res=await WebLLMProvider.invoke({input:{messages:[{role:"user",content:"日本語で1文だけ自己紹介してください。"}]},
-      model:id,generation:{maxTokens:48,temperature:0.7},schema:null,handle,providerDef:def,
+      model:id,generation:{maxTokens:48,temperature:0.7},schema:null,signal:mdlCtl.signal,handle,providerDef:def,
       node:{id:"__test"},inputs:{},ex:{iteration:1},onToken:()=>{n++;}});
-    const genMs=Math.round(performance.now()-t1);
+    stopTick2();
+    const genMs=Date.now()-t1;
+    if(res&&res.cancelled){setRowStat(id,"中止した",true);setMdlMsg(`${id}: 中止した`);return;}
     const text=res&&res.output?rvToText(res.output):"(出力なし)";
-    setMdlMsg(`✔ ${id} / 起動 ${(loadMs/1000).toFixed(1)}秒 / 生成 ${(genMs/1000).toFixed(1)}秒 ${n}トークン（${(n/(genMs/1000)).toFixed(1)} tok/s）\n応答: ${text.slice(0,160)}`);
+    const line=`✔ ${id} / 起動 ${loadSec}秒 / 生成 ${(genMs/1000).toFixed(1)}秒 ${n}トークン（${(n/(genMs/1000)).toFixed(1)} tok/s）`;
+    setRowStat(id,line,true);
+    setMdlMsg(`${line}\n応答: ${text.slice(0,160)}`);
+    log("ok",line+" / "+text.slice(0,80));
   }catch(e){
     setMdlBar(0);
-    setMdlMsg(`✗ ${id}: ${(e&&(e.code||""))} ${(e&&e.message)||e}`);
-  }finally{mdlBusy=false;if(btn)btn.disabled=false;renderModels();}
+    const msg=isAbort(e)?"中止した":`${(e&&e.code)||"ERROR"} ${(e&&e.message)||e}`;
+    setRowStat(id,(isAbort(e)?"中止した":"✗ "+msg),true);
+    setMdlMsg(`✗ ${id}: ${msg}`);
+    log("err",`✗ ${id}: ${msg}`);
+  }finally{
+    if(mdlTick){clearInterval(mdlTick);mdlTick=null;}
+    mdlActive=null;mdlCtl=null;renderModels();
+  }
 }
 $("#mdlF32").onchange=renderModels;
 $("#mdlScan").onclick=async()=>{
