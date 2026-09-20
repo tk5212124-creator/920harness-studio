@@ -118,6 +118,29 @@ iPhone でもPCでも同じ操作。
   iOS で確実に残したいなら **共有 → ホーム画面に追加** が効く
 - いま何MB使っていて上限がいくつかは、その場に表示される
 
+### 重みを自分の置き場に置く
+
+**「自分で置いたモデルを足す」** で、重みの取得先を HuggingFace 以外にできる
+（GitHub Pages・自前サーバなど）。名前・重みのURL・実行用wasmのURLを登録すると一覧に並ぶ。
+
+- 実行用の wasm は MLC公式のもの（`raw.githubusercontent.com`）をそのまま借りられる。同じ種類を選べば自動で入る
+- **WebLLM は重みURLの下に `resolve/main/` を足す**（HuggingFaceの形が前提）。
+  そのためファイルは `…/<名前>/resolve/main/` に置く。画面に**実際に読みに行くURL**が出る
+- **「置き場を確かめる」** で、数百MBを落とす前に `mlc-chat-config.json` が取れるか確認できる
+  （404 か CORS か時間切れかを区別して出す）
+- 別ドメインに置くなら CORS の許可が要る（GitHub Pages は許可済み）
+
+置き方（手元のPCで。HuggingFaceに繋がる環境が要る）:
+
+```
+git lfs install
+git clone https://huggingface.co/mlc-ai/Qwen2.5-0.5B-Instruct-q4f16_1-MLC
+mkdir -p models/MyQwen/resolve/main && cp Qwen2.5-*/* models/MyQwen/resolve/main/
+```
+
+GitHub Pages は1リポジトリ1GB・月100GBまで。1ファイル100MBの制限があるが、
+MLCの重みは30MBずつに分かれているので収まる。
+
 ### モデルごとの上書き
 
 `providers.local.overrides` でモデル設定を上書きできる。Gemma は
@@ -421,6 +444,7 @@ node tests/harness-io-models.mjs    # 入出力パネルの連動と、モデル
 | 届かなかった出力 | 途中で失敗したとき、出力欄に `ここまで届かなかった — a で PROVIDER_ERROR` が出る |
 | Gemmaの上書き | 「これを使う」で `overrides.sliding_window_size = -1` が Spec に入る |
 | 保存状況 | 使用量・上限・長期保存の申請状態が出る |
+| **自前の置き場** | 登録すると一覧の先頭に出て、**重みの取得先が指定したURLになる**（実際の通信で確認）。`resolve/main/` が付いた最終URLを表示し、置き場の事前確認と登録解除ができる |
 
 ### harness-ai-loop.mjs が見るもの
 

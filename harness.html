@@ -104,7 +104,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 </div>
 
 <div class="card" style="margin-bottom:16px"><h2>モデル（この端末の中で動くLLM）</h2>
-<div class="row"><button id="mdlScan">端末にあるか調べる</button>
+<div class="row"><button id="mdlScan">端末にあるか調べる</button><button id="mdlAdd">自分で置いたモデルを足す</button>
 <label class="ck"><input type="checkbox" id="mdlF32">f16非対応の端末向け（q4f32）も出す</label></div>
 <div id="mdlList"></div>
 <div class="bar"><i id="mdlBar"></i></div>
@@ -924,6 +924,13 @@ const WebLLMProvider={
     onProgress&&onProgress({progress:0.02,text:"WebLLM本体を読み込み中"});
     const m=await loadWebLLMModule(url);
     const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
+    // 自分で置いたモデル（GitHub Pages・自前サーバなど）を一覧に足す
+    if(def.custom&&def.custom.model&&def.custom.model_lib){
+      const rec={model:def.custom.model,model_id:def.model,model_lib:def.custom.model_lib};
+      if(def.custom.vram_required_MB)rec.vram_required_MB=def.custom.vram_required_MB;
+      if(def.custom.low_resource_required)rec.low_resource_required=true;
+      appConfig.model_list=(appConfig.model_list||[]).filter(r=>r.model_id!==def.model).concat([rec]);
+    }
     // モデルごとの上書き（例: gemma3 は context_window_size と sliding_window_size が衝突する）
     if(def.overrides&&appConfig.model_list)
       appConfig.model_list=appConfig.model_list.map(r=>r.model_id===def.model
@@ -2327,9 +2334,19 @@ const MODEL_CATALOG=[
  {id:"gemma-2-2b-jpn-it-q4f16_1-MLC",f32:"gemma-2-2b-jpn-it-q4f32_1-MLC",family:"Gemma",vram:1895,note:"日本語向け Gemma 2 · 2B。2GB近く要る",overrides:GEMMA_FIX}
 ];
 const modelOverrides=id=>{const m=MODEL_CATALOG.find(x=>x.id===id||x.f32===id);return m&&m.overrides?m.overrides:null;};
+/* 自分で置いたモデル（重みをGitHub Pagesや自前サーバに置いた場合）。端末に覚えておく */
+const CUSTOM_KEY="harness_custom_models_v1";
+function loadCustomModels(){try{return JSON.parse(localStorage.getItem(CUSTOM_KEY)||"[]");}catch(e){return [];}}
+function saveCustomModels(){try{localStorage.setItem(CUSTOM_KEY,JSON.stringify(customModels));}catch(e){}}
+let customModels=loadCustomModels();
+const customById=id=>customModels.find(m=>m.id===id);
 const mdlCache={};       // id -> 端末にあるか（調べたものだけ）
 function webllmDef(id){const d={adapter:"webllm",model:id,useWorker:true,indexedDB:true,moduleSource:wlSrc};
-  const ov=modelOverrides(id);if(ov)d.overrides=ov;return d;}
+  const ov=modelOverrides(id);if(ov)d.overrides=ov;
+  const c=customById(id);
+  if(c){d.custom={model:c.model,model_lib:c.model_lib,vram_required_MB:c.vram||undefined};
+    if(c.overrides)d.overrides=Object.assign({},d.overrides||{},c.overrides);}
+  return d;}
 function setMdlMsg(t){$("#mdlMsg").textContent=t;}
 function setMdlBar(p){$("#mdlBar").style.width=Math.round((p||0)*100)+"%";}
 function currentModelId(){const d=(Ed.spec&&Ed.spec.providers&&Ed.spec.providers.local)||{};
@@ -2337,6 +2354,7 @@ function currentModelId(){const d=(Ed.spec&&Ed.spec.providers&&Ed.spec.providers
 function renderModels(){
   const showF32=$("#mdlF32").checked;
   const rows=[];
+  for(const m of customModels)rows.push({id:m.id,family:"自前",vram:m.vram||0,note:"自分で置いたモデル: "+m.model,mine:true});
   for(const m of MODEL_CATALOG){
     rows.push({...m,quant:"q4f16"});
     if(showF32&&m.f32)rows.push({...m,id:m.f32,quant:"q4f32",vram:Math.round(m.vram*1.35)});
@@ -2347,7 +2365,8 @@ function renderModels(){
     const st=ModelManager.get(webllmDef(m.id));
     const cached=mdlCache[m.id];
     const busy=mdlActive&&mdlActive.id===m.id;
-    const tags=[`<span class="mtag">${esc(m.family)}</span>`,`<span class="mtag">必要メモリ 約${m.vram}MB</span>`];
+    const tags=[`<span class="mtag">${esc(m.family)}</span>`];
+    if(m.vram)tags.push(`<span class="mtag">必要メモリ 約${m.vram}MB</span>`);
     if(m.quant==="q4f32")tags.push('<span class="mtag">f16不要</span>');
     if(cached===true)tags.push('<span class="mtag on">端末にある</span>');
     if(cached===false)tags.push('<span class="mtag">未取得</span>');
@@ -2362,7 +2381,8 @@ function renderModels(){
             :`<button data-act="get" data-id="${esc(m.id)}"${mdlActive?" disabled":""}>${cached===true?"起動する":"ダウンロード"}</button>`
              +`<button data-act="use" data-id="${esc(m.id)}">これを使う</button>`
              +`<button data-act="test" data-id="${esc(m.id)}"${mdlActive?" disabled":""}>動作確認</button>`
-             +`<button data-act="del" data-id="${esc(m.id)}" class="danger"${mdlActive?" disabled":""}>削除</button>`)
+             +`<button data-act="del" data-id="${esc(m.id)}" class="danger"${mdlActive?" disabled":""}>削除</button>`
+             +(m.mine?`<button data-act="unreg" data-id="${esc(m.id)}"${mdlActive?" disabled":""}>登録を消す</button>`:""))
       +`</div>`;
     box.appendChild(d);
   }
@@ -2393,6 +2413,10 @@ async function modelAction(act,id,btn){
       setSpecObj(spec);setAdapter("webllm");$("#model").value=id;renderModels();
       setMdlMsg(`providers.local = ${id}。ハーネスの llm ノードで provider に local を選べば、この端末のモデルで動く`);
       return;
+    }
+    if(act==="unreg"){
+      customModels=customModels.filter(x=>x.id!==id);saveCustomModels();renderModels();
+      setMdlMsg(`${id} の登録を消した（端末に落とした重みは「削除」で消す）`);return;
     }
     if(act==="del"){
       if(!confirm(`${id} の保存データを端末から消す。次に使うときは再ダウンロードになる。`))return;
@@ -2446,6 +2470,78 @@ async function modelAction(act,id,btn){
 }
 /* 保存先: このサイト（オリジン）のブラウザ内ストレージ。アプリを更新しても消えない。
    iOSは一定期間使わないと消すことがあるので、消えにくくする申請も出せる。 */
+/* 自前で重みを置いた場合の登録。lib(wasm)はMLC公式のものを借りられる */
+// WebLLMは重みURLに resolve/main/ を足す（HuggingFaceの形が前提）。同じ規則でここでも見せる
+function weightsBaseUrl(u){
+  let x=String(u||"").trim();if(!x)return "";
+  if(!x.endsWith("/"))x+="/";
+  if(!/.+\/resolve\/.+\//.test(x))x+="resolve/main/";
+  return x;
+}
+const LIB_BASE="https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_84/base/";
+const LIB_OF={
+ "SmolLM2-360M-Instruct-q4f16_1-MLC":"SmolLM2-360M-Instruct-q4f16_1_cs1k-webgpu.wasm",
+ "SmolLM2-360M-Instruct-q4f32_1-MLC":"SmolLM2-360M-Instruct-q4f32_1_cs1k-webgpu.wasm",
+ "gemma3-1b-it-q4f16_1-MLC":"gemma3-1b-it-q4f16_1_cs1k-webgpu.wasm",
+ "Llama-3.2-1B-Instruct-q4f16_1-MLC":"Llama-3.2-1B-Instruct-q4f16_1_cs1k-webgpu.wasm",
+ "Llama-3.2-1B-Instruct-q4f32_1-MLC":"Llama-3.2-1B-Instruct-q4f32_1_cs1k-webgpu.wasm",
+ "Qwen2.5-0.5B-Instruct-q4f16_1-MLC":"Qwen2-0.5B-Instruct-q4f16_1_cs1k-webgpu.wasm",
+ "Qwen2.5-0.5B-Instruct-q4f32_1-MLC":"Qwen2-0.5B-Instruct-q4f32_1_cs1k-webgpu.wasm",
+ "Qwen2.5-1.5B-Instruct-q4f16_1-MLC":"Qwen2-1.5B-Instruct-q4f16_1_cs1k-webgpu.wasm",
+ "gemma-2-2b-jpn-it-q4f16_1-MLC":"gemma-2-2b-jpn-it-q4f16_1_cs1k-webgpu.wasm"
+};
+function openAddModelSheet(){
+  let h=head("自分で置いたモデルを足す");
+  h+=`<div class="mini">重みを自分の置き場（GitHub Pages・自前サーバなど）に置いた場合、ここに登録するとそこから読む。
+  置き場には <b>mlc-chat-config.json / ndarray-cache.json / params_shard_*.bin / tokenizer.json</b> を並べる。
+  <b>WebLLMは重みURLの下に resolve/main/ を足す規則</b>なので、ファイルは <code>…/&lt;名前&gt;/resolve/main/</code> に置く（下に実際のURLが出る）。
+  <b>別ドメインなら CORS の許可が要る</b>（GitHub Pages は許可済み）。</div>`;
+  h+=fld("名前（好きな名前でよい）",txt("__cmId","","MyQwen-0.5B"));
+  h+=fld("重みのURL（末尾は / ）",txt("__cmUrl","","https://<ユーザー名>.github.io/<リポジトリ>/models/Qwen2.5-0.5B-Instruct-q4f16_1-MLC/"));
+  h+=fld("同じ種類のモデル（実行用wasmを借りる）",sel("__cmBase","Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+    Object.keys(LIB_OF).map(k=>({v:k,t:k}))));
+  h+=fld("実行用wasmのURL（自動で入る。自前のものがあれば差し替える）",txt("__cmLib",LIB_BASE+LIB_OF["Qwen2.5-0.5B-Instruct-q4f16_1-MLC"]));
+  h+=fld("必要メモリの目安MB（任意）",num("__cmVram",""));
+  h+=`<div class="mini" id="cmFinal"></div>`;
+  h+=`<div class="row"><button id="cmCheck">置き場を確かめる</button><button class="primary" id="cmAdd">追加する</button></div>`;
+  h+=`<div class="mini" id="cmMsg"></div>`;
+  h+=`<div class="mini" style="margin-top:10px">置き方（手元のPCで）:<br>
+  <code>git lfs install</code><br>
+  <code>git clone https://huggingface.co/mlc-ai/Qwen2.5-0.5B-Instruct-q4f16_1-MLC</code><br>
+  <code>mkdir -p models/MyQwen/resolve/main && cp Qwen2.5-*/* models/MyQwen/resolve/main/</code><br>
+  …を自分のリポジトリに push し、Pages で配信する。GitHub Pages は1リポジトリ1GB・月100GBまで。
+  1ファイル100MBの制限があるが、MLCの重みは30MBずつに分かれているので収まる。</div>`;
+  openSheet(h);bindClose();
+  const g=k=>$("#sheetBody").querySelector(`[data-f="${k}"]`);
+  g("__cmBase").onchange=()=>{g("__cmLib").value=LIB_BASE+LIB_OF[g("__cmBase").value];};
+  const paintFinal=()=>{const b=weightsBaseUrl(g("__cmUrl").value);
+    $("#cmFinal").innerHTML=b?`実際に読みに行く先: <code>${esc(b)}mlc-chat-config.json</code>`
+      :"重みのURLを入れると、実際に読みに行く先がここに出る";};
+  g("__cmUrl").oninput=paintFinal;paintFinal();
+  $("#cmCheck").onclick=async()=>{
+    const b=weightsBaseUrl(g("__cmUrl").value),msg=$("#cmMsg");
+    if(!b)return msg.textContent="重みのURLを入れる";
+    msg.textContent="確かめている…";
+    try{
+      const r=await withTimeout(fetch(b+"mlc-chat-config.json",{cache:"no-store"}),15000,()=>new Error("時間切れ"));
+      if(!r.ok)return msg.textContent=`✗ HTTP ${r.status}｜そのURLに mlc-chat-config.json が無い（resolve/main/ の下に置く）`;
+      const j=await r.json().catch(()=>null);
+      msg.textContent=j?`✔ 置き場を確認できた（context_window_size: ${j.context_window_size!=null?j.context_window_size:"不明"}）`
+                       :"✔ 取得はできたが JSON として読めない";
+    }catch(e){msg.textContent="✗ 取りに行けない: "+((e&&e.message)||e)+"（別ドメインなら CORS の許可が要る）";}
+  };
+  $("#cmAdd").onclick=()=>{
+    const id=(g("__cmId").value||"").trim(),url=(g("__cmUrl").value||"").trim(),lib=(g("__cmLib").value||"").trim();
+    const msg=$("#cmMsg");
+    if(!id||!url||!lib)return msg.textContent="名前・重みのURL・wasmのURL がすべて要る";
+    if(!/^https?:\/\//.test(url)||!/^https?:\/\//.test(lib))return msg.textContent="URLは http(s) で始める";
+    if(customById(id)||MODEL_CATALOG.some(m=>m.id===id))return msg.textContent="その名前はもう使われている";
+    customModels.push({id,model:weightsBaseUrl(url),model_lib:lib,vram:Number(g("__cmVram").value)||0});
+    saveCustomModels();renderModels();closeSheet();
+    setMdlMsg(`${id} を登録した。「ダウンロード」でその置き場から取る`);
+  };
+}
+$("#mdlAdd").onclick=openAddModelSheet;
 async function updateStorageInfo(){
   const el=$("#mdlStore");if(!el)return;
   let t=[];

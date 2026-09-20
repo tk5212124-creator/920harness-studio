@@ -169,6 +169,39 @@ await p.waitForFunction(() => /使用|保存/.test(document.querySelector('#mdlS
 R['⑭ 保存状況'] = (await p.textContent('#mdlStore')).slice(0, 60);
 ok.storage = /使用 \d+MB/.test(R['⑭ 保存状況']) && /長期保存/.test(R['⑭ 保存状況']);
 
+// ⑮ 自分で置いたモデルを登録すると、重みの取得先がその置き場になる
+const asked = [];
+await p.route('**/mymodels/**', route => { asked.push(route.request().url()); route.fulfill({ status: 404, body: 'x' }); });
+await tap('#mdlAdd');
+await p.fill('[data-f="__cmId"]', 'MyLocal-0.5B');
+await p.fill('[data-f="__cmUrl"]', `http://127.0.0.1:${srv.address().port}/mymodels/q05/`);
+await p.selectOption('[data-f="__cmBase"]', 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC');
+const libUrl = await p.inputValue('[data-f="__cmLib"]');
+R['⑮ 実際に読みに行く先'] = (await p.textContent('#cmFinal')).slice(-46);
+await tap('#cmCheck');
+await p.waitForFunction(() => /✔|✗/.test(document.querySelector('#cmMsg').textContent), null, { timeout: 20000 });
+R['⑮ 置き場の確認'] = (await p.textContent('#cmMsg')).slice(0, 60);
+await tap('#cmAdd');
+R['⑮ 登録'] = { 一覧の先頭: await p.textContent('#mdlList .mrow:nth-child(1) .mname b'),
+  借りたwasm: libUrl.slice(-46) };
+ok.customAdd = R['⑮ 登録'].一覧の先頭 === 'MyLocal-0.5B' && /Qwen2-0\.5B.*webgpu\.wasm$/.test(libUrl)
+  && R['⑮ 実際に読みに行く先'].includes('resolve/main/mlc-chat-config.json')
+  && R['⑮ 置き場の確認'].includes('✗');   // この試験では404を返すので、そう言い当てる
+// 登録した置き場を実際に見に行く（Worker越しの通信は横取りできないので同じスレッドで確かめる）
+const fetchTried = await p.evaluate(async ([url, lib]) => {
+  try {
+    await WebLLMProvider.ensureLoaded({ adapter: "webllm", model: "MyLocal-0.5B", useWorker: false,
+      indexedDB: true, moduleSource: "vendor", custom: { model: url, model_lib: lib } }, () => {}, undefined);
+    return "成功してしまった";
+  } catch (e) { return String(e.message || e).slice(0, 120); }
+}, [`http://127.0.0.1:${srv.address().port}/mymodels/q05/`, libUrl]);
+R['⑮ 取りに行った先'] = { 失敗の内容: fetchTried, 横取りしたURL: asked.slice(0, 2).map(u => u.replace(/^https?:\/\/[^/]+/, '')) };
+ok.customFetch = asked.some(u => u.includes('/mymodels/q05/'));
+// 登録を消せる
+await tap('#mdlList .mrow:nth-child(1) button[data-act="unreg"]');
+R['⑮ 登録解除後の先頭'] = await p.textContent('#mdlList .mrow:nth-child(1) .mname b');
+ok.customUnreg = R['⑮ 登録解除後の先頭'] === 'SmolLM2-360M-Instruct-q4f16_1-MLC';
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;
