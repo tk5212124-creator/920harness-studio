@@ -6,7 +6,7 @@ LLMオーケストレーター。**ハーネス（AIの処理手順）** をユ�
 ファイルは **`harness.html` 1枚だけ**（ビルド不要・外部依存なし・APIキー不要）。
 ダウンロードしてダブルクリックすれば動く。
 
-公開URL: https://tk5212124-creator.github.io/harness-studio/
+公開URL: https://tk5212124-creator.github.io/920harness-studio/
 
 **設計思想: エンジンは薄く、権限はユーザーに全渡し。** Runtime は書いてない判断
 （自動フォールバック・隠れた型変換・自動リトライ・自動最適化）を一切しない。決定論を守る。
