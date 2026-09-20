@@ -75,6 +75,43 @@ const j = R['② JSON強制'];
 ok.json = j.ok === true ? (j.out.type === 'json' && j.out.value.score !== undefined)
   : (j.code === 'SCHEMA_VALIDATION_ERROR');     // 中身を外すのはモデルの性能の話
 
+// ③ ノードを増やして並列で流す（実機で「処理を足すと落ちる」と言われた形）
+//    JSのヒープが実行のたびに増え続けていないかも見る（増え続けるならこちら側の持ち方が悪い）
+R['③ 並列5ノード'] = await p.evaluate(async ({ url }) => {
+  const heap = () => (performance.memory ? performance.memory.usedJSHeapSize : null);
+  const prov = { adapter: 'wllama', model: 'real-gguf', url, contextSize: 1024, gpuLayers: 0, stallMs: 900000,
+    generation: { maxTokens: 24, temperature: 0.2 } };
+  const sp = { metadata: { version: '1' }, providers: { cpu: prov },
+    nodes: [{ id: 'in', type: 'input' },
+            { id: 'write', type: 'llm', provider: 'cpu', routing: { mode: 'parallel', failurePolicy: 'fail_fast' } },
+            { id: 'a', type: 'llm', provider: 'cpu' }, { id: 'b', type: 'llm', provider: 'cpu' },
+            { id: 'merge', type: 'llm', provider: 'cpu', inputs: { in: { type: 'any', cardinality: 'many' } },
+              merge: { op: 'markdown', labels: ['a', 'b'] } },
+            { id: 'out', type: 'output' }],
+    edges: [{ from: { node: 'in', port: 'out' }, to: { node: 'write', port: 'in' } },
+            { from: { node: 'write', port: 'out' }, to: { node: 'a', port: 'in' } },
+            { from: { node: 'write', port: 'out' }, to: { node: 'b', port: 'in' } },
+            { from: { node: 'a', port: 'out' }, to: { node: 'merge', port: 'in' }, position: 0 },
+            { from: { node: 'b', port: 'out' }, to: { node: 'merge', port: 'in' }, position: 1 },
+            { from: { node: 'merge', port: 'out' }, to: { node: 'out', port: 'in' } }] };
+  ModelManager.reset();
+  const before = heap();
+  const t0 = Date.now();
+  const r1 = await fullRun(sp, { in: '一言で挨拶して。' });
+  const mid = heap();
+  const r2 = await fullRun(sp, { in: 'もう一度、一言で挨拶して。' });      // 2回目（増え続けないか）
+  const after = heap();
+  return { status1: r1.status, status2: r2.status, calls: r1.totals.apiCalls, ms: Date.now() - t0,
+    err: (r1.errors[0] || {}).message || null,
+    heapMB: before == null ? null : { before: Math.round(before / 1048576), mid: Math.round(mid / 1048576), after: Math.round(after / 1048576) },
+    out: (r1.result && String(r1.result.value).slice(0, 60)) || null };
+}, { url });
+ok.parallel = R['③ 並列5ノード'].status1 === 'success' && R['③ 並列5ノード'].status2 === 'success'
+  && R['③ 並列5ノード'].calls === 4;
+// 2回流してもヒープが倍増しない（持ちっぱなしになっていない）
+const h = R['③ 並列5ノード'].heapMB;
+ok.heap = !h || (h.after - h.mid) < Math.max(40, (h.mid - h.before));
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean);
