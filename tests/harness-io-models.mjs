@@ -1,0 +1,126 @@
+// 一番上の「入出力」パネルが入力/出力ノードに連動するか、
+// 「モデル」パネルから Gemma/Qwen/Llama を端末に落とす導線が成立しているかを見る。
+// 重みは HuggingFace にあり、この検証環境からは組織ポリシーで到達できないので、
+// ダウンロードは「固まらずに理由の分かる失敗を返すこと」までを確認する。
+import http from 'node:http';
+import { readFileSync, statSync } from 'node:fs';
+import { extname, join, normalize } from 'node:path';
+import pw from '/opt/node22/lib/node_modules/playwright/index.js'; const { chromium } = pw;
+// 同梱した WebLLM 本体は同一オリジンから import するので http で配信する（file:// では読めない）
+const ROOT = new URL('..', import.meta.url).pathname;
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.png': 'image/png' };
+const srv = http.createServer((req, res) => {
+  const rel = normalize(decodeURIComponent(req.url.split('?')[0])).replace(/^(\.\.[/\\])+/, '');
+  const f = join(ROOT, rel === '/' ? 'harness.html' : rel);
+  try { statSync(f); res.writeHead(200, { 'Content-Type': TYPES[extname(f)] || 'application/octet-stream' }); res.end(readFileSync(f)); }
+  catch { res.writeHead(404); res.end('404'); }
+});
+await new Promise(r => srv.listen(0, '127.0.0.1', r));
+const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium',
+  args: ['--enable-unsafe-webgpu', '--use-angle=swiftshader', '--enable-features=Vulkan'] });
+const ctx = await b.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+const p = await ctx.newPage();
+const errs = []; p.on('pageerror', e => errs.push(String(e)));
+await p.goto(`http://127.0.0.1:${srv.address().port}/harness.html`);
+await p.waitForFunction(() => window.__selfTest, null, { timeout: 30000 });
+const R = {}, ok = {};
+const tap = async sel => { await p.locator(sel).first().tap(); await p.waitForTimeout(150); };
+const spec = () => p.evaluate(() => JSON.parse(document.querySelector('#spec').value));
+const paste = async obj => { await tap('#btnImport'); await p.fill('#imText', JSON.stringify(obj)); await tap('#imGo'); await tap('#imApply'); };
+
+// ① 最初から入力欄と出力欄がノードに対応して出る（例 ex1 は in と result）
+R['① 初期'] = { 入力欄: await p.$$eval('#ioIn [data-in]', e => e.map(x => x.dataset.in)),
+  出力欄: await p.$$eval('#ioOut [data-out]', e => e.map(x => x.dataset.out)) };
+ok.init = JSON.stringify(R['① 初期']) === JSON.stringify({ 入力欄: ['in'], 出力欄: ['result'] });
+
+// ② 入力欄に書いた文字がそのまま実行に渡り、結果が出力欄に出る
+await paste({ metadata: { name: "入出力", version: "1" }, providers: { m: { adapter: "mock" } },
+  nodes: [{ id: "in", type: "input" }, { id: "a", type: "llm", provider: "m", mock: { echoInput: true } }, { id: "res", type: "output" }],
+  edges: [{ from: { node: "in", port: "out" }, to: { node: "a", port: "in" } },
+          { from: { node: "a", port: "out" }, to: { node: "res", port: "in" } }] });
+await p.fill('#ioIn [data-in="in"]', 'テスト入力123');
+await tap('#run');
+await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
+R['② 入力→出力'] = { 出力欄: (await p.textContent('#ioOut [data-out="res"]')).slice(0, 80),
+  state: (await p.textContent('#stateline')).slice(0, 30) };
+ok.io = R['② 入力→出力'].出力欄.includes('テスト入力123');
+
+// ③ 出力ノードを足すと出力欄が増える（エディタから）
+await tap('#addNode');
+await tap('[data-add="output"]');
+await tap('#shClose');
+R['③ 出力を足す'] = await p.$$eval('#ioOut [data-out]', e => e.map(x => x.dataset.out));
+ok.addOut = R['③ 出力を足す'].length === 2;
+
+// ④ 入力ノードを足すと入力欄が増え、起点の注意も出る。両方の値が実際にモデルへ届く
+await p.evaluate(() => {
+  const enc = t => new TextEncoder().encode(t);
+  registerTransport('t', async (url, init) => {
+    if (/\/models$/.test(url)) return new Response(JSON.stringify({ data: [{ id: 'm1' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    window.__lastBody = JSON.parse(init.body);
+    const body = new ReadableStream({ start(c) {
+      c.enqueue(enc('data: ' + JSON.stringify({ choices: [{ delta: { content: '受け取った' } }] }) + '\n\n'));
+      c.enqueue(enc('data: [DONE]\n\n')); c.close();
+    } });
+    return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  });
+});
+await paste({ metadata: { name: "2入力", version: "1" },
+  providers: { local: { adapter: "openai_local", endpoint: "http://stub/v1", model: "m1", transport: "t" } },
+  nodes: [{ id: "in", type: "input" }, { id: "in2", type: "input" },
+          { id: "a", type: "llm", provider: "local",
+            prompt: { template: { syntax: "mustache", mode: "interpolation_only", value: "A={{{in}}} B={{{run_input.in2}}}" } } },
+          { id: "res", type: "output" }],
+  edges: [{ from: { node: "in", port: "out" }, to: { node: "a", port: "in" } },
+          { from: { node: "a", port: "out" }, to: { node: "res", port: "in" } }] });
+R['④ 入力を足す'] = { 入力欄: await p.$$eval('#ioIn [data-in]', e => e.map(x => x.dataset.in)),
+  注意: (await p.locator('#ioMulti').count()) ? (await p.textContent('#ioMulti')).slice(0, 40) : 'なし' };
+await p.fill('#ioIn [data-in="in"]', 'ひとつめ');
+await p.fill('#ioIn [data-in="in2"]', 'ふたつめ');
+await tap('#run');
+await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
+R['④ モデルに届いた文'] = await p.evaluate(() => window.__lastBody && window.__lastBody.messages[0].content);
+ok.addIn = R['④ 入力を足す'].入力欄.join(',') === 'in,in2' && R['④ 入力を足す'].注意.includes('最初の入力ノード')
+  && R['④ モデルに届いた文'] === 'A=ひとつめ B=ふたつめ';
+
+// ⑤ 入力ノードを消すと欄も消える
+await paste({ metadata: { name: "1入力に戻す", version: "1" }, providers: { m: { adapter: "mock" } },
+  nodes: [{ id: "in", type: "input" }, { id: "a", type: "llm", provider: "m", mock: { text: "x" } }, { id: "res", type: "output" }],
+  edges: [{ from: { node: "in", port: "out" }, to: { node: "a", port: "in" } },
+          { from: { node: "a", port: "out" }, to: { node: "res", port: "in" } }] });
+R['⑤ 減らす'] = { 入力欄: await p.$$eval('#ioIn [data-in]', e => e.length), 出力欄: await p.$$eval('#ioOut [data-out]', e => e.length) };
+ok.remove = R['⑤ 減らす'].入力欄 === 1 && R['⑤ 減らす'].出力欄 === 1;
+
+// ⑥ モデル一覧に Gemma / Qwen / Llama が並ぶ
+R['⑥ モデル一覧'] = await p.$$eval('#mdlList .mrow .mname b', e => e.map(x => x.textContent));
+ok.catalog = ['gemma3-1b-it-q4f16_1-MLC', 'Llama-3.2-1B-Instruct-q4f16_1-MLC', 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC']
+  .every(id => R['⑥ モデル一覧'].includes(id));
+
+// ⑦ f16非対応の端末向け(q4f32)を出すと行が増える
+const n1 = R['⑥ モデル一覧'].length;
+await p.check('#mdlF32'); await p.waitForTimeout(200);
+const n2 = await p.locator('#mdlList .mrow').count();
+R['⑦ q4f32'] = { 前: n1, 後: n2 };
+ok.f32 = n2 > n1;
+await p.uncheck('#mdlF32'); await p.waitForTimeout(200);
+
+// ⑧ 「これを使う」で providers.local が内蔵LLMになる
+await tap('#mdlList .mrow:nth-child(3) button[data-act="use"]');
+const s8 = await spec();
+R['⑧ これを使う'] = s8.providers.local;
+ok.use = s8.providers.local.adapter === 'webllm' && /Llama/.test(s8.providers.local.model);
+
+// ⑨ ダウンロード: この環境では重み置き場に届かないので、固まらず理由が出る
+await tap('#mdlList .mrow:nth-child(1) button[data-act="get"]');
+await p.waitForFunction(() => /✗|✔|秒/.test(document.querySelector('#mdlMsg').textContent), null, { timeout: 60000 });
+R['⑨ ダウンロード'] = (await p.textContent('#mdlMsg')).replace(/\s+/g, ' ').slice(0, 120);
+ok.download = R['⑨ ダウンロード'].includes('✗') && /MODEL_LOAD_FAILED/.test(R['⑨ ダウンロード'])
+  && /取得に失敗|fetch|重み|通信/i.test(R['⑨ ダウンロード']);   // 重み置き場に届かない旨が出る
+
+R['pageerror'] = errs;
+for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
+const all = Object.values(ok).every(Boolean) && errs.length === 0;
+console.log('\n判定: ' + JSON.stringify(ok));
+console.log(all ? 'ALL PASS' : 'FAIL');
+await b.close(); srv.close();
+process.exit(all ? 0 : 1);

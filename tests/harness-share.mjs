@@ -61,6 +61,7 @@ a -> out`;
 await tap('#btnImport');
 await p.fill("#imText", hslText);
 await tap('#imGo');
+await tap('#imApply');
 const s4 = await spec();
 R['④ HSLを貼って取り込み'] = { name: s4.metadata.name, nodes: s4.nodes.map(n => n.id), edges: s4.edges.length };
 ok.importHsl = s4.metadata.name === '手で書いた' && s4.nodes.length === 3 && s4.edges.length === 2;
@@ -90,18 +91,12 @@ const brokenJSON = JSON.stringify({
 await tap('#btnImport');
 await p.fill('#imText', brokenJSON);
 await tap('#imGo');
+await tap('#imApply');
 R['⑦ 壊れた構成を取り込み'] = (await spec()).metadata.name;
 await tap('#btnReview');
 const diag = await p.textContent('#sheetBody');
 R['⑦ 診断'] = diag.replace(/\s+/g, ' ').slice(0, 220);
 ok.review = diag.includes('孤島') && diag.includes('unknownNode');
-
-// ⑧ AIに見てもらう（mock provider で経路だけ確認）
-await tap('#revGo');
-await p.waitForFunction(() => { const e = document.querySelector('#revOut'); return e && e.textContent.length > 3; }, null, { timeout: 15000 });
-const rev = await p.textContent('#revOut');
-R['⑧ AIレビューの応答'] = rev.replace(/\s+/g, ' ').slice(0, 90);
-ok.ai = rev.includes('mock') && rev.includes('tokens');
 
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));

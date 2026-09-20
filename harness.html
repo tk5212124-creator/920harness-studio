@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — AIとの往復 v0.8.0</title>
+<title>Harness Studio — 入出力とモデル v0.9.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -80,13 +80,34 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .palette{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .palette button{text-align:left;padding:10px 12px;font-size:13px;line-height:1.35}
 .palette b{display:block;font-size:13px}.palette small{color:var(--sub);font-size:11px}
+.mrow{display:flex;gap:8px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.mrow:last-child{border-bottom:0}
+.mname{flex:1 1 160px;min-width:0}.mname b{font-size:13px}.mname small{display:block;color:var(--sub);font-size:11px;line-height:1.45}
+.mbtns{display:flex;gap:6px;flex-wrap:wrap}.mbtns button{padding:5px 10px;font-size:12px}
+.mtag{font-size:10px;padding:1px 6px;border-radius:99px;border:1px solid var(--line);color:var(--sub);white-space:nowrap}
+.mtag.on{border-color:#9ccfb2;color:var(--ok)}.mtag.use{border-color:var(--accent);color:var(--accent)}
+.ioOut{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:8px 9px;white-space:pre-wrap;word-break:break-word;max-height:140px;overflow:auto;min-height:34px}
 .ck{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--sub);white-space:nowrap}
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.8.0 · AIとの往復</span></h1>
-<div class="tag">タップとドラッグで組む · HSLで書き出す · AIに直させて口に入れると図になる（差分を見てから適用）· 内蔵ローカルLLM（サーバ不要）· Runtimeは adapter 種別を知らない</div>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.9.0 · 入出力とモデル</span></h1>
+<div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
+
+<div class="card" style="margin-bottom:16px"><h2>入出力</h2>
+<div id="ioIn"></div>
+<div id="ioOut"></div>
+<div class="mini">入力ノード・出力ノードを足したり消したりすると、ここも増えたり減ったりする。入力は「ノードの名前」で渡る。</div>
+</div>
+
+<div class="card" style="margin-bottom:16px"><h2>モデル（この端末の中で動くLLM）</h2>
+<div class="row"><button id="mdlScan">端末にあるか調べる</button>
+<label class="ck"><input type="checkbox" id="mdlF32">f16非対応の端末向け（q4f32）も出す</label></div>
+<div id="mdlList"></div>
+<div class="bar"><i id="mdlBar"></i></div>
+<div class="mini" id="mdlMsg">Gemma / Qwen / Llama をこの端末に落として動かす。初回だけダウンロードし、以降は端末の中から起動する（サーバもAPIキーも要らない）。</div>
+</div>
 
 <div class="card" style="margin-bottom:16px"><h2>Provider（ローカルLLM）</h2>
 <div class="row"><div class="seg" id="adapterSeg">
@@ -127,7 +148,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="fab"><button id="zIn" title="拡大">＋</button><button id="zOut" title="縮小">−</button><button id="zFit" title="全体">⤢</button></div>
 </div>
 <div class="hintbar" id="hint"></div>
-<div class="row"><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button class="primary" id="btnAI">AIで編集</button><button id="btnReview">診断する</button></div>
+<div class="row"><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button></div>
 <input type="file" id="fileIn" accept=".hsl,.json,.txt,text/plain,application/json" style="display:none">
 </div>
 <div class="row"><div class="seg" id="exSeg">
@@ -161,7 +182,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="sheet" id="sheet"><div id="sheetBody"></div></div>
 <script>
 "use strict";
-const CP_KEY="harness_vslice_cp_v080";
+const CP_KEY="harness_vslice_cp_v090";
 const ABSENT=Symbol("absent");
 /* ---- 式評価 ---- */
 const OPS2=["&&","||","==","!=","<=",">="],OPS1=["+","-","*","/","%","<",">"];
@@ -1245,7 +1266,12 @@ async function processOneWorkItem(spec,run,store,log,ctl){
       if(node.type==="output"){const k=Object.keys(inputs)[0];const rvOut=(k!==undefined&&inputs[k]!==undefined)?inputs[k]:null;run.result=rvOut;
         (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rvOut,raw:JSON.stringify(rvOut),usage:{apiCalls:0,inputTokens:0,outputTokens:0,cost:null},meta:metaOf(rvOut,null),status:"success"});
         ex.status="completed";run.workQueue.shift();log&&log("data",`● OUTPUT(${node.id}) ← ${JSON.stringify(rvOut)}`);if(store)store.save(run);return{kind:"completed"};}
-      if(node.type==="input"){rv={type:"json",value:run.input};usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};log&&log("node",`◇ INPUT(${node.id})`);}
+      if(node.type==="input"){
+        // 入力は「そのノードの名前のキー」を読む。無ければ入力全体を渡す（古いSpecのため）
+        const has=run.input&&Object.prototype.hasOwnProperty.call(run.input,node.id);
+        const v=has?run.input[node.id]:run.input;
+        rv=(typeof v==="string")?{type:"text",value:v}:{type:"json",value:v};
+        usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};log&&log("node",`◇ INPUT(${node.id})`);}
       else if(node.type==="join"){rv=runJoin(node,inputs);usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};log&&log("node",`⋈ JOIN(${node.id}) → ${JSON.stringify(rv.value)}`);}
       else{
         const res=await invokeNode(spec,run,node,inputs,ex,ctl,log);
@@ -1457,7 +1483,7 @@ const EX={
   nodes:[{id:"in",type:"input"},
    {id:"write",type:"llm",provider:"local",
     prompt:{system:"You are a helpful assistant. Answer briefly in Japanese.",
-      template:{syntax:"mustache",mode:"interpolation_only",value:"{{{run_input.question}}}"},
+      template:{syntax:"mustache",mode:"interpolation_only",value:"{{{in}}}"},
       suffix:"2文以内で答えて。"},
     generation:{maxTokens:120,temperature:0.7}},
    {id:"out",type:"output"}],
@@ -1467,15 +1493,15 @@ const EX={
   nodes:[{id:"in",type:"input"},
    {id:"write",type:"llm",provider:"local",
     prompt:{system:"あなたは簡潔な日本語で答えるアシスタントです。",
-      template:{syntax:"mustache",mode:"interpolation_only",value:"次の質問に3文で答えて。\n\n質問: {{{run_input.question}}}"},
+      template:{syntax:"mustache",mode:"interpolation_only",value:"次の質問に3文で答えて。\n\n質問: {{{in}}}"},
       prefix:"【必ず守る】箇条書きにしない。",suffix:"（専門用語は使わず、そのまま文章で）"},
     generation:{maxTokens:200,temperature:0.6}},
    {id:"out",type:"output"}],
   edges:[{from:{node:"in",port:"out"},to:{node:"write",port:"in"}},{from:{node:"write",port:"out"},to:{node:"out",port:"in"}}]},
  exL2:{metadata:{name:"ローカル並列+Join",version:"1"},providers:LOCAL_PROV,
   nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
-   {id:"A",type:"llm",provider:"local",prompt:{template:{syntax:"mustache",mode:"interpolation_only",value:"利点を1つだけ挙げて: {{{run_input.question}}}"}},generation:{maxTokens:120}},
-   {id:"B",type:"llm",provider:"local",prompt:{template:{syntax:"mustache",mode:"interpolation_only",value:"欠点を1つだけ挙げて: {{{run_input.question}}}"}},generation:{maxTokens:120}},
+   {id:"A",type:"llm",provider:"local",prompt:{template:{syntax:"mustache",mode:"interpolation_only",value:"利点を1つだけ挙げて: {{{in}}}"}},generation:{maxTokens:120}},
+   {id:"B",type:"llm",provider:"local",prompt:{template:{syntax:"mustache",mode:"interpolation_only",value:"欠点を1つだけ挙げて: {{{in}}}"}},generation:{maxTokens:120}},
    {id:"jn",type:"join",op:"template",template:{syntax:"mustache",mode:"interpolation_only",value:"利点: {{{items.0}}}\n欠点: {{{items.1}}}"},inputs:{items:{type:"text",cardinality:"many"}}},
    {id:"out",type:"output"}],
   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
@@ -1485,7 +1511,7 @@ const EX={
   nodes:[{id:"in",type:"input"},
    {id:"ans",type:"llm",provider:"local",
     prompt:{system:'JSONのみを返す。形式: {"text":"回答","score":0-10の整数}',
-      template:{syntax:"mustache",mode:"interpolation_only",value:"{{{run_input.question}}}"},
+      template:{syntax:"mustache",mode:"interpolation_only",value:"{{{in}}}"},
       suffix:"JSONだけを出力し、前後に説明を付けない。"},
     schema:{type:"object",required:["text","score"],properties:{text:{type:"string",maxLength:300},score:{type:"integer",minimum:0,maximum:10}}},
     generation:{maxTokens:200,temperature:0.2},
@@ -1573,9 +1599,9 @@ function ensureLayout(){const L=layout();const miss=(Ed.spec.nodes||[]).some(n=>
 function setSpecObj(spec,opt){
   Ed.spec=spec;ensureLayout();
   if(!(opt&&opt.keepText))$("#spec").value=JSON.stringify(spec,null,2);
-  edRender();showErrs();
+  edRender();showErrs();renderIO();if(typeof renderModels==="function")renderModels();
 }
-function syncFromCanvas(){$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();}
+function syncFromCanvas(){$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();}
 function showErrs(){
   let errs=[];try{errs=validate(Ed.spec);}catch(e){errs=["spec不正: "+(e.message||e)];}
   $("#vErr").textContent=errs.length?("⚠ "+errs.slice(0,4).join("\n⚠ ")+(errs.length>4?`\n…他${errs.length-4}件`:"")):"";
@@ -1993,21 +2019,37 @@ function openExportSheet(){
   const diff=hsl?hslRoundTripDiff(Ed.spec):null;
   if(diff)warn=`この構成はHSLだけでは完全に戻らない（${diff.length}箇所）。共有はJSONを使う:\n`+diff.slice(0,3).join("\n");
   let h=head("書き出す");
-  h+=`<div class="mini">HSL は人が読み書きできるハーネスの表記。JSON と同じ内容を持つ。</div>`;
+  h+=`<div class="mini">外部のLLM（ChatGPTなど）に渡すなら「AIに渡す1枚」。これだけ貼れば、説明なしでも構造と文法が伝わる。</div>`;
+  h+=`<div class="row"><div class="seg" id="exMode">
+    <button data-m="ai" class="on">AIに渡す1枚</button><button data-m="hsl">HSLだけ</button><button data-m="json">JSONだけ</button>
+  </div></div>`;
+  h+=`<div id="exInstWrap">${fld("AIにしてほしいこと（空でもよい）",txt("__inst","","例: 並列で2案作ってJoinでまとめ、点数が8未満なら書き直すループを足して"))}</div>`;
   if(warn)h+=`<div class="vErr" style="margin:8px 0">⚠ ${esc(warn)}</div>`;
-  h+=`<label class="fld"><span>HSL</span><textarea id="exText" style="min-height:190px" readonly>${esc(hsl)}</textarea></label>`;
-  h+=`<div class="row"><button id="exCopy">HSLをコピー</button><button id="exSaveH">.hsl で保存</button><button id="exSaveJ">.json で保存</button></div>`;
-  h+=`<div class="row"><button class="primary" id="exLink">共有リンクを作る</button><span class="mini" id="exLinkInfo"></span></div>`;
+  h+=`<label class="fld"><span id="exLabel">渡す文面</span><textarea id="exText" style="min-height:200px" readonly></textarea></label>`;
+  h+=`<div class="row"><button class="primary" id="exCopy">いま見えている文をコピー</button><button id="exSaveT">.txt で保存</button><button id="exSaveH">.hsl で保存</button><button id="exSaveJ">.json で保存</button></div>`;
+  h+=`<div class="row"><button id="exLink">共有リンクを作る</button><span class="mini" id="exLinkInfo"></span></div>`;
   h+=`<label class="fld" id="exLinkWrap" style="display:none"><span>リンク（別の端末でも開ける）</span><textarea id="exLinkText" style="min-height:76px" readonly></textarea></label>`;
   h+=`<div class="row" id="exShareRow" style="display:none"><button id="exLinkCopy">リンクをコピー</button><button id="exShare">共有…</button></div>`;
   openSheet(h);bindClose();
-  $("#exCopy").onclick=async()=>{$("#exCopy").textContent=(await copyText(hsl))?"コピーした":"コピーできない";};
+  let mode="ai";
+  const instEl=()=>$("#sheetBody").querySelector('[data-f="__inst"]');
+  const textNow=()=>mode==="ai"?buildEditPrompt(Ed.spec,instEl()?instEl().value:"")
+    :mode==="hsl"?hsl:JSON.stringify(Ed.spec,null,2);
+  const paint=()=>{$("#exText").value=textNow();
+    $("#exInstWrap").style.display=mode==="ai"?"":"none";
+    $("#exLabel").textContent=mode==="ai"?"渡す文面（文法＋いまの構造＋指摘＋依頼）":mode==="hsl"?"HSL":"JSON";};
+  paint();
+  $("#exMode").onclick=ev=>{const b=ev.target.closest("button");if(!b)return;mode=b.dataset.m;
+    document.querySelectorAll("#exMode button").forEach(x=>x.classList.toggle("on",x===b));paint();};
+  const inst=instEl();if(inst)inst.oninput=paint;
+  $("#exCopy").onclick=async()=>{$("#exCopy").textContent=(await copyText(textNow()))?"コピーした":"コピーできない（文を長押しして選ぶ）";};
+  $("#exSaveT").onclick=()=>download(specName()+"-AIに渡す.txt",buildEditPrompt(Ed.spec,instEl()?instEl().value:""));
   $("#exSaveH").onclick=()=>download(specName()+".hsl",hsl);
   $("#exSaveJ").onclick=()=>download(specName()+".json",JSON.stringify(Ed.spec,null,2),"application/json");
   $("#exLink").onclick=async()=>{
     try{
       const payload=await encodeShare(Ed.spec);
-      const url=location.href.split("#")[0]+"#s="+payload;   // file:// でも壊れないように
+      const url=location.href.split("#")[0]+"#s="+payload;
       $("#exLinkWrap").style.display="";$("#exShareRow").style.display="";
       $("#exLinkText").value=url;
       $("#exLinkInfo").textContent=`${url.length}文字${url.length>8000?"（長すぎて開けない端末がある。ファイルで渡す方が確実）":""}`;
@@ -2021,192 +2063,76 @@ function detectFormat(text){
   const t=String(text).replace(/^\s*(#[^\n]*\n)*/,"").trim();
   return t.startsWith("{")?"json":"hsl";
 }
-function importText(text,fromWhere){
-  const fmt=detectFormat(text);
-  let o;
-  try{o=fmt==="json"?JSON.parse(text):hslToSpec(text);}
+/* 取り込み口: 読み取る → 何が変わるかを見せる → 押されたら適用する（勝手に適用しない） */
+let imCandidate=null;
+function previewImport(raw,fromWhere){
+  const box=$("#imResult");imCandidate=null;
+  if(!box)return;
+  if(!String(raw||"").trim()){box.innerHTML='<div class="mini">まだ何も入っていない</div>';return;}
+  let got;
+  try{got=parseHarnessText(raw);}
   catch(e){
-    const at=e&&e.line?`（${e.line}行目）`:"";
-    return{ok:false,message:`${fmt.toUpperCase()}として読めない${at}: ${e.message||e}`};
-  }
-  if(!o||!Array.isArray(o.nodes))return{ok:false,message:"nodes が無い。ハーネスとして読めない"};
-  setSpecObj(o);fitView();
-  const errs=showErrs();
-  setHint(`${fromWhere}から${fmt.toUpperCase()}として取り込んだ（ノード${o.nodes.length}・線${(o.edges||[]).length}）`);
-  return{ok:true,fmt,errs:errs.length};
+    box.innerHTML=`<div class="vErr">⚠ 読み取れない${e.line?`（${e.line}行目）`:""}: ${esc(e.message||e)}</div>`
+      +`<div class="row"><button id="imErrCopy">このエラーをAIに返す文面をコピー</button></div>`;
+    $("#imErrCopy").onclick=async()=>{$("#imErrCopy").textContent=(await copyText(errorReplyText(e,raw)))?"コピーした":"コピーできない";};
+    return;}
+  const D=specDiff(Ed.spec,got.spec);
+  const errs=validate(got.spec);
+  const col={"+":"var(--ok)","-":"var(--err)","~":"var(--warn)"};
+  box.innerHTML=`<div class="mini">${fromWhere?esc(fromWhere)+"の":""}${got.kind.toUpperCase()} として読めた（ノード${got.spec.nodes.length}・線${(got.spec.edges||[]).length}）。適用すると次が変わる:</div>`
+    +(D.length?`<div class="diag">`+D.map(d=>`<div style="color:${col[d.k]}">${d.k} ${esc(d.what)} ${esc(d.text)}</div>`).join("")+`</div>`
+      :`<div class="diag">いまの構成と同じ（変わらない）</div>`)
+    +(errs.length?`<div class="vErr">⚠ このまま適用すると検証エラー: ${esc(errs.slice(0,3).join(" / "))}</div>`:"")
+    +`<div class="row"><button class="primary" id="imApply">適用する</button>${errs.length?`<button id="imErrCopy2">エラーをAIに返す文面をコピー</button>`:""}</div>`;
+  imCandidate=got.spec;
+  $("#imApply").onclick=()=>{
+    setSpecObj(imCandidate);fitView();closeSheet();
+    setHint(`取り込んだ（ノード${imCandidate.nodes.length}・線${(imCandidate.edges||[]).length}）`);
+  };
+  const c2=$("#imErrCopy2");
+  if(c2)c2.onclick=async()=>{c2.textContent=(await copyText(errorReplyText({message:errs.join(" / ")},raw)))?"コピーした":"コピーできない";};
 }
 function openImportSheet(){
   let h=head("取り込む");
-  h+=`<div class="mini">HSL でも JSON でも貼れる。共有リンクを貼っても読む。</div>`;
-  h+=`<label class="fld"><span>貼り付け</span><textarea id="imText" style="min-height:170px" placeholder="harness &quot;例&quot; v1 … / { &quot;nodes&quot;: … } / https://…#s=…"></textarea></label>`;
-  h+=`<div class="row"><button class="primary" id="imGo">読み込む</button><button id="imFile">ファイルから</button></div>`;
-  h+=`<div class="mini" id="imInfo"></div>`;
+  h+=`<div class="mini">外部のLLMが返してきた文をそのまま貼る。HSLでもJSONでも、\`\`\` で囲まれていても、前後に説明が付いていても読み取る。共有リンクも貼れる。</div>`;
+  h+=`<label class="fld"><span>貼り付け</span><textarea id="imText" style="min-height:160px" placeholder="harness &quot;例&quot; v1 … / { &quot;nodes&quot;: … } / https://…#s=…"></textarea></label>`;
+  h+=`<div class="row"><button class="primary" id="imGo">読み取る</button><button id="imFile">ファイルから</button><button id="imClear">消す</button></div>`;
+  h+=`<div id="imResult"></div>`;
   openSheet(h);bindClose();
+  $("#imClear").onclick=()=>{$("#imText").value="";$("#imResult").innerHTML="";imCandidate=null;};
   $("#imGo").onclick=async()=>{
     const t=$("#imText").value.trim();
-    if(!t)return $("#imInfo").textContent="何も貼られていない";
+    if(!t)return $("#imResult").innerHTML='<div class="mini">何も貼られていない</div>';
     const m=/#s=([A-Za-z0-9\-_]+)/.exec(t);
     if(m){try{const sp=await decodeShare(m[1]);setSpecObj(sp);fitView();closeSheet();
-        setHint("共有リンクから取り込んだ");return;}catch(e){return $("#imInfo").textContent="リンクを復元できない: "+(e.message||e);}}
-    const r=importText(t,"貼り付け");
-    if(!r.ok)return $("#imInfo").textContent=r.message;
-    closeSheet();
+        setHint("共有リンクから取り込んだ");return;}
+      catch(e){return $("#imResult").innerHTML=`<div class="vErr">⚠ リンクを復元できない: ${esc(e.message||e)}</div>`;}}
+    previewImport(t,"貼り付け");
   };
   $("#imFile").onclick=()=>$("#fileIn").click();
 }
 $("#fileIn").onchange=async ev=>{
   const f=ev.target.files&&ev.target.files[0];if(!f)return;
-  const text=await f.text();const r=importText(text,f.name);
-  const info=$("#imInfo");if(info)info.textContent=r.ok?`${f.name} を読み込んだ`:r.message;
-  if(r.ok)closeSheet();
+  const text=await f.text();
+  if(!$("#imResult"))openImportSheet();
+  $("#imText").value=text;previewImport(text,f.name);
   ev.target.value="";
 };
 /* --- 診断（機械チェック → 必要ならAIにも見せる） --- */
-let reviewCtl=null;
 function openReviewSheet(){
   const F=reviewSpec(Ed.spec);
   const n={error:F.filter(x=>x.level==="error").length,warn:F.filter(x=>x.level==="warn").length,info:F.filter(x=>x.level==="info").length};
   const mark={error:"✗",warn:"⚠",info:"·"};
   const col={error:"var(--err)",warn:"var(--warn)",info:"var(--sub)"};
   let h=head("診断");
-  h+=`<div class="mini">まず機械で確実に分かることを出す。そのうえでAIに構造を見てもらえる。</div>`;
+  h+=`<div class="mini">機械で確実に分かることだけを出す（LLMの意見ではない）。</div>`;
   h+=`<div class="tot" style="margin:8px 0"><span>問題 <b>${n.error}</b></span><span>注意 <b>${n.warn}</b></span><span>参考 <b>${n.info}</b></span></div>`;
   h+=F.length?`<div class="diag">`+F.map(f=>`<div style="color:${col[f.level]}">${mark[f.level]} ${f.node?esc(f.node)+": ":""}${esc(f.message)}</div>`).join("")+`</div>`
     :`<div class="diag">機械チェックでは問題なし</div>`;
-  const provs=Object.keys(Ed.spec.providers||{});
-  h+=`<h3 style="margin-top:14px">AIに構造を見てもらう</h3>`;
-  if(!provs.length)h+=`<div class="mini">providers がまだ無い。Providerを決めて「Specのproviders.localに書き込む」を押すと使える。</div>`;
-  else{
-    h+=fld("どのモデルに見せるか",sel("__revProv",provs[0],provs.map(pv=>({v:pv,t:pv+"（"+((Ed.spec.providers[pv]||{}).adapter||"?")+"）"}))));
-    h+=`<div class="row"><button class="primary" id="revGo">見てもらう</button><button id="revStop" class="danger" disabled>中止</button></div>`;
-    h+=`<pre class="diag" id="revOut" style="display:none"></pre>`;
-  }
+  h+=`<div class="mini" style="margin-top:10px">直すときは「書き出す」で外部のLLMに渡す1枚を作り、返ってきた文を「取り込む」に入れる。</div>`;
   openSheet(h);bindClose();
-  const go=$("#revGo");if(!go)return;
-  go.onclick=async()=>{
-    const pid=$("#sheetBody").querySelector('[data-f="__revProv"]').value;
-    const def=Object.assign({},(Ed.spec.providers||{})[pid]);
-    const ad=PROVIDERS[def.adapter];
-    if(!ad)return;
-    const outEl=$("#revOut");outEl.style.display="";outEl.textContent="";
-    go.disabled=true;$("#revStop").disabled=false;
-    reviewCtl=makeController({});
-    const hsl=(()=>{try{return specToHSL(Ed.spec);}catch(e){return JSON.stringify(Ed.spec,null,1);}})();
-    const findings=F.length?F.map(f=>`- [${f.level}] ${f.node?f.node+": ":""}${f.message}`).join("\n"):"（なし）";
-    const messages=[
-      {role:"system",content:"あなたはAIワークフローの設計レビュアー。日本語で簡潔に答える。断定できないことは書かない。"},
-      {role:"user",content:
-        `次はノードを繋いで作ったAIの処理手順（HSL表記）です。構造の良し悪しを見て、直す価値のある点を5つ以内の箇条書きで挙げてください。\n`+
-        `各項目は「どこが / なぜ困るか / どう直すか」を1行ずつ。\n\n`+
-        `=== ハーネス ===\n${hsl}\n=== 機械チェックの結果 ===\n${findings}\n`}];
-    try{
-      let handle=null;
-      if(ad.ensureLoaded){outEl.textContent="モデルを用意中…\n";
-        handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:ad.id,model:def.model}),ad,reviewCtl.signal,
-          st=>{outEl.textContent=`モデルを用意中… ${Math.round((st.progress||0)*100)}% ${st.text||""}\n`;});
-        outEl.textContent="";}
-      const res=await ad.invoke({input:{messages},model:def.model,generation:Object.assign({maxTokens:400,temperature:0.3},def.generation||{}),
-        schema:null,signal:reviewCtl.signal,handle,providerDef:def,node:{id:"__review"},inputs:{},ex:{iteration:1},
-        onToken:t=>{outEl.textContent+=t;outEl.scrollTop=outEl.scrollHeight;}});
-      if(res&&res.cancelled)outEl.textContent+="\n（中止した）";
-      else if(res&&res.output){
-        if(!outEl.textContent)outEl.textContent=rvToText(res.output);
-        const u=res.usage||{};
-        outEl.textContent+=`\n\n— ${pid} / in ${u.inputTokens==null?"?":u.inputTokens} out ${u.outputTokens==null?"?":u.outputTokens} tokens`;
-      }
-    }catch(e){outEl.textContent+=`\n✗ ${e.code||"ERROR"}: ${e.message||e}`;}
-    finally{go.disabled=false;$("#revStop").disabled=true;reviewCtl=null;}
-  };
-  $("#revStop").onclick=()=>{if(reviewCtl)reviewCtl.abort();};
 }
-/* --- AIで編集: 文面を渡す → 返ってきた文を口に入れる → 差分を見て適用 --- */
-let aiCtl=null,aiCandidate=null;
-async function callProvider(pid,messages,gen,onToken,ctl,onLoad){
-  const def=Object.assign({},(Ed.spec.providers||{})[pid]||{});
-  const ad=PROVIDERS[def.adapter];
-  if(!ad)throw{code:"PROVIDER_ERROR",message:"provider が無い: "+pid};
-  let handle=null;
-  if(ad.ensureLoaded)handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:ad.id,model:def.model}),ad,ctl&&ctl.signal,onLoad);
-  return ad.invoke({input:{messages},model:def.model,
-    generation:Object.assign({maxTokens:900,temperature:0.2},def.generation||{},gen||{}),
-    schema:null,signal:ctl&&ctl.signal,handle,providerDef:def,node:{id:"__ai"},inputs:{},ex:{iteration:1},onToken});
-}
-function openAISheet(){
-  const provs=Object.keys(Ed.spec.providers||{});
-  let h=head("AIで編集");
-  h+=`<div class="mini">いまの構造を文にして渡し、直してもらった文をここに入れると、ノードと線になる。</div>`;
-  h+=`<h3 style="margin-top:12px">① 渡す文面をつくる</h3>`;
-  h+=fld("してほしいこと",txt("__inst","","例: 並列で2案作ってJoinでまとめ、点数が8未満なら書き直すループを足して"));
-  h+=`<div class="row"><button class="primary" id="aiMake">文面を作ってコピー</button><button id="aiSave">.txt で保存</button><button id="aiShow">中身を見る</button></div>`;
-  h+=`<textarea id="aiPrompt" class="diag" style="display:none;min-height:150px;width:100%" readonly></textarea>`;
-  h+=`<h3 style="margin-top:14px">② 返ってきた文を入れる</h3>`;
-  h+=`<div class="mini">HSLでもJSONでもよい。\`\`\` で囲まれていても、前後に説明が付いていても読み取る。</div>`;
-  h+=`<label class="fld"><span>AIの返答</span><textarea id="aiIn" style="min-height:130px" placeholder="ここに貼る"></textarea></label>`;
-  h+=`<div class="row"><button class="primary" id="aiRead">読み取る</button><button id="aiClear">消す</button></div>`;
-  h+=`<div id="aiResult"></div>`;
-  if(provs.length){
-    h+=`<h3 style="margin-top:14px">③ この端末のLLMにやらせる</h3>`;
-    h+=fld("どのモデルに書かせるか",sel("__aiProv",provs[0],provs.map(pv=>({v:pv,t:pv+"（"+((Ed.spec.providers[pv]||{}).adapter||"?")+"）"}))));
-    h+=`<div class="row"><button id="aiRun">やらせる</button><button id="aiStop" class="danger" disabled>中止</button><span class="mini" id="aiRunInfo"></span></div>`;
-  }else h+=`<div class="mini" style="margin-top:12px">③ この端末のLLMに直接やらせるには、Providerを決めて「Specのproviders.localに書き込む」を押す。</div>`;
-  openSheet(h);bindClose();
-  const instEl=$("#sheetBody").querySelector('[data-f="__inst"]');
-  const promptNow=()=>buildEditPrompt(Ed.spec,instEl?instEl.value:"");
-  $("#aiMake").onclick=async()=>{const t=promptNow();$("#aiPrompt").value=t;
-    $("#aiMake").textContent=(await copyText(t))?"コピーした（AIに貼る）":"コピーできない（下の中身を選んでコピー）";
-    $("#aiPrompt").style.display="";};
-  $("#aiSave").onclick=()=>download(specName()+"-依頼.txt",promptNow());
-  $("#aiShow").onclick=()=>{const e=$("#aiPrompt");if(!e.value)e.value=promptNow();
-    e.style.display=e.style.display==="none"?"":"none";};
-  $("#aiClear").onclick=()=>{$("#aiIn").value="";$("#aiResult").innerHTML="";aiCandidate=null;};
-  $("#aiRead").onclick=()=>{
-    const raw=$("#aiIn").value;const box=$("#aiResult");aiCandidate=null;
-    if(!raw.trim())return box.innerHTML=`<div class="mini">まだ何も入っていない</div>`;
-    let got;
-    try{got=parseHarnessText(raw);}
-    catch(e){
-      box.innerHTML=`<div class="vErr">⚠ 読み取れない${e.line?`（${e.line}行目）`:""}: ${esc(e.message||e)}</div>`
-        +`<div class="row"><button id="aiErrCopy">このエラーをAIに返す文面をコピー</button></div>`;
-      $("#aiErrCopy").onclick=async()=>{$("#aiErrCopy").textContent=(await copyText(errorReplyText(e,raw)))?"コピーした":"コピーできない";};
-      return;}
-    const D=specDiff(Ed.spec,got.spec);
-    const errs=validate(got.spec);
-    const col={"+":"var(--ok)","-":"var(--err)","~":"var(--warn)"};
-    box.innerHTML=`<div class="mini">${got.kind.toUpperCase()} として読めた（ノード${got.spec.nodes.length}・線${(got.spec.edges||[]).length}）。適用すると次が変わる:</div>`
-      +(D.length?`<div class="diag">`+D.map(d=>`<div style="color:${col[d.k]}">${d.k} ${esc(d.what)} ${esc(d.text)}</div>`).join("")+`</div>`
-        :`<div class="diag">いまの構成と同じ（変わらない）</div>`)
-      +(errs.length?`<div class="vErr">⚠ このまま適用すると検証エラー: ${esc(errs.slice(0,3).join(" / "))}</div>`:"")
-      +`<div class="row"><button class="primary" id="aiApply">適用する</button>${errs.length?`<button id="aiErrCopy2">エラーをAIに返す文面をコピー</button>`:""}</div>`;
-    aiCandidate=got.spec;
-    $("#aiApply").onclick=()=>{
-      setSpecObj(aiCandidate);fitView();closeSheet();
-      setHint(`AIの出力を取り込んだ（ノード${aiCandidate.nodes.length}・線${(aiCandidate.edges||[]).length}）`);
-    };
-    const c2=$("#aiErrCopy2");
-    if(c2)c2.onclick=async()=>{c2.textContent=(await copyText(errorReplyText({message:errs.join(" / ")},raw)))?"コピーした":"コピーできない";};
-  };
-  const run=$("#aiRun");
-  if(run)run.onclick=async()=>{
-    const pid=$("#sheetBody").querySelector('[data-f="__aiProv"]').value;
-    run.disabled=true;$("#aiStop").disabled=false;$("#aiIn").value="";$("#aiResult").innerHTML="";
-    aiCtl=makeController({});
-    const info=$("#aiRunInfo");info.textContent="準備中…";
-    try{
-      const res=await callProvider(pid,[
-        {role:"system",content:"あなたはHSLというワークフロー記述を書くアシスタント。指示された変更を加えて、HSLの全文だけを返す。説明や```は付けない。"},
-        {role:"user",content:promptNow()}],{maxTokens:900},
-        t=>{$("#aiIn").value+=t;$("#aiIn").scrollTop=$("#aiIn").scrollHeight;},aiCtl,
-        st=>{info.textContent=`モデル準備 ${Math.round((st.progress||0)*100)}% ${st.text||""}`;});
-      if(res&&res.cancelled)info.textContent="中止した";
-      else{if(!$("#aiIn").value&&res&&res.output)$("#aiIn").value=rvToText(res.output);
-        const u=(res&&res.usage)||{};info.textContent=`書き終えた（out ${u.outputTokens==null?"?":u.outputTokens} tokens）。② の「読み取る」を押す`;
-        $("#aiRead").click();}
-    }catch(e){info.textContent=`✗ ${e.code||"ERROR"}: ${(e.message||e)}`;}
-    finally{run.disabled=false;$("#aiStop").disabled=true;aiCtl=null;}
-  };
-  const stop=$("#aiStop");if(stop)stop.onclick=()=>{if(aiCtl)aiCtl.abort();};
-}
-$("#btnAI").onclick=openAISheet;
+let reviewCtl=null;
 $("#btnExport").onclick=openExportSheet;
 $("#btnImport").onclick=openImportSheet;
 $("#btnReview").onclick=openReviewSheet;
@@ -2255,12 +2181,158 @@ function report(){setState(`${cur.status} | calls=${cur.totals.apiCalls} iterTot
   if(cur.status==="failed")log("err","── failed ── "+JSON.stringify(cur.errors));
   if(cur.status==="cancelled")log("cp","── cancelled（部分出力は破棄）──");
   if(cur.status==="paused")log("cp","── paused（Resume可）──");
-  renderTotals();updateResume();$("#cancel").disabled=true;$("#run").disabled=false;}
+  renderTotals();renderIO();updateResume();$("#cancel").disabled=true;$("#run").disabled=false;}
 function newCtl(){return makeController({
   onToken:(nodeId,t)=>{onToken(nodeId,t);edToken(nodeId,t);},
   onProgress:()=>renderProvState(),
-  onStep:run=>{edStatus(run);renderTotals();}});}
-function inputForRun(){return{question:"ローカルLLMで動くか、1つだけ確かめたい。"};}
+  onStep:run=>{edStatus(run);renderTotals();renderIO();}});}
+/* ---- 入出力パネル（入力ノード・出力ノードに連動する） ---- */
+const DEFAULT_INPUT="ローカルLLMで動くか、1つだけ確かめたい。";
+const runInput={};
+let ioSig="";
+function ioNodes(){const ns=(Ed.spec&&Ed.spec.nodes)||[];
+  return{ins:ns.filter(n=>n.type==="input"),outs:ns.filter(n=>n.type==="output")};}
+function renderIO(){
+  if(!Ed.spec)return;
+  const{ins,outs}=ioNodes();
+  const sig=ins.map(n=>n.id).join(",")+"|"+outs.map(n=>n.id).join(",");
+  if(sig!==ioSig){
+    ioSig=sig;
+    const wi=$("#ioIn");wi.innerHTML="";
+    if(!ins.length)wi.innerHTML='<div class="mini">入力ノードがまだ無い</div>';
+    for(const n of ins){
+      if(runInput[n.id]===undefined)runInput[n.id]=DEFAULT_INPUT;
+      const l=document.createElement("label");l.className="fld";
+      l.innerHTML=`<span>入力 · ${esc(n.id)}</span><textarea data-in="${esc(n.id)}" style="min-height:54px"></textarea>`;
+      wi.appendChild(l);l.querySelector("textarea").value=runInput[n.id];
+    }
+    wi.querySelectorAll("[data-in]").forEach(t=>{t.oninput=()=>{runInput[t.dataset.in]=t.value;};});
+    if(ins.length>1){const d=document.createElement("div");d.className="mini";d.id="ioMulti";
+      d.textContent="起点になるのは最初の入力ノード（"+ins[0].id+"）だけ。他の入力は prompt の {{{run_input."+ins[1].id+"}}} で読める。";
+      wi.appendChild(d);}
+    const wo=$("#ioOut");wo.innerHTML="";
+    if(!outs.length)wo.innerHTML='<div class="mini">出力ノードがまだ無い</div>';
+    for(const n of outs){
+      const l=document.createElement("label");l.className="fld";
+      l.innerHTML=`<span>出力 · ${esc(n.id)}</span><div class="ioOut" data-out="${esc(n.id)}"></div>`;
+      wo.appendChild(l);
+    }
+  }
+  for(const n of outs){
+    const el=$("#ioOut").querySelector(`[data-out="${CSS.escape(n.id)}"]`);if(!el)continue;
+    const hist=(cur&&cur.nodeRuns&&cur.nodeRuns[n.id])||[];
+    const last=hist.filter(h=>h.status==="success").slice(-1)[0];
+    const lastAny=hist[hist.length-1];
+    if(last){el.textContent=rvToText(last.out);el.style.color="";}
+    else if(lastAny){el.textContent=lastAny.status==="error"?`✗ ${lastAny.errorKind||"失敗"}`:`■ ${lastAny.status}`;el.style.color="var(--sub)";}
+    else{el.textContent="（まだ実行していない）";el.style.color="var(--sub)";}
+  }
+}
+function inputForRun(){
+  const{ins}=ioNodes();const o={};
+  for(const n of ins)o[n.id]=runInput[n.id]!==undefined?runInput[n.id]:DEFAULT_INPUT;
+  return o;
+}
+
+/* ---- モデル（この端末で動かすLLM） ---- */
+const MODEL_CATALOG=[
+ {id:"SmolLM2-360M-Instruct-q4f16_1-MLC",f32:"SmolLM2-360M-Instruct-q4f32_1-MLC",family:"SmolLM2",vram:376,note:"いちばん小さい。まず動くか確かめる用"},
+ {id:"gemma3-1b-it-q4f16_1-MLC",f32:null,family:"Gemma",vram:711,note:"Google Gemma 3 · 1B"},
+ {id:"Llama-3.2-1B-Instruct-q4f16_1-MLC",f32:"Llama-3.2-1B-Instruct-q4f32_1-MLC",family:"Llama",vram:879,note:"Meta Llama 3.2 · 1B"},
+ {id:"Qwen2.5-0.5B-Instruct-q4f16_1-MLC",f32:"Qwen2.5-0.5B-Instruct-q4f32_1-MLC",family:"Qwen",vram:945,note:"Alibaba Qwen2.5 · 0.5B"},
+ {id:"Qwen2.5-1.5B-Instruct-q4f16_1-MLC",f32:"Qwen2.5-1.5B-Instruct-q4f32_1-MLC",family:"Qwen",vram:1630,note:"賢いがメモリを食う"},
+ {id:"gemma-2-2b-jpn-it-q4f16_1-MLC",f32:"gemma-2-2b-jpn-it-q4f32_1-MLC",family:"Gemma",vram:1895,note:"日本語向け Gemma 2 · 2B。2GB近く要る"}
+];
+const mdlCache={};       // id -> 端末にあるか（調べたものだけ）
+function webllmDef(id){return{adapter:"webllm",model:id,useWorker:true,indexedDB:true,moduleSource:wlSrc};}
+function setMdlMsg(t){$("#mdlMsg").textContent=t;}
+function setMdlBar(p){$("#mdlBar").style.width=Math.round((p||0)*100)+"%";}
+function currentModelId(){const d=(Ed.spec&&Ed.spec.providers&&Ed.spec.providers.local)||{};
+  return d.adapter==="webllm"?d.model:null;}
+function renderModels(){
+  const showF32=$("#mdlF32").checked;
+  const rows=[];
+  for(const m of MODEL_CATALOG){
+    rows.push({...m,quant:"q4f16"});
+    if(showF32&&m.f32)rows.push({...m,id:m.f32,quant:"q4f32",vram:Math.round(m.vram*1.35)});
+  }
+  const using=currentModelId();
+  const box=$("#mdlList");box.innerHTML="";
+  for(const m of rows){
+    const st=ModelManager.get(webllmDef(m.id));
+    const cached=mdlCache[m.id];
+    const tags=[`<span class="mtag">${esc(m.family)}</span>`,`<span class="mtag">必要メモリ 約${m.vram}MB</span>`];
+    if(m.quant==="q4f32")tags.push('<span class="mtag">f16不要</span>');
+    if(cached===true)tags.push('<span class="mtag on">端末にある</span>');
+    if(cached===false)tags.push('<span class="mtag">未取得</span>');
+    if(st.status==="ready")tags.push('<span class="mtag on">起動済み</span>');
+    if(using===m.id)tags.push('<span class="mtag use">これを使う設定</span>');
+    const d=document.createElement("div");d.className="mrow";
+    d.innerHTML=`<div class="mname"><b>${esc(m.id)}</b><small>${esc(m.note)}</small><div style="margin-top:3px">${tags.join(" ")}</div></div>`
+      +`<div class="mbtns">`
+      +`<button data-act="get" data-id="${esc(m.id)}">${cached===true?"起動する":"ダウンロード"}</button>`
+      +`<button data-act="use" data-id="${esc(m.id)}">これを使う</button>`
+      +`<button data-act="test" data-id="${esc(m.id)}">動作確認</button>`
+      +`<button data-act="del" data-id="${esc(m.id)}" class="danger">削除</button>`
+      +`</div>`;
+    box.appendChild(d);
+  }
+  box.querySelectorAll("button[data-act]").forEach(b=>b.onclick=()=>modelAction(b.dataset.act,b.dataset.id,b));
+}
+let mdlBusy=false;
+async function modelAction(act,id,btn){
+  if(mdlBusy&&act!=="use")return setMdlMsg("いま別の作業中。終わるまで待つ");
+  const def=webllmDef(id);
+  try{
+    if(act==="use"){
+      const spec=Ed.spec;spec.providers=spec.providers||{};
+      spec.providers.local=Object.assign({},spec.providers.local||{},def,{generation:{maxTokens:160,temperature:0.7}});
+      setSpecObj(spec);setAdapter("webllm");$("#model").value=id;renderModels();
+      setMdlMsg(`providers.local = ${id}。ハーネスの llm ノードで provider に local を選べば、この端末のモデルで動く`);
+      return;
+    }
+    if(act==="del"){
+      if(!confirm(`${id} の保存データを端末から消す。次に使うときは再ダウンロードになる。`))return;
+      mdlBusy=true;setMdlMsg("削除中…");
+      await WebLLMProvider.deleteCache(def);
+      mdlCache[id]=false;setMdlMsg(`${id} を削除した`);renderModels();return;
+    }
+    mdlBusy=true;btn.disabled=true;
+    const t0=performance.now();
+    setMdlMsg(`${id} を用意中…（初回はダウンロードが走る。Wi-Fi推奨）`);
+    await ModelManager.ensureLoaded(Object.assign({},def,{adapter:"webllm"}),WebLLMProvider,undefined,
+      st=>{setMdlBar(st.progress);setMdlMsg(`${id}: ${st.text||""} ${Math.round((st.progress||0)*100)}%`);});
+    const loadMs=Math.round(performance.now()-t0);
+    mdlCache[id]=true;setMdlBar(1);renderModels();
+    if(act==="get"){setMdlMsg(`${id} を起動した（${(loadMs/1000).toFixed(1)}秒）。「動作確認」で実際に1文生成できる`);return;}
+    // 動作確認: 実際に1回推論して速さを測る
+    setMdlMsg(`${id} で生成中…`);
+    const handle=ModelManager.get(Object.assign({},def,{adapter:"webllm"})).handle;
+    let n=0;const t1=performance.now();
+    const res=await WebLLMProvider.invoke({input:{messages:[{role:"user",content:"日本語で1文だけ自己紹介してください。"}]},
+      model:id,generation:{maxTokens:48,temperature:0.7},schema:null,handle,providerDef:def,
+      node:{id:"__test"},inputs:{},ex:{iteration:1},onToken:()=>{n++;}});
+    const genMs=Math.round(performance.now()-t1);
+    const text=res&&res.output?rvToText(res.output):"(出力なし)";
+    setMdlMsg(`✔ ${id} / 起動 ${(loadMs/1000).toFixed(1)}秒 / 生成 ${(genMs/1000).toFixed(1)}秒 ${n}トークン（${(n/(genMs/1000)).toFixed(1)} tok/s）\n応答: ${text.slice(0,160)}`);
+  }catch(e){
+    setMdlBar(0);
+    setMdlMsg(`✗ ${id}: ${(e&&(e.code||""))} ${(e&&e.message)||e}`);
+  }finally{mdlBusy=false;if(btn)btn.disabled=false;renderModels();}
+}
+$("#mdlF32").onchange=renderModels;
+$("#mdlScan").onclick=async()=>{
+  const b=$("#mdlScan");b.disabled=true;setMdlMsg("端末の中を調べている…（初回は本体の読み込みで少し待つ）");
+  try{
+    for(const m of MODEL_CATALOG){
+      mdlCache[m.id]=(await WebLLMProvider.cacheStatus(webllmDef(m.id))).cached;
+      if(m.f32)mdlCache[m.f32]=(await WebLLMProvider.cacheStatus(webllmDef(m.f32))).cached;
+    }
+    const n=Object.values(mdlCache).filter(Boolean).length;
+    setMdlMsg(n?`端末に ${n} 個ある`:"端末にはまだ1つも入っていない");
+  }catch(e){setMdlMsg("調べられない: "+((e&&e.message)||e));}
+  finally{b.disabled=false;renderModels();}
+};
 async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec)return;
   store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
   $("#cancel").disabled=false;$("#run").disabled=true;setState("running");
@@ -2281,7 +2353,7 @@ $("#run").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResum
 $("#cancel").onclick=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
 $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
-setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");loadFromHash();fitView();renderTotals();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
+setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");loadFromHash();fitView();renderTotals();renderIO();renderModels();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 
 /* ---- 自己テスト ---- */
 const enc=s=>new TextEncoder().encode(s);
