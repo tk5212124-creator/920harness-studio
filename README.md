@@ -1,7 +1,10 @@
 # Harness Studio
 
-LLMオーケストレーター。**ハーネス（AIの処理手順）** をユーザーが組み、複数のLLM/VLMを連携させて動かす。
-ローカルLLMとクラウドLLMを同じインターフェースで混在でき、使用量も管理する。
+LLMオーケストレーター。**ハーネス（AIの処理手順）** を画面上でノードとして組み、
+複数のLLM/VLMを連携させて動かす。ローカルLLMとクラウドLLMを同じインターフェースで混在できる。
+
+**タップとドラッグで組める。** ノードを置き、ポートをタップしてつなぎ、ノードをタップして中身を決める。
+iPhone でもPCでも同じ操作。組んだものは HarnessSpec（JSON）としていつでも見られる。
 
 **LLMをアプリに内蔵している。** サーバもAPIキーも要らず、ブラウザの中だけで推論する
 （WebLLM/WebGPU。本体はこのリポジトリに同梱、モデルは初回だけ端末にDLして保存）。
@@ -13,7 +16,7 @@ LLMオーケストレーター。**ハーネス（AIの処理手順）** をユ�
 
 ---
 
-## 1. 現状 — v0.5.0 内蔵ローカルLLM
+## 1. 現状 — v0.6.0 ノードエディタ
 
 | 段階 | 状態 |
 |---|---|
@@ -21,14 +24,39 @@ LLMオーケストレーター。**ハーネス（AIの処理手順）** をユ�
 | Branch Failure Policy v0.3（失敗種別と波及の分離・fail_fast・cancel≠failed・Retry） | 凍結済み |
 | Runtime v0.3.1（直列・並列・Loop×並列・Join・型契約・Checkpoint/Resume） | 実装済み |
 | Provider層 v0.4.0（mock / OpenAI互換ローカル / WebLLM） | 実装済み |
-| **内蔵LLM v0.5.0（本体同梱・Worker実行・端末チェック・モデル常駐）** | **いまここ** |
+| 内蔵LLM v0.5.0（本体同梱・Worker実行・端末チェック・モデル常駐） | 実装済み |
+| **ノードエディタ v0.6.0（タップとドラッグで組む・実行状態を図に出す）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
-| ノードエディタGUI・ハーネスの書き出しと共有 | これから |
+| ハーネスの書き出しと共有・AIによるハーネス自体の診断 | これから |
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
 
 ---
 
-## 2. 3つの adapter
+## 2. ハーネスを組む（ノードエディタ）
+
+![エディタ](docs/editor-mobile.png)
+
+| やりたいこと | 操作 |
+|---|---|
+| ノードを足す | **＋ノード** → 入力 / LLM / Join / 出力 を選ぶ。置いた直後に中身の編集が開く |
+| ノードを動かす | ノードをドラッグ。座標は `metadata.layout` に入る（Runtimeは見ない） |
+| **つなぐ** | つなぎ元の **○** をタップ → つなぎ先の **●** をタップ |
+| ノードの中身を変える | ノードをタップ → provider・prompt・schema・generation を編集 |
+| つながりを変える | 線の途中の **丸** をタップ → if / else / loop / position / transform / 削除 |
+| 画面を動かす | 何もない所をドラッグで移動、ピンチで拡大縮小、**⤢** で全体表示 |
+| 並べ直す | **整列**（依存の深さで自動配置）、**縦に流す / 横に流す** で向きを変える |
+
+- **出口が2本以上になった瞬間に、どうするかを聞く。** 並列（fail_fast）か条件分岐（first_match）かを
+  ユーザーが選び、その選択が Spec に書き込まれる。**勝手に決めない**（隠れた既定値を作らない）。
+- 画面の操作は全部 **HarnessSpec を書き換えているだけ**。JSONタブでいつでも中身が見られるし、
+  JSONを直接直せば図に反映される。正本はあくまで Spec。
+- 実行すると図のノードが色で動く（実行中＝青く脈打つ / 成功＝緑 / 失敗＝赤 / cancelled＝黄）。
+  生成中のトークンはノードの中に流れる。
+- Spec の検証エラーは画面下に出る（`⚠ parallelではfailurePolicy明示必須` など）。
+
+---
+
+## 3. 3つの adapter
 
 | adapter | 中身 | 料金 | 必要なもの |
 |---|---|---|---|
@@ -70,7 +98,7 @@ OOM後はユーザーが明示 Retry（`iteration` / `loopInstanceId` は増え�
 
 ---
 
-## 3. ローカルLLMの繋ぎ方
+## 4. ローカルLLMの繋ぎ方
 
 ### Ollama
 
@@ -117,7 +145,7 @@ Workerが作れない・本体が読めない場合、**勝手に別経路へ落
 
 ---
 
-## 4. Spec の書き方
+## 5. Spec の書き方
 
 ```jsonc
 {
@@ -159,7 +187,7 @@ Workerが作れない・本体が読めない場合、**勝手に別経路へ落
 
 ---
 
-## 5. Runtime の3責務分離
+## 6. Runtime の3責務分離
 
 ```
 ExecutionInstance = 個々の実行（control-flow）  pending|ready|running|completed|failed|cancelling|cancelled
@@ -176,27 +204,45 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 
 ---
 
-## 6. 画面
+## 7. 画面
 
 | パネル | 何が見えるか |
 |---|---|
+| ハーネス編集 | ノードの図（タップ・ドラッグで編集）／ JSONタブ ／ 検証エラー |
 | Provider | adapter切替・endpoint・model・ロード状態（`unloaded/loading/ready/error`）とDL進捗 |
-| HarnessSpec | 例（ローカル4種・mock6種）・JSON編集・実行 / 1 Work Item / Cancel / Resume / Retry |
+| 例と実行 | 例（内蔵LLM・ローカル4種・mock6種）・実行 / 1 Work Item / Cancel / Resume / Retry |
 | 実行ログ | Node実行・fan-out・loop・失敗種別・cancel理由 |
 | ストリーミング | `onToken` の途中出力（**data-flowには載らない**） |
 | 使用量 | apiCalls / in・outトークン / usage未報告数 / cost（ローカルは0・`costSource=unavailable`）/ ノード別の状態と文字数 |
 
-![画面](docs/harness-desktop.png)
+![ノードの編集](docs/editor-sheet.png)
 
 ---
 
-## 7. テスト
+## 8. テスト
 
 ```
 node tests/harness-runtime.mjs      # 自己テスト28件（Runtime回帰15 + Provider契約13）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
+node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
 ```
+
+### harness-editor.mjs が見るもの
+
+390×844・`hasTouch` の端末として、実際のタップとドラッグで操作する。
+
+| 見るもの | 期待 |
+|---|---|
+| 初期描画 | 例のノード4つと辺4本が図になる |
+| ノード追加 | ＋ノード → LLM で1つ増え、中身の編集が開く（既存ノードと重ならない位置に置く） |
+| ドラッグ | 座標が `metadata.layout` に入る |
+| **タップでつなぐ** | ○ → ● の2タップで辺が1本増える |
+| 2本目の出口 | **勝手に決めず**分岐のしかたを聞く。選ぶと `routing` が Spec に書かれる |
+| 辺の編集 | loop に変えると `loop:{id,max}` が入る・削除で消える |
+| ノード改名 | 辺の参照と layout のキーも追従し、古い名前は残らない |
+| 実行 | 図のノードに成功の色が付き、出力がノードに出る |
+| JSONタブ | 図とJSONが同じものを指している |
 
 ### harness-webllm.mjs が見るもの
 

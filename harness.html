@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 内蔵ローカルLLM v0.5.0</title>
+<title>Harness Studio — ノードエディタ v0.6.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -30,12 +30,62 @@ code{background:var(--code-bg);padding:1px 4px;border-radius:4px;font-size:12px}
 table{width:100%;border-collapse:collapse;font-size:12px;font-family:ui-monospace,monospace}
 th,td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}th{color:var(--sub);font-weight:600}
 td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-cancelled{color:var(--warn)}
+.canvas{position:relative;overflow:hidden;background:var(--code-bg);border:1px solid var(--line);border-radius:10px;height:56vh;min-height:320px;touch-action:none;user-select:none;-webkit-user-select:none}
+#world{position:absolute;left:0;top:0;transform-origin:0 0}
+#edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+#edges path{fill:none;stroke:#9aa4ae;stroke-width:2}
+#edges path.cond{stroke:#c9a227;stroke-dasharray:6 4}
+#edges path.loop{stroke:#9a6fd0;stroke-dasharray:2 5}
+#edges .hit{stroke:transparent;stroke-width:22;pointer-events:stroke;cursor:pointer}
+#edges .midhit{fill:transparent;stroke:none;pointer-events:all;cursor:pointer}
+#edges .mid{fill:#fff;stroke:#9aa4ae;stroke-width:2;pointer-events:none}
+#edges .mid.on{fill:var(--accent);stroke:var(--accent)}
+#edges .elabel{font:600 10px ui-monospace,monospace;fill:var(--sub);pointer-events:none}
+#nodes{position:absolute;left:0;top:0}
+.nd{position:absolute;width:150px;box-sizing:border-box;background:#fff;border:2px solid var(--line);border-radius:10px;padding:7px 9px;box-shadow:0 1px 3px rgba(0,0,0,.08);cursor:grab}
+.nd.sel{border-color:var(--accent);box-shadow:0 0 0 3px rgba(43,92,138,.16)}
+.nd .ndh{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nd .ndb{font-size:10px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.nd .ndp{font-size:10px;color:var(--ink);margin-top:3px;max-height:26px;overflow:hidden;font-family:ui-monospace,monospace;line-height:1.3}
+.nd.t-input{border-color:#8fb4d8}.nd.t-output{border-color:#8fc8a8}.nd.t-join{border-color:#d8c08f}.nd.t-llm{border-color:#b8a6d8}
+.nd.st-running{border-color:var(--accent);animation:pulse 1s infinite alternate}
+.nd.st-success{border-color:var(--ok);background:#f2fbf6}
+.nd.st-error{border-color:var(--err);background:#fdf4f1}
+.nd.st-cancelled{border-color:#c9a227;background:#fdfaf0}
+@keyframes pulse{from{box-shadow:0 0 0 0 rgba(43,92,138,.30)}to{box-shadow:0 0 0 7px rgba(43,92,138,0)}}
+.port{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.port::after{content:"";width:12px;height:12px;border-radius:50%;background:#fff;border:2px solid #8a939c}
+.port.pin{left:0;top:50%}.port.pout{left:150px;top:50%}
+.canvas.tb .port.pin{left:50%;top:0}.canvas.tb .port.pout{left:50%;top:62px}
+.port.pout::after{background:#8a939c}
+.port.arm::after{background:var(--accent);border-color:var(--accent);transform:scale(1.35)}
+.port.tgt::after{border-color:var(--accent);box-shadow:0 0 0 4px rgba(43,92,138,.2)}
+.plab{position:absolute;left:150px;top:50%;margin:10px 0 0 -6px;font-size:9px;color:var(--sub);font-family:ui-monospace,monospace}
+.hintbar{font-size:12px;color:var(--accent);min-height:20px;margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.vErr{font-size:11px;color:var(--err);font-family:ui-monospace,monospace;white-space:pre-wrap;margin-top:6px;line-height:1.5}
+.fab{position:absolute;right:10px;bottom:10px;display:flex;flex-direction:column;gap:6px}
+.fab button{width:38px;height:38px;padding:0;border-radius:50%;font-size:17px;line-height:1;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.12)}
+.backdrop{position:fixed;inset:0;background:rgba(20,24,28,.35);display:none;z-index:40}
+.backdrop.show{display:block}
+.sheet{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-radius:14px 14px 0 0;box-shadow:0 -4px 24px rgba(0,0,0,.18);z-index:41;max-height:82vh;overflow:auto;display:none;padding:12px 14px calc(18px + env(safe-area-inset-bottom))}
+.sheet.show{display:block}
+@media(min-width:760px){.sheet{left:auto;right:16px;bottom:16px;width:420px;border-radius:14px}}
+.sheet h3{margin:2px 0 10px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
+.sheet h3 button{font-size:12px;padding:4px 10px}
+.fld{display:flex;flex-direction:column;gap:4px;margin-bottom:9px}
+.fld>span{font-size:11px;color:var(--sub)}
+.fld input[type=text],.fld input[type=number],.fld select,.fld textarea{font:inherit;font-size:13px;border:1px solid var(--line);border-radius:7px;padding:7px 8px;background:#fff;color:var(--ink);width:100%}
+.fld textarea{font-family:ui-monospace,Menlo,monospace;font-size:12px;min-height:64px;resize:vertical}
+.fld2{display:flex;gap:8px}.fld2>.fld{flex:1}
+.palette{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.palette button{text-align:left;padding:10px 12px;font-size:13px;line-height:1.35}
+.palette b{display:block;font-size:13px}.palette small{color:var(--sub);font-size:11px}
 .ck{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--sub);white-space:nowrap}
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.5.0 · 内蔵ローカルLLM</span></h1>
-<div class="tag">WebLLM本体を同梱（CDN不要）· Workerで推論 · 端末チェック · モデルは端末に保存 · Provider抽象（内蔵 / OpenAI互換ローカル / mock）· Runtimeは adapter 種別を知らない</div>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.6.0 · ノードエディタ</span></h1>
+<div class="tag">タップとドラッグでハーネスを組む · 正本は HarnessSpec · 内蔵ローカルLLM（WebLLM同梱・サーバ不要）· OpenAI互換ローカル · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
 <div class="card" style="margin-bottom:16px"><h2>Provider（ローカルLLM）</h2>
@@ -67,16 +117,27 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 </div>
 
 <div class="grid">
-<div class="card"><h2>HarnessSpec（JSON）</h2>
+<div class="card"><h2>ハーネス編集</h2>
+<div class="row">
+<div class="seg" id="viewSeg"><button data-v="editor" class="on">エディタ</button><button data-v="json">JSON</button></div>
+<button id="addNode">＋ ノード</button><button id="autoLay">整列</button><button id="dirBtn">縦に流す</button>
+</div>
+<div id="editorView">
+<div class="canvas" id="cv"><div id="world"><svg id="edges"></svg><div id="nodes"></div></div>
+<div class="fab"><button id="zIn" title="拡大">＋</button><button id="zOut" title="縮小">−</button><button id="zFit" title="全体">⤢</button></div>
+</div>
+<div class="hintbar" id="hint"></div>
+</div>
 <div class="row"><div class="seg" id="exSeg">
 <button data-ex="exW1">内蔵LLM直列</button><button data-ex="exL1">ローカル直列</button><button data-ex="exL2">ローカル並列+Join</button><button data-ex="exL3">JSON契約+文字数分岐</button><button data-ex="exL4">ローカル改稿ループ</button>
 </div></div>
 <div class="row"><div class="seg" id="exSeg2">
 <button data-ex="ex1" class="on">mock改稿ループ</button><button data-ex="ex5">mock並列</button><button data-ex="ex7">mock Loop×並列</button><button data-ex="ex2">mock分岐</button><button data-ex="ex8">mock template</button><button data-ex="ex9">mock fail_fast</button>
 </div></div>
-<textarea id="spec" spellcheck="false"></textarea>
+<div id="jsonView" style="display:none"><textarea id="spec" spellcheck="false"></textarea></div>
 <div class="row"><button class="primary" id="run">実行</button><button id="step">1 Work Item</button><button id="cancel" disabled class="danger">Cancel</button><button id="resume" disabled>Resume</button><button id="retry" disabled>Retry</button><button id="reset">クリア</button></div>
-<div class="state" id="stateline">state: idle</div></div>
+<div class="state" id="stateline">state: idle</div>
+<div class="vErr" id="vErr"></div></div>
 
 <div class="card"><h2>実行ログ</h2><div class="log" id="log"></div>
 <div class="mini">Provider は「推論する / Usageを返す / cancelに応答する / 失敗理由を返す」だけ。失敗の波及（fail_fast）は Runtime だけが判断する。</div></div>
@@ -94,9 +155,11 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="tests" id="tests">running…</div>
 <div class="mini">Runtime回帰15件 + Provider契約13件。Provider層は stub transport で決定論的に検証する（実ネットワーク不要）。</div></div>
 </div>
+<div class="backdrop" id="backdrop"></div>
+<div class="sheet" id="sheet"><div id="sheetBody"></div></div>
 <script>
 "use strict";
-const CP_KEY="harness_vslice_cp_v050";
+const CP_KEY="harness_vslice_cp_v060";
 const ABSENT=Symbol("absent");
 /* ---- 式評価 ---- */
 const OPS2=["&&","||","==","!=","<=",">="],OPS1=["+","-","*","/","%","<",">"];
@@ -789,7 +852,7 @@ function applyBranchFailurePolicy(run,spec,group,failedEx,err,store,log){
 /* ---- Run制御（cancelはRunController経由。storeに入れない） ---- */
 function makeController(hooks){
   const ac=typeof AbortController!=="undefined"?new AbortController():{signal:{aborted:false},abort(){this.signal.aborted=true;}};
-  return{signal:ac.signal,abort:()=>ac.abort(),onToken:(hooks&&hooks.onToken)||null,onProgress:(hooks&&hooks.onProgress)||null};
+  return{signal:ac.signal,abort:()=>ac.abort(),onToken:(hooks&&hooks.onToken)||null,onProgress:(hooks&&hooks.onProgress)||null,onStep:(hooks&&hooks.onStep)||null};
 }
 function requestCancel(run,store,ctl){run.cancelRequested=true;run.status="cancelling";if(ctl)ctl.abort();if(store)store.save(run);}
 
@@ -880,7 +943,9 @@ function routeExec(spec,run,ex,byId,loopEntries,log){
 
 /* ---- runUntilIdle ---- */
 async function runUntilIdle(spec,run,store,log,ctl){let guard=0;
-  while((run.status==="running"||run.status==="cancelling")&&guard++<5000){const r=await processOneWorkItem(spec,run,store,log,ctl);if(r.kind==="idle"||r.kind==="cancelled")break;if(run.status==="running"&&run.workQueue.length===0)break;}
+  while((run.status==="running"||run.status==="cancelling")&&guard++<5000){const r=await processOneWorkItem(spec,run,store,log,ctl);
+    if(ctl&&ctl.onStep)try{ctl.onStep(run,r);}catch(_){}
+    if(r.kind==="idle"||r.kind==="cancelled")break;if(run.status==="running"&&run.workQueue.length===0)break;}
   if(run.status==="running"){
     const anyWork=run.workQueue.length>0;const anyReady=Object.values(run.executions).some(e=>e.status==="ready");
     if(!anyWork&&!anyReady){
@@ -1019,7 +1084,7 @@ $("#writeSpec").onclick=()=>{
   let spec;try{spec=JSON.parse($("#spec").value);}catch(e){log("err","JSON: "+e.message);return;}
   spec.providers=spec.providers||{};
   spec.providers.local=Object.assign({},spec.providers.local||{},providerDefFromForm());
-  $("#spec").value=JSON.stringify(spec,null,2);
+  setSpecObj(spec);
   log("prov","providers.local = "+JSON.stringify(spec.providers.local));
 };
 
@@ -1096,11 +1161,444 @@ const EX={
  ex9:{metadata:{name:"fail_fast(OOM)",version:"1"},nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},{id:"A",type:"llm",mock:{fail:"oom"}},{id:"B",type:"llm",mock:{tag:"B"}},{id:"C",type:"llm",mock:{tag:"C"}},{id:"jn",type:"join",op:"json_array",inputs:{items:{type:"text",cardinality:"many"}}},{id:"out",type:"output"}],
   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},{from:{node:"in",port:"out"},to:{node:"C",port:"in"}},{from:{node:"A",port:"out"},to:{node:"jn",port:"items"},position:0},{from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:1},{from:{node:"C",port:"out"},to:{node:"jn",port:"items"},position:2},{from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}]}
 };
-function loadEx(k){$("#spec").value=JSON.stringify(EX[k],null,2);
+function loadEx(k){setSpecObj(JSON.parse(JSON.stringify(EX[k])));
   document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.classList.toggle("on",b.dataset.ex===k));
   if(String(k).startsWith("exW")&&adapterId!=="webllm")setAdapter("webllm");
   else if(String(k).startsWith("exL")&&adapterId==="mock")setAdapter("openai_local");}
 document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.onclick=()=>loadEx(b.dataset.ex));
+
+/* ==================================================================
+   ノードエディタ（タップ＋ドラッグで組む）
+   正本は HarnessSpec。画面の操作は spec を書き換え、textareaに反映する。
+   ノードの座標は metadata.layout に持つ（Runtimeは見ない）。
+   ================================================================== */
+const NW=150,NH=62;                      // ノードの箱の大きさ
+const Ed={spec:null,view:{x:16,y:16,k:1},sel:null,arm:null,run:null,dir:"tb"};
+const NODE_KINDS=[
+  {type:"input",label:"入力",desc:"実行時の入力を流す"},
+  {type:"llm",label:"LLM",desc:"プロバイダで推論する"},
+  {type:"join",label:"Join",desc:"複数の入力をまとめる"},
+  {type:"output",label:"出力",desc:"最終結果を受け取る"}
+];
+const nodeById=id=>(Ed.spec.nodes||[]).find(n=>n.id===id);
+const outEdges=id=>(Ed.spec.edges||[]).filter(e=>e.from.node===id);
+function layout(){const m=Ed.spec.metadata=Ed.spec.metadata||{};return m.layout=m.layout||{};}
+function posOf(id){const L=layout();return L[id]||{x:20,y:20};}
+// 既存ノードと重ならない位置へずらす（置いた瞬間に隠れると触れなくなるため）
+function freeSpot(x,y,selfId){
+  const L=layout();const hit=(px,py)=>(Ed.spec.nodes||[]).some(n=>{
+    if(n.id===selfId)return false;const q=L[n.id];if(!q)return false;
+    return Math.abs(q.x-px)<NW+8&&Math.abs(q.y-py)<NH+8;});
+  let p={x,y};for(let i=0;i<40&&hit(p.x,p.y);i++)p={x:p.x+(Ed.dir==="tb"?24:0),y:p.y+(Ed.dir==="tb"?NH+22:NH+22)};
+  return p;
+}
+function newId(base){let i=1,id=base;const has=x=>(Ed.spec.nodes||[]).some(n=>n.id===x);
+  while(has(id)){i++;id=base+i;}return id;}
+
+// 依存の深さで自動整列（loopの戻り辺は無視）
+function autoLayout(){
+  const ns=Ed.spec.nodes||[],es=(Ed.spec.edges||[]).filter(e=>!e.loop);
+  const depth={};ns.forEach(n=>depth[n.id]=0);
+  for(let i=0;i<ns.length+2;i++)for(const e of es){
+    const d=(depth[e.from.node]||0)+1;if(d>(depth[e.to.node]||0))depth[e.to.node]=d;}
+  const byD={};ns.forEach(n=>{(byD[depth[n.id]||0]=byD[depth[n.id]||0]||[]).push(n.id);});
+  const L=layout();
+  Object.keys(byD).sort((a,b)=>a-b).forEach(d=>{byD[d].forEach((id,i)=>{
+    L[id]=Ed.dir==="tb"?{x:20+i*172,y:20+d*122}:{x:20+d*205,y:20+i*96};});});
+}
+function ensureLayout(){const L=layout();const miss=(Ed.spec.nodes||[]).some(n=>!L[n.id]);
+  if(miss&&(Ed.spec.nodes||[]).length)autoLayout();}
+
+function setSpecObj(spec,opt){
+  Ed.spec=spec;ensureLayout();
+  if(!(opt&&opt.keepText))$("#spec").value=JSON.stringify(spec,null,2);
+  edRender();showErrs();
+}
+function syncFromCanvas(){$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();}
+function showErrs(){
+  let errs=[];try{errs=validate(Ed.spec);}catch(e){errs=["spec不正: "+(e.message||e)];}
+  $("#vErr").textContent=errs.length?("⚠ "+errs.slice(0,4).join("\n⚠ ")+(errs.length>4?`\n…他${errs.length-4}件`:"")):"";
+  return errs;
+}
+/* --- 描画 --- */
+function portXY(id,which){const p=posOf(id);
+  return Ed.dir==="tb"
+    ? {x:p.x+NW/2, y:p.y+(which==="out"?NH:0)}
+    : {x:p.x+(which==="out"?NW:0), y:p.y+NH/2};}
+function edgePath(a,b){
+  if(Ed.dir==="tb"){const dy=Math.max(34,Math.abs(b.y-a.y)*0.45);
+    return `M ${a.x} ${a.y} C ${a.x} ${a.y+dy}, ${b.x} ${b.y-dy}, ${b.x} ${b.y}`;}
+  const dx=Math.max(40,Math.abs(b.x-a.x)*0.4);
+  return `M ${a.x} ${a.y} C ${a.x+dx} ${a.y}, ${b.x-dx} ${b.y}, ${b.x} ${b.y}`;}
+function setDir(d){Ed.dir=d;$("#cv").classList.toggle("tb",d==="tb");
+  const t=$("#dirBtn");if(t)t.textContent=d==="tb"?"縦に流す":"横に流す";}
+function edRender(){
+  const nodesEl=$("#nodes"),svg=$("#edges");
+  nodesEl.innerHTML="";while(svg.firstChild)svg.removeChild(svg.firstChild);
+  const L=layout();let maxX=600,maxY=400;
+  for(const n of Ed.spec.nodes||[]){
+    const p=L[n.id]||{x:20,y:20};maxX=Math.max(maxX,p.x+NW+60);maxY=Math.max(maxY,p.y+NH+60);
+    const d=document.createElement("div");
+    d.className="nd t-"+(n.type||"llm")+(Ed.sel&&Ed.sel.kind==="node"&&Ed.sel.id===n.id?" sel":"");
+    d.dataset.id=n.id;d.style.left=p.x+"px";d.style.top=p.y+"px";
+    d.innerHTML=`<div class="ndh">${esc(n.id)}</div><div class="ndb">${esc(nodeSub(n))}</div><div class="ndp" data-prev="${esc(n.id)}"></div>`
+      +(n.type==="input"?"":`<div class="port pin" data-node="${esc(n.id)}" data-side="in"></div>`)
+      +(n.type==="output"?"":`<div class="port pout" data-node="${esc(n.id)}" data-side="out"></div>`);
+    nodesEl.appendChild(d);
+  }
+  drawEdges();
+  svg.setAttribute("width",maxX);svg.setAttribute("height",maxY);
+  applyView();
+  if(Ed.run)edStatus(Ed.run);
+}
+function mk(tag,attrs,text){const el=document.createElementNS("http://www.w3.org/2000/svg",tag);
+  for(const[k,v]of Object.entries(attrs))el.setAttribute(k,v);if(text!=null)el.textContent=text;return el;}
+const esc=t=>String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+function nodeSub(n){
+  if(n.type==="input")return "入力";
+  if(n.type==="output")return "出力";
+  if(n.type==="join")return "Join・"+(n.op||"(op未設定)");
+  const pv=n.provider?n.provider:(n.mock?"mock":"(provider未設定)");
+  const r=n.routing&&n.routing.mode?" / "+n.routing.mode:"";
+  return pv+r;
+}
+function edgeLabel(e){
+  if(e.loop)return `loop ${e.loop.id||""} ×${e.loop.max||"?"}`;
+  if(e.else)return "else";
+  if(e.if)return "if "+(e.if.length>16?e.if.slice(0,16)+"…":e.if);
+  if(e.to.port&&e.to.port!=="in")return e.to.port+(e.position!=null?"#"+e.position:"");
+  return "";
+}
+function applyView(){$("#world").style.transform=`translate(${Ed.view.x}px,${Ed.view.y}px) scale(${Ed.view.k})`;}
+function fitView(){
+  const ns=Ed.spec.nodes||[];if(!ns.length)return;const L=layout();
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  ns.forEach(n=>{const p=L[n.id]||{x:0,y:0};x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x+NW);y1=Math.max(y1,p.y+NH);});
+  const cv=$("#cv").getBoundingClientRect();
+  const k=Math.min(1.1,Math.max(0.2,Math.min((cv.width-32)/(x1-x0||1),(cv.height-32)/(y1-y0||1))));
+  Ed.view.k=k;Ed.view.x=(cv.width-(x1-x0)*k)/2-x0*k;Ed.view.y=(cv.height-(y1-y0)*k)/2-y0*k;applyView();
+}
+/* --- 実行中の状態をノードに出す --- */
+function edStatus(run){
+  Ed.run=run;
+  for(const el of document.querySelectorAll(".nd")){
+    el.classList.remove("st-running","st-success","st-error","st-cancelled");
+    const id=el.dataset.id;
+    const running=Object.values(run.executions||{}).some(x=>x.nodeId===id&&(x.status==="running"||x.status==="ready"));
+    const hist=(run.nodeRuns||{})[id]||[];const last=hist[hist.length-1];
+    if(running)el.classList.add("st-running");
+    else if(last)el.classList.add("st-"+(last.status==="success"?"success":last.status==="error"?"error":"cancelled"));
+    const prev=el.querySelector(".ndp");
+    if(prev&&last&&last.status==="success"&&last.out)prev.textContent=String(rvToText(last.out)).slice(0,60);
+  }
+}
+function edToken(nodeId,t){
+  const el=document.querySelector('.nd[data-id="'+CSS.escape(nodeId)+'"] .ndp');
+  if(!el)return;el.textContent=(el.dataset.tk=((el.dataset.tk||"")+t).slice(-60));
+}
+function edClearPreview(){document.querySelectorAll(".nd .ndp").forEach(e=>{e.textContent="";delete e.dataset.tk;});
+  document.querySelectorAll(".nd").forEach(e=>e.classList.remove("st-running","st-success","st-error","st-cancelled"));}
+
+/* --- タップ / ドラッグ / ピンチ --- */
+const pts=new Map();let press=null,moved=false,pinch0=null;
+function toWorld(cx,cy){const r=$("#cv").getBoundingClientRect();
+  return{x:(cx-r.left-Ed.view.x)/Ed.view.k,y:(cy-r.top-Ed.view.y)/Ed.view.k};}
+function setHint(t,cancel){$("#hint").innerHTML=t?esc(t)+(cancel?' <button id="hcancel">やめる</button>':""):"";
+  const c=$("#hcancel");if(c)c.onclick=()=>{Ed.arm=null;paintArm();setHint("");};}
+function paintArm(){document.querySelectorAll(".port").forEach(p=>{p.classList.remove("arm","tgt");});
+  if(!Ed.arm)return;
+  document.querySelectorAll('.port[data-side="out"]').forEach(p=>{if(p.dataset.node===Ed.arm.node)p.classList.add("arm");});
+  document.querySelectorAll('.port[data-side="in"]').forEach(p=>{if(p.dataset.node!==Ed.arm.node)p.classList.add("tgt");});}
+$("#cv").addEventListener("pointerdown",ev=>{
+  pts.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+  if(pts.size===2){const[a,b]=[...pts.values()];
+    pinch0={d:Math.hypot(a.x-b.x,a.y-b.y),k:Ed.view.k,cx:(a.x+b.x)/2,cy:(a.y+b.y)/2,vx:Ed.view.x,vy:Ed.view.y};press=null;return;}
+  moved=false;
+  const port=ev.target.closest(".port");
+  const node=ev.target.closest(".nd");
+  const eIdx=ev.target.getAttribute&&ev.target.getAttribute("data-edge");
+  if(port)press={kind:"port",node:port.dataset.node,side:port.dataset.side};
+  else if(node)press={kind:"node",id:node.dataset.id,start:posOf(node.dataset.id),px:ev.clientX,py:ev.clientY};
+  else if(eIdx!=null)press={kind:"edge",i:+eIdx};
+  else press={kind:"bg",px:ev.clientX,py:ev.clientY,vx:Ed.view.x,vy:Ed.view.y};
+  $("#cv").setPointerCapture(ev.pointerId);
+});
+$("#cv").addEventListener("pointermove",ev=>{
+  if(!pts.has(ev.pointerId))return;
+  pts.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
+  if(pinch0&&pts.size===2){const[a,b]=[...pts.values()];const d=Math.hypot(a.x-b.x,a.y-b.y);
+    const k=Math.min(2.2,Math.max(0.3,pinch0.k*(d/(pinch0.d||1))));
+    const r=$("#cv").getBoundingClientRect(),ox=pinch0.cx-r.left,oy=pinch0.cy-r.top;
+    Ed.view.k=k;Ed.view.x=ox-(ox-pinch0.vx)*(k/pinch0.k);Ed.view.y=oy-(oy-pinch0.vy)*(k/pinch0.k);
+    applyView();moved=true;return;}
+  if(!press)return;
+  if(press.kind==="node"){
+    const dx=(ev.clientX-press.px)/Ed.view.k,dy=(ev.clientY-press.py)/Ed.view.k;
+    if(!moved&&Math.hypot(ev.clientX-press.px,ev.clientY-press.py)<6)return;
+    moved=true;
+    const L=layout();L[press.id]={x:Math.round(press.start.x+dx),y:Math.round(press.start.y+dy)};
+    const el=document.querySelector('.nd[data-id="'+CSS.escape(press.id)+'"]');
+    if(el){el.style.left=L[press.id].x+"px";el.style.top=L[press.id].y+"px";}
+    drawEdgesOnly();
+  }else if(press.kind==="bg"){
+    if(!moved&&Math.hypot(ev.clientX-press.px,ev.clientY-press.py)<6)return;
+    moved=true;Ed.view.x=press.vx+(ev.clientX-press.px);Ed.view.y=press.vy+(ev.clientY-press.py);applyView();
+  }
+});
+// 線 → 当たり判定 → 丸 の順に重ねる。丸を最後に描かないと、
+// 別の辺の当たり判定（太い透明線）が丸を覆ってタップが奪われる。
+function drawEdges(){
+  const svg=$("#edges");while(svg.firstChild)svg.removeChild(svg.firstChild);
+  const es=Ed.spec.edges||[];
+  const geo=es.map(e=>{const a=portXY(e.from.node,"out"),b=portXY(e.to.node,"in");
+    return{d:edgePath(a,b),mx:(a.x+b.x)/2,my:(a.y+b.y)/2};});
+  geo.forEach((g,i)=>{const e=es[i];
+    svg.appendChild(mk("path",{d:g.d,class:e.loop?"loop":(e.if||e.else?"cond":"")}));
+    svg.appendChild(mk("path",{d:g.d,class:"hit","data-edge":i}));});
+  geo.forEach((g,i)=>{const e=es[i];
+    const on=Ed.sel&&Ed.sel.kind==="edge"&&Ed.sel.i===i;
+    svg.appendChild(mk("circle",{cx:g.mx,cy:g.my,r:17,class:"midhit","data-edge":i}));
+    svg.appendChild(mk("circle",{cx:g.mx,cy:g.my,r:8,class:"mid"+(on?" on":""),"data-edge":i}));
+    const lab=edgeLabel(e);
+    if(lab)svg.appendChild(mk("text",Ed.dir==="tb"
+      ?{x:g.mx+13,y:g.my+4,class:"elabel","text-anchor":"start"}
+      :{x:g.mx,y:g.my-15,class:"elabel","text-anchor":"middle"},lab));});
+}
+const drawEdgesOnly=drawEdges;
+$("#cv").addEventListener("pointerup",ev=>{
+  pts.delete(ev.pointerId);if(pts.size<2)pinch0=null;
+  const pr=press;press=null;
+  if(!pr)return;
+  if(pr.kind==="node"&&moved){syncFromCanvas();return;}
+  if(moved)return;
+  if(pr.kind==="port"){
+    if(pr.side==="out"){Ed.arm={node:pr.node};paintArm();
+      setHint("つなぎ先の ● をタップ（"+pr.node+" から）",true);}
+    else if(Ed.arm){const from=Ed.arm.node,to=pr.node;Ed.arm=null;paintArm();setHint("");connect(from,to);}
+    else setHint("先に つなぎ元の ○（右側）をタップ");
+    return;
+  }
+  if(pr.kind==="node"){Ed.sel={kind:"node",id:pr.id};edRender();openNodeSheet(pr.id);return;}
+  if(pr.kind==="edge"){Ed.sel={kind:"edge",i:pr.i};edRender();openEdgeSheet(pr.i);return;}
+  Ed.sel=null;Ed.arm=null;paintArm();setHint("");edRender();
+});
+$("#cv").addEventListener("pointercancel",ev=>{pts.delete(ev.pointerId);press=null;pinch0=null;});
+$("#cv").addEventListener("wheel",ev=>{ev.preventDefault();
+  const r=$("#cv").getBoundingClientRect(),ox=ev.clientX-r.left,oy=ev.clientY-r.top;
+  const k=Math.min(2.2,Math.max(0.3,Ed.view.k*(ev.deltaY<0?1.1:0.9)));
+  Ed.view.x=ox-(ox-Ed.view.x)*(k/Ed.view.k);Ed.view.y=oy-(oy-Ed.view.y)*(k/Ed.view.k);Ed.view.k=k;applyView();},{passive:false});
+
+/* --- つなぐ --- */
+function connect(from,to){
+  if(from===to)return setHint("同じノードには繋げない");
+  const tn=nodeById(to);const port=(tn&&tn.type==="join")?"items":"in";
+  const es=Ed.spec.edges=Ed.spec.edges||[];
+  if(es.some(e=>e.from.node===from&&e.to.node===to&&(e.to.port||"in")===port))return setHint("同じ辺がもうある");
+  const edge={from:{node:from,port:"out"},to:{node:to,port}};
+  if(port==="items"){edge.position=es.filter(e=>e.to.node===to&&(e.to.port||"in")==="items").length;}
+  es.push(edge);
+  const outs=outEdges(from).filter(e=>!e.loop);
+  const src=nodeById(from);
+  if(outs.length>1&&!(src.routing&&src.routing.mode)){
+    askRouting(from,()=>{syncFromCanvas();setHint("つないだ: "+from+" → "+to);});
+    syncFromCanvas();return;
+  }
+  syncFromCanvas();setHint("つないだ: "+from+" → "+to);
+}
+/* --- シート --- */
+function openSheet(html){
+  $("#sheetBody").innerHTML=html;$("#sheet").classList.add("show");
+  const bd=$("#backdrop");bd.classList.add("show");
+  // タップで開いた直後は、同じタップから出る合成クリックが背面に届いて即閉じてしまう。
+  // 少しのあいだ背面を無反応にする（iOSの ghost click 対策）。
+  bd.style.pointerEvents="none";clearTimeout(openSheet._t);
+  openSheet._t=setTimeout(()=>{bd.style.pointerEvents="";},350);
+}
+function closeSheet(){$("#sheet").classList.remove("show");$("#backdrop").classList.remove("show");}
+$("#backdrop").onclick=closeSheet;
+function head(title){return `<h3>${esc(title)}<button id="shClose">閉じる</button></h3>`;}
+function bindClose(){const b=$("#shClose");if(b)b.onclick=closeSheet;}
+function fld(label,inner){return `<label class="fld"><span>${esc(label)}</span>${inner}</label>`;}
+function txt(path,val,ph){return `<input type="text" data-f="${esc(path)}" value="${esc(val==null?"":val)}" placeholder="${esc(ph||"")}">`;}
+function num(path,val,ph){return `<input type="number" data-f="${esc(path)}" value="${val==null?"":esc(val)}" placeholder="${esc(ph||"")}">`;}
+function area(path,val,ph){return `<textarea data-f="${esc(path)}" placeholder="${esc(ph||"")}">${esc(val==null?"":val)}</textarea>`;}
+function sel(path,val,opts){return `<select data-f="${esc(path)}">`+opts.map(o=>{
+  const v=typeof o==="string"?o:o.v,t=typeof o==="string"?o:o.t;
+  return `<option value="${esc(v)}"${String(val==null?"":val)===String(v)?" selected":""}>${esc(t)}</option>`;}).join("")+`</select>`;}
+function getP(o,path){return path.split(".").reduce((a,k)=>(a==null?a:a[k]),o);}
+function setP(o,path,v){const ks=path.split(".");let c=o;
+  for(let i=0;i<ks.length-1;i++){if(c[ks[i]]==null||typeof c[ks[i]]!=="object")c[ks[i]]={};c=c[ks[i]];}
+  const last=ks[ks.length-1];
+  if(v===""||v==null)delete c[last];else c[last]=v;}
+function bindFields(obj,after){
+  $("#sheetBody").querySelectorAll("[data-f]").forEach(el=>{
+    const f=el.dataset.f;
+    if(f.startsWith("__")||f==="id")return;        // 疑似フィールドと ID は個別に扱う
+    el.oninput=()=>{
+      let v=el.value;
+      if(el.type==="number")v=(v===""?"":Number(v));
+      setP(obj,f,v);
+      if(after)after(el);
+      syncFromCanvas();
+    };
+  });
+}
+/* ノード編集 */
+function openNodeSheet(id){
+  const n=nodeById(id);if(!n)return;
+  const provs=Object.keys(Ed.spec.providers||{});
+  const provOpts=[{v:"",t:"(未設定)"}].concat(provs.map(p=>({v:p,t:p+"（"+((Ed.spec.providers[p]||{}).adapter||"?")+"）"}))).concat([{v:"__mock",t:"mock（テスト用・推論しない）"}]);
+  const provVal=n.provider||(n.mock?"__mock":"");
+  let h=head("ノード: "+id);
+  h+=fld("ID",txt("id",n.id));
+  h+=fld("種類",`<input type="text" value="${esc(n.type||"llm")}" disabled>`);
+  if(n.type==="llm"||n.type===undefined){
+    h+=fld("Provider",sel("__prov",provVal,provOpts));
+    h+=fld("モデル（provider既定を上書き）",txt("model",n.model,"空ならprovider側の設定"));
+    h+=fld("system",area("prompt.system",getP(n,"prompt.system"),"役割の指定"));
+    h+=fld("本文テンプレ（{{{run_input.question}}} や {{{in}}} が使える）",
+      area("prompt.template.value",getP(n,"prompt.template.value"),"空なら前のノードの出力をそのまま渡す"));
+    h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prompt.prefix",getP(n,"prompt.prefix")))}${fld("必ず後ろに付ける文",txt("prompt.suffix",getP(n,"prompt.suffix")))}</div>`;
+    h+=`<div class="fld2">${fld("maxTokens",num("generation.maxTokens",getP(n,"generation.maxTokens")))}${fld("temperature",num("generation.temperature",getP(n,"generation.temperature")))}</div>`;
+    h+=fld("JSON schema（出力を縛る・空で無効）",`<textarea data-json="schema" placeholder='{"type":"object","required":["score"]}'>${esc(n.schema?JSON.stringify(n.schema):"")}</textarea>`);
+  }
+  if(n.type==="join"){
+    h+=fld("まとめ方",sel("op",n.op,[{v:"json_array",t:"json_array（配列にする）"},{v:"concat",t:"concat（文字列を繋ぐ）"},{v:"json_object",t:"json_object（キー付き）"},{v:"template",t:"template（差し込む）"}]));
+    if(n.op==="concat")h+=fld("区切り",txt("sep",n.sep,"\\n"));
+    if(n.op==="template")h+=fld("テンプレ（{{{items.0}}}）",area("template.value",getP(n,"template.value")));
+  }
+  h+=fld("出口の扱い（分岐するときだけ）",sel("routing.mode",getP(n,"routing.mode"),[{v:"",t:"(未設定・1本だけ出る)"},{v:"parallel",t:"parallel（全部に流す）"},{v:"first_match",t:"first_match（条件で1本選ぶ）"}]));
+  if(getP(n,"routing.mode")==="parallel")
+    h+=fld("失敗したときの波及",sel("routing.failurePolicy",getP(n,"routing.failurePolicy"),[{v:"fail_fast",t:"fail_fast（兄弟を止める）"},{v:"",t:"(未設定・エラーになる)"}]));
+  if(getP(n,"routing.mode")==="first_match")
+    h+=fld("どれにも当たらないとき",sel("routing.onNoMatch",getP(n,"routing.onNoMatch"),[{v:"error",t:"error（失敗にする）"},{v:"stop",t:"stop（止めてResume可能に）"}]));
+  h+=`<div class="row"><button class="danger" id="nDel">このノードを削除</button></div>`;
+  openSheet(h);bindClose();
+  bindFields(n,el=>{
+    if(el.dataset.f==="prompt.template.value"){
+      const t=getP(n,"prompt.template.value");
+      if(t){setP(n,"prompt.template.syntax","mustache");setP(n,"prompt.template.mode","interpolation_only");}
+      else if(n.prompt)delete n.prompt.template;
+    }
+  });
+  const idEl=$("#sheetBody").querySelector('[data-f="id"]');
+  if(idEl)idEl.onchange=()=>{const nid=idEl.value.trim();
+    if(!nid){idEl.value=n.id;return;}
+    if(nid!==n.id&&(Ed.spec.nodes||[]).some(x=>x.id===nid)){setHint("その名前はもう使われている");idEl.value=n.id;return;}
+    renameNode(n.id,nid);syncFromCanvas();openNodeSheet(nid);};
+  const pv=$("#sheetBody").querySelector('[data-f="__prov"]');
+  if(pv)pv.onchange=()=>{
+    if(pv.value==="__mock"){delete n.provider;n.mock=n.mock||{text:"(mock)"};}
+    else if(pv.value===""){delete n.provider;}
+    else{delete n.mock;n.provider=pv.value;}
+    syncFromCanvas();openNodeSheet(n.id);
+  };
+  const sc=$("#sheetBody").querySelector('[data-json="schema"]');
+  if(sc)sc.oninput=()=>{
+    const v=sc.value.trim();
+    if(!v){delete n.schema;sc.style.borderColor="";}
+    else{try{n.schema=JSON.parse(v);sc.style.borderColor="";}catch(e){sc.style.borderColor="var(--err)";return;}}
+    syncFromCanvas();
+  };
+  const rm=$("#sheetBody").querySelector('[data-f="routing.mode"]');
+  if(rm)rm.onchange=()=>{const v=rm.value;
+    if(!v){delete n.routing;}else{n.routing=n.routing||{};n.routing.mode=v;
+      if(v==="parallel"){delete n.routing.onNoMatch;n.routing.failurePolicy=n.routing.failurePolicy||"fail_fast";}
+      else{delete n.routing.failurePolicy;n.routing.onNoMatch=n.routing.onNoMatch||"error";}}
+    syncFromCanvas();openNodeSheet(n.id);};
+  $("#nDel").onclick=()=>{
+    Ed.spec.nodes=Ed.spec.nodes.filter(x=>x.id!==id);
+    Ed.spec.edges=(Ed.spec.edges||[]).filter(e=>e.from.node!==id&&e.to.node!==id);
+    delete layout()[id];Ed.sel=null;closeSheet();syncFromCanvas();setHint("削除: "+id);
+  };
+}
+function renameNode(oldId,newId){
+  newId=String(newId||"").trim();if(!newId||newId===oldId)return;
+  if((Ed.spec.nodes||[]).some(n=>n.id===newId&&n!==nodeById(oldId)))return;
+  const n=nodeById(oldId);if(!n)return;n.id=newId;
+  (Ed.spec.edges||[]).forEach(e=>{if(e.from.node===oldId)e.from.node=newId;if(e.to.node===oldId)e.to.node=newId;});
+  const L=layout();if(L[oldId]){L[newId]=L[oldId];delete L[oldId];}
+  if(Ed.sel&&Ed.sel.kind==="node"&&Ed.sel.id===oldId)Ed.sel.id=newId;
+}
+/* 辺の編集 */
+function openEdgeSheet(i){
+  const e=(Ed.spec.edges||[])[i];if(!e)return;
+  const kind=e.loop?"loop":e.else?"else":e.if?"if":"plain";
+  let h=head(`つながり: ${e.from.node} → ${e.to.node}`);
+  h+=fld("種類",sel("__kind",kind,[{v:"plain",t:"そのまま流す"},{v:"if",t:"if（条件が真のとき）"},{v:"else",t:"else（どれにも当たらないとき）"},{v:"loop",t:"loop（戻して繰り返す）"}]));
+  if(kind==="if"){h+=fld("条件式",txt("if",e.if,"critic.out.score >= 8"));h+=fld("優先順位（小さいほど先）",num("priority",e.priority));}
+  if(kind==="loop"){h+=`<div class="fld2">${fld("loop ID",txt("loop.id",getP(e,"loop.id"),"revise"))}${fld("最大回数",num("loop.max",getP(e,"loop.max"),"3"))}</div>`;
+    h+=fld("打ち切り条件（真になったら抜ける）",txt("loop.until",getP(e,"loop.until"),"critic.out.score >= 8"));}
+  if((e.to.port||"in")==="items")h+=fld("並び順 position",num("position",e.position));
+  h+=fld("値の変換",sel("transform",e.transform,[{v:"",t:"なし"},{v:"json_stringify",t:"json_stringify（json→text）"},{v:"json_parse",t:"json_parse（text→json）"}]));
+  h+=`<div class="row"><button class="danger" id="eDel">このつながりを削除</button></div>`;
+  openSheet(h);bindClose();bindFields(e);
+  const kk=$("#sheetBody").querySelector('[data-f="__kind"]');
+  kk.onchange=()=>{
+    delete e.if;delete e.else;delete e.loop;
+    if(kk.value==="if")e.if="true==true";
+    else if(kk.value==="else")e.else=true;
+    else if(kk.value==="loop")e.loop={id:"loop"+i,max:3};
+    syncFromCanvas();openEdgeSheet(i);
+  };
+  $("#eDel").onclick=()=>{Ed.spec.edges.splice(i,1);Ed.sel=null;closeSheet();syncFromCanvas();setHint("つながりを削除した");};
+}
+/* 分岐のしかたを選ばせる（隠れた既定値を作らない） */
+function askRouting(nodeId,cb){
+  const h=head(nodeId+" から2本目が出た")+
+    `<div class="mini">出口が2本以上になった。どちらにするか決める必要がある（勝手には決めない）。</div>
+     <div class="palette" style="margin-top:10px">
+     <button id="rPar"><b>並列</b><small>両方に同時に流す。片方が失敗したら兄弟を止める(fail_fast)</small></button>
+     <button id="rFm"><b>条件分岐</b><small>ifの条件で1本だけ選ぶ。最後はelseで受ける</small></button></div>`;
+  openSheet(h);bindClose();
+  const n=nodeById(nodeId);
+  $("#rPar").onclick=()=>{n.routing={mode:"parallel",failurePolicy:"fail_fast"};closeSheet();cb&&cb();};
+  $("#rFm").onclick=()=>{n.routing={mode:"first_match",onNoMatch:"error"};
+    const outs=outEdges(nodeId).filter(x=>!x.loop);
+    outs.forEach((x,ix)=>{if(!x.if&&!x.else){if(ix<outs.length-1){x.if="true==true";x.priority=ix;}else{x.else=true;x.priority=ix;}}});
+    closeSheet();cb&&cb();};
+}
+/* ノード追加 */
+function openAddSheet(){
+  let h=head("ノードを足す")+'<div class="palette">';
+  NODE_KINDS.forEach(k=>{h+=`<button data-add="${k.type}"><b>${esc(k.label)}</b><small>${esc(k.desc)}</small></button>`;});
+  h+="</div>";
+  openSheet(h);bindClose();
+  $("#sheetBody").querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{addNode(b.dataset.add);});  // addNode が続けて中身の編集を開く
+}
+function addNode(type){
+  const base={input:"in",llm:"llm",join:"jn",output:"out"}[type]||"n";
+  const id=newId(base);
+  const n={id,type};
+  if(type==="llm"){const provs=Object.keys(Ed.spec.providers||{});
+    if(provs.length)n.provider=provs[0];else n.mock={text:"(mock)"};
+    n.prompt={system:"",template:{syntax:"mustache",mode:"interpolation_only",value:"{{{in}}}"}};
+    delete n.prompt.system;}
+  if(type==="join"){n.op="json_array";n.inputs={items:{type:"any",cardinality:"many"}};}
+  Ed.spec.nodes=Ed.spec.nodes||[];Ed.spec.nodes.push(n);
+  const r=$("#cv").getBoundingClientRect();
+  const c=toWorld(r.left+r.width/2,r.top+r.height/2);
+  layout()[id]=freeSpot(Math.round(c.x-NW/2),Math.round(c.y-NH/2),id);
+  Ed.sel={kind:"node",id};syncFromCanvas();setHint("足した: "+id+"（タップして中身を決める）");
+  openNodeSheet(id);
+}
+/* --- 画面まわりの配線 --- */
+$("#viewSeg").onclick=ev=>{const b=ev.target.closest("button");if(!b)return;
+  document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x===b));
+  const j=b.dataset.v==="json";
+  $("#jsonView").style.display=j?"":"none";$("#editorView").style.display=j?"none":"";
+  if(!j)edRender();};
+$("#addNode").onclick=openAddSheet;
+$("#autoLay").onclick=()=>{autoLayout();syncFromCanvas();fitView();};
+$("#dirBtn").onclick=()=>{setDir(Ed.dir==="tb"?"lr":"tb");autoLayout();syncFromCanvas();fitView();};
+$("#zIn").onclick=()=>{Ed.view.k=Math.min(2.2,Ed.view.k*1.2);applyView();};
+$("#zOut").onclick=()=>{Ed.view.k=Math.max(0.3,Ed.view.k/1.2);applyView();};
+$("#zFit").onclick=fitView;
+$("#spec").addEventListener("input",()=>{
+  let o;try{o=JSON.parse($("#spec").value);}catch(e){$("#vErr").textContent="⚠ JSON: "+e.message;return;}
+  setSpecObj(o,{keepText:true});
+});
+
 
 const setState=t=>$("#stateline").textContent="state: "+t;
 let cur=null,ctl=null;
@@ -1132,9 +1630,12 @@ function report(){setState(`${cur.status} | calls=${cur.totals.apiCalls} iterTot
   if(cur.status==="cancelled")log("cp","── cancelled（部分出力は破棄）──");
   if(cur.status==="paused")log("cp","── paused（Resume可）──");
   renderTotals();updateResume();$("#cancel").disabled=true;$("#run").disabled=false;}
-function newCtl(){return makeController({onToken,onProgress:()=>renderProvState()});}
+function newCtl(){return makeController({
+  onToken:(nodeId,t)=>{onToken(nodeId,t);edToken(nodeId,t);},
+  onProgress:()=>renderProvState(),
+  onStep:run=>{edStatus(run);renderTotals();}});}
 function inputForRun(){return{question:"ローカルLLMで動くか、1つだけ確かめたい。"};}
-async function runAll(){clearLog();clearStream();const spec=parseSpec();if(!spec)return;
+async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec)return;
   store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
   $("#cancel").disabled=false;$("#run").disabled=true;setState("running");
   try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+(e.message||e));}
@@ -1152,9 +1653,9 @@ async function doRetry(){const spec=parseSpec();if(!spec||!cur)return;
   try{await retryExecution(spec,cur,failed.execId,store,log,ctl);}catch(e){log("err","例外: "+(e.message||e));}report();}
 $("#run").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResume;$("#retry").onclick=doRetry;
 $("#cancel").onclick=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
-$("#reset").onclick=()=>{cur=null;store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
+$("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
-setAdapter("mock");loadEx("ex1");renderTotals();
+setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");fitView();renderTotals();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 
 /* ---- 自己テスト ---- */
 const enc=s=>new TextEncoder().encode(s);
