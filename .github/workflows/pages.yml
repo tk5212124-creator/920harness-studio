@@ -34,6 +34,11 @@ jobs:
           # 内蔵LLMの本体が配信物に入っていなければ、ここで落とす
           # （入れ忘れると端末側は「Importing a module script failed」になるだけで原因が分からない）
           test -s _site/vendor/web-llm/index.js
+          # いま配っている版を書いておく（端末が古い版を握っていたら気づけるように）
+          ver=$(grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' harness.html | head -1)
+          printf '{"version":"%s","commit":"%s","builtAt":"%s"}\n' \
+            "$ver" "${GITHUB_SHA:0:7}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > _site/version.json
+          cat _site/version.json
 
       # ---- 内蔵LLMのモデルをこのサイトから配る ----------------------------------
       # 重みは Git に入れない。Actions が HuggingFace から取ってきて配信物に入れるだけ。

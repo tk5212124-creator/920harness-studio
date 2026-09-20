@@ -88,6 +88,37 @@ R['⑤ 捨てる'] = { Checkpoint: await p.evaluate(() => localStorage.getItem('
   お知らせ消えた: !(await p.isVisible('#resumeBanner.show')) };
 ok.dropped = R['⑤ 捨てる'].Checkpoint === null && R['⑤ 捨てる'].お知らせ消えた;
 
+// ⑥ JSONタブに貼ったハーネスが、その場で図に反映される（反映できたかも言う）
+const 貼る = { metadata: { name: "貼ったハーネス", version: "1" }, providers: { m: { adapter: "mock" } },
+  nodes: [{ id: "in", type: "input" }, { id: "a", type: "llm", provider: "m", mock: { text: "やあ" } }, { id: "res", type: "output" }],
+  edges: [{ from: { node: "in", port: "out" }, to: { node: "a", port: "in" } },
+          { from: { node: "a", port: "out" }, to: { node: "res", port: "in" } }] };
+await tap('#viewSeg button[data-v="json"]');
+await p.fill('#spec', JSON.stringify(貼る, null, 2));
+await p.waitForTimeout(300);
+await tap('#viewSeg button[data-v="editor"]');
+R['⑥ 貼った直後'] = { 図: await canvasIds(), 出力欄: await p.$$eval('#ioOut [data-out]', e => e.map(x => x.dataset.out)),
+  お知らせ: (await p.textContent('#hint')).replace(/\s+/g, ' ').slice(0, 50) };
+ok.jsonApplied = JSON.stringify(R['⑥ 貼った直後'].図) === JSON.stringify(['in', 'a', 'res'])
+  && JSON.stringify(R['⑥ 貼った直後'].出力欄) === JSON.stringify(['res'])
+  && R['⑥ 貼った直後'].お知らせ.includes('貼ったハーネス');
+
+// ⑦ 実行すると、どのハーネスを動かしたかがログの先頭に出る
+await tap('#run');
+await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
+R['⑦ ログの先頭'] = (await p.textContent('#log')).trim().split('\n')[0].slice(0, 60);
+ok.runHeader = R['⑦ ログの先頭'].includes('貼ったハーネス') && R['⑦ ログの先頭'].includes('ノード3');
+
+// ⑧ 壊れたJSONを貼ったら、直すまで図は変えないと言う
+await tap('#viewSeg button[data-v="json"]');
+await p.fill('#spec', '{ "nodes": [ ');
+await p.waitForTimeout(300);
+R['⑧ 壊れたJSON'] = (await p.textContent('#vErr')).replace(/\s+/g, ' ').slice(0, 50);
+ok.badJson = R['⑧ 壊れたJSON'].includes('JSON') && R['⑧ 壊れたJSON'].includes('図は前のまま');
+await p.fill('#spec', JSON.stringify(貼る));
+await p.waitForTimeout(200);
+await tap('#viewSeg button[data-v="editor"]');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

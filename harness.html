@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 落ちない工夫と入力のまとめ方 v0.15.0</title>
+<title>Harness Studio — 確認を減らして迷わせない v0.16.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -93,7 +93,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.15.0 · 落ちない工夫と入力のまとめ方</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.16.0 · 確認を減らして迷わせない</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -1387,8 +1387,6 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     else{
       if(n.merge.op&&!MERGE_OPS.includes(n.merge.op))errs.push(`merge.op が不正（${MERGE_OPS.join(" / ")}）: ${n.id}`);
       if(n.merge.labels!=null&&!Array.isArray(n.merge.labels))errs.push("merge.labels は配列にする: "+n.id);
-      const many=Object.values(n.inputs||{}).some(p=>p&&p.cardinality==="many");
-      if(!many)errs.push("merge は「まとめて受け取る」入口があるノードでだけ使える: "+n.id);
     }});
   spec.nodes.forEach(n=>{if(n.type!=="join")return;
     const OPS=["json_array","concat","markdown","csv","json_object","template"];
@@ -2350,10 +2348,24 @@ function connect(from,to){
   const edge={from:{node:from,port:"out"},to:{node:to,port}};
   if(port==="items"){edge.position=already;}
   es.push(edge);
-  // 入口が2本目になったら、受け取り方を聞く（描けるのに実行できない状態を作らない）
+  // 入口が2本目になったら、そのまま受け取れる形にする（毎回の確認は出さない）
+  //   ・同じ分岐から来ている → その入口を「まとめて受け取る」にする（受け取り方はノード編集で変えられる）
+  //   ・別々の分岐から来ている → そのままでは実行時に揃わないので、手前に Join を1つ作って共有する
   if(port!=="items"&&already>=1&&portCard(to,port)!=="many"){
-    askFanIn([{id:to,port}],()=>{syncFromCanvas();setHint(`${to} の入口をまとめた`);});
-    syncFromCanvas();return;
+    makePortMany(to,port);
+    const g=fanInGroups([{id:to,port}])[0];
+    if(g&&g.conflict){
+      const jid=insertSharedJoin(g);
+      syncFromCanvas();
+      if(jid&&outEdges(jid).filter(e=>!e.loop).length>1&&!(nodeById(jid).routing||{}).mode){
+        nodeById(jid).routing={mode:"parallel",failurePolicy:"fail_fast"};syncFromCanvas();
+      }
+      setHint(`別々の分岐から来ているので Join（${jid}）を1つ挟んだ`);
+    }else{
+      syncFromCanvas();
+      setHint(`${to} に2本目を繋いだ（まとめて受け取る。渡し方はノードをタップして変えられる）`);
+    }
+    return;
   }
   const outs=outEdges(from).filter(e=>!e.loop);
   const src=nodeById(from);
@@ -2401,6 +2413,26 @@ function bindFields(obj,after){
     };
   });
 }
+/* 複数の入力が来たときの受け取り方。いま1本でも、あとから線を足せるので常に出す */
+function mergeFields(n){
+  const srcs=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop)
+    .sort((a,b)=>(a.position||0)-(b.position||0)).map(e=>e.from.node);
+  const mop=(n.merge&&n.merge.op)||"concat";
+  let h=fld("複数の入力が来たときの受け取り方",sel("__merge",mop,[
+    {v:"concat",t:"改行でつなぐ（既定）"},
+    {v:"numbered",t:"番号を振る（1. 2. …）"},
+    {v:"markdown",t:"見出しを付ける（## 名前）"},
+    {v:"csv",t:"カンマつなぎ（CSV）"},
+    {v:"json_array",t:"JSONの配列にする"}]));
+  h+=`<div class="mini">${srcs.length>1?`いま ${esc(srcs.join(" / "))} の ${srcs.length}本が入っている。`:"いまは1本だけ。線を足したときにこの決め方で渡る。"}</div>`;
+  if(["numbered","markdown","csv"].includes(mop)){
+    h+=fld("それぞれの名前（つないだ順・カンマ区切り）",
+      txt("__mlabels",((n.merge&&n.merge.labels)||[]).join(", "),srcs.join(", ")));
+    h+=`<div class="mini"><button id="mgAuto">つないだノード名を入れる</button>（空なら名前なし）</div>`;
+  }
+  if(mop==="concat")h+=fld("区切り",txt("__msep",(n.merge&&n.merge.sep)||"","\\n"));
+  return h;
+}
 /* ノード編集 */
 function openNodeSheet(id){
   const n=nodeById(id);if(!n)return;
@@ -2426,11 +2458,20 @@ function openNodeSheet(id){
       const opts=[{v:"",t:`（providerの既定: ${(provDef&&provDef.model)||"未設定"}）`}].concat(list);
       if(n.model&&!list.some(o=>o.v===n.model))opts.push({v:n.model,t:n.model+"（いま入っている値）"});
       h+=fld("このノードで使うモデル",sel("model",n.model||"",opts));
+      h+=mergeFields(n);
       const ctxNow=(n.overrides&&n.overrides.context_window_size)||"";
       h+=fld("文脈の長さ（短いほどメモリが少なくて済む）",sel("__ctx",String(ctxNow),
         [{v:"",t:"モデルの既定"},{v:"1024",t:"1024（いちばん軽い）"},{v:"2048",t:"2048"},{v:"4096",t:"4096"}]));
-      h+=`<div class="mini">端末が落ちる／固まるときはここを短くする。長い文章は入らなくなる。</div>`;
-    }else if(provAdapter)h+=fld("モデル（provider既定を上書き）",txt("model",n.model,"空ならprovider側の設定"));
+      h+=`<div class="mini">端末が落ちる／固まるときはここを短くする。長い文章は入らなくなる。`
+        +`<button id="memNow">この端末向けに省メモリにする</button></div>`;
+      const big=MODEL_CATALOG.find(x=>x.id===(n.model||(provDef&&provDef.model)));
+      if(big&&big.vram>=600&&/iPhone|iPad/.test(navigator.userAgent))
+        h+=`<div class="mini" style="color:var(--warn)">このモデル（約${big.vram}MB）はこの端末には大きい。`
+          +`落ちるときは省メモリにするか、小さいモデルにする。</div>`;
+    }else{
+      if(provAdapter)h+=fld("モデル（provider既定を上書き）",txt("model",n.model,"空ならprovider側の設定"));
+      h+=mergeFields(n);
+    }
     h+=fld("system",area("prompt.system",getP(n,"prompt.system"),"役割の指定"));
     h+=fld("本文テンプレ（{{{run_input.question}}} や {{{in}}} が使える）",
       area("prompt.template.value",getP(n,"prompt.template.value"),"空なら前のノードの出力をそのまま渡す"));
@@ -2443,25 +2484,6 @@ function openNodeSheet(id){
       h+=fld(pk==="custom"?"JSON schema（自分で書く）":"JSON schema（空で無効）",
         `<textarea data-json="schema" placeholder='{"type":"object","required":["score"]}'>${esc(n.schema?JSON.stringify(n.schema):"")}</textarea>`);
     else h+=`<div class="mini">いまの schema: <code>${esc(JSON.stringify(n.schema))}</code></div>`;
-    // 1つの入口に複数の線が入っているときは、その受け取り方も決められる
-    const manyPorts=Object.entries(n.inputs||{}).filter(([,d])=>d&&d.cardinality==="many").map(([k])=>k);
-    if(manyPorts.length){
-      const srcs=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&manyPorts.includes(e.to.port||"in")&&!e.loop)
-        .sort((a,b)=>(a.position||0)-(b.position||0)).map(e=>e.from.node);
-      const mop=(n.merge&&n.merge.op)||"concat";
-      h+=fld(`複数の入力（${srcs.join(" / ")||manyPorts.join(",")}）の受け取り方`,sel("__merge",mop,[
-        {v:"concat",t:"改行でつなぐ（既定）"},
-        {v:"numbered",t:"番号を振る（1. 2. …）"},
-        {v:"markdown",t:"見出しを付ける（## 名前）"},
-        {v:"csv",t:"カンマつなぎ（CSV）"},
-        {v:"json_array",t:"JSONの配列にする"}]));
-      if(["numbered","markdown","csv"].includes(mop)){
-        h+=fld("それぞれの名前（つないだ順・カンマ区切り）",
-          txt("__mlabels",((n.merge&&n.merge.labels)||[]).join(", "),srcs.join(", ")));
-        h+=`<div class="mini"><button id="mgAuto">つないだノード名を入れる</button>（空なら名前なし）</div>`;
-      }
-      if(mop==="concat")h+=fld("区切り",txt("__msep",(n.merge&&n.merge.sep)||"","\\n"));
-    }
   }
   if(n.type==="join"){
     h+=fld("まとめ方（どんな形で渡すか）",sel("op",n.op,[
@@ -2561,6 +2583,8 @@ function openNodeSheet(id){
     if(!srcs.length)delete n.merge.labels;
     syncFromCanvas();openNodeSheet(n.id);
   };
+  const mn=$("#sheetBody").querySelector('#memNow');
+  if(mn)mn.onclick=()=>{setContextWindow(1024,256);openNodeSheet(n.id);};
   const cx=$("#sheetBody").querySelector('select[data-f="__ctx"]');
   if(cx)cx.onchange=()=>{
     const v=cx.value?Number(cx.value):null;
@@ -2858,10 +2882,17 @@ async function loadFromHash(){
     return true;}
   catch(e){setHint("共有リンクを読めない: "+errText(e));return false;}
 }
-$("#spec").addEventListener("input",()=>{
-  let o;try{o=JSON.parse($("#spec").value);}catch(e){$("#vErr").textContent="⚠ JSON: "+e.message;return;}
+/* JSONタブの内容は、書いた（貼った）その場で図に反映する。
+   反映できたかどうかを必ず言う（黙って古いまま動く、を作らない） */
+function applySpecText(why){
+  let o;try{o=JSON.parse($("#spec").value);}
+  catch(e){$("#vErr").textContent="⚠ JSON: "+e.message+"（直すまで図は前のまま）";return false;}
   setSpecObj(o,{keepText:true});
-});
+  setHint(`JSONを読み込んだ: ${(o.metadata&&o.metadata.name)||"名前なし"}（ノード${(o.nodes||[]).length}・線${(o.edges||[]).length}）`);
+  return true;
+}
+$("#spec").addEventListener("input",()=>applySpecText("input"));
+$("#spec").addEventListener("change",()=>applySpecText("change"));   // 貼り付けでinputが出ない端末向け
 
 
 const setState=t=>$("#stateline").textContent="state: "+t;
@@ -3267,7 +3298,7 @@ function reportText(){
   const L=[];
   L.push("# Harness Studio 調査用メモ");
   L.push("日時: "+new Date().toISOString());
-  L.push("版: "+(document.title||""));
+  L.push("版: "+(document.title||"")+"（このページ: v"+APP_VERSION+"）");
   L.push("URL: "+location.href);
   L.push("端末: "+navigator.userAgent);
   const d=lastDiag;
@@ -3331,6 +3362,7 @@ function noteBlocked(){
   const box=$("#vErr");if(box&&box.textContent.trim())box.scrollIntoView({block:"center"});
 }
 async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec){noteBlocked();return;}
+  log("cp",`▶ 実行するハーネス: ${(spec.metadata&&spec.metadata.name)||"名前なし"}（ノード${(spec.nodes||[]).length}・線${(spec.edges||[]).length}）`);
   store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
   setRunUI(true);setState("running");
   try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}
@@ -3354,6 +3386,7 @@ $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();cle
 setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("webllm");loadEx("exW1");loadFromHash();fitView();renderTotals();renderIO();renderModels();updateStorageInfo();
 loadSiteModels().then(scanModels);        // 何が端末にあるかを最初に調べる（押さなくても分かるように）
 webgpuDiagnostics().then(d=>{lastDiag=d;}).catch(()=>{});   // 端末の対応状況（調査用メモに載せる）
+checkVersion();                                             // 古い版を握っていないか
 setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 
 /* ---- 自己テスト ---- */
@@ -3762,11 +3795,17 @@ export async function CreateMLCEngine(model,opt){
   const got=async mg=>{const r=await fullRun(mk(mg),{});return r.status==="success"?r.nodeRuns.C[0].out.value:"(失敗)";};
   const a=await got(null),b=await got({op:"numbered"}),c=await got({op:"markdown",labels:["検証","箇所"]}),
         d=await got({op:"json_array"}),e2=await got({op:"concat",sep:" / "});
-  const badMerge=validate(mk({op:"markdown"})).length===0;   // many があるので通る
-  const noMany=(()=>{const sp=mk({op:"markdown"});delete sp.nodes[3].inputs;return validate(sp).some(x=>/merge は/.test(x));})();
+  const okMerge=validate(mk({op:"markdown"})).length===0;
+  // 線が1本のノードに書いてあってもよい（あとから増やせる）。op が不正なときだけ落とす
+  const oneIn=(()=>{const sp=mk({op:"markdown"});delete sp.nodes[3].inputs;
+    sp.edges=sp.edges.filter(e=>!(e.to.node==="C"&&e.from.node==="B"));   // 線を1本にする
+    sp.nodes[2].routing=undefined;delete sp.nodes[2].routing;
+    sp.edges=sp.edges.filter(e=>e.from.node!=="B"||e.to.node!=="C");
+    return validate(sp).length===0;})();
+  const badOp=validate(mk({op:"へんな形"})).some(x=>/merge\.op/.test(x));
   ok("43 複数入力の受け取り方: 改行/番号/見出し/配列/区切り指定",
     a==="検証1\n箇所1"&&b==="1. 検証1\n2. 箇所1"&&c==="## 検証\n\n検証1\n\n## 箇所\n\n箇所1"
-    &&d==='["検証1","箇所1"]'&&e2==="検証1 / 箇所1"&&badMerge&&noMany);}
+    &&d==='["検証1","箇所1"]'&&e2==="検証1 / 箇所1"&&okMerge&&oneIn&&badOp);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
@@ -3799,18 +3838,35 @@ function openCheckpoint(cp){
   setHint("前回の続きを開いた");
 }
 /* すべての内蔵LLM providerと、モデルを選んでいるノードに「文脈の長さ」を入れる（メモリ節約） */
-function setContextWindow(n){
+function setContextWindow(n,prefill){
   const sp=Ed.spec;let touched=0;
+  const ov={context_window_size:n};if(prefill)ov.prefill_chunk_size=prefill;
   for(const[pid,def]of Object.entries(sp.providers||{})){
     if((def||{}).adapter!=="webllm")continue;
-    def.overrides=Object.assign({},def.overrides||{},{context_window_size:n});touched++;
+    def.overrides=Object.assign({},def.overrides||{},ov);touched++;
   }
   for(const nd of sp.nodes||[]){
-    if(nd.model){nd.overrides=Object.assign({},nd.overrides||{},{context_window_size:n});touched++;}
+    if(nd.model){nd.overrides=Object.assign({},nd.overrides||{},ov);touched++;}
   }
   syncFromCanvas();
-  setHint(`文脈の長さを ${n} にした（メモリが減る。長い文は入らなくなる）`);
+  setHint(`省メモリにした（文脈 ${n}${prefill?" / 一度に読む量 "+prefill:""}）。長い文章は入らなくなる`);
   return touched;
+}
+/* 配信側の版と、いま開いている版を比べる。iOSのSafariは古い版を握り続けることがある */
+const APP_VERSION=(String(document.title).match(/v(\d+\.\d+\.\d+)/)||[])[1]||"?";
+async function checkVersion(){
+  try{
+    const r=await fetch(new URL("version.json",location.href).href,{cache:"no-store"});
+    if(!r.ok)return;
+    const j=await r.json();
+    const latest=String(j.version||"").replace(/^v/,"");
+    if(!latest||latest===APP_VERSION)return;
+    const b=$("#resumeBanner");if(!b)return;
+    b.classList.add("show");
+    b.innerHTML=`新しい版がある（いま v${esc(APP_VERSION)} / 配信 v${esc(latest)}）。`
+      +`<button id="verReload">読み込み直す</button>`+b.innerHTML;
+    const rl=$("#verReload");if(rl)rl.onclick=()=>location.reload();
+  }catch(e){}
 }
 (function crashNotice(){
   const L=lastLoading();if(!L)return;
@@ -3821,7 +3877,7 @@ function setContextWindow(n){
   msg.innerHTML=`前回 <b>${esc(L.model||"モデル")}</b> の読み込み中に画面が落ちた（この端末のメモリが足りなかった可能性が高い）。`
     +`小さいモデルにするか、<b>文脈を短く</b>すると通ることがある。`;
   const b1=document.createElement("button");b1.id="memSave";b1.className="primary";b1.textContent="省メモリで試す（文脈1024）";
-  b1.onclick=()=>{setContextWindow(1024);msg.innerHTML="文脈を1024にした。もう一度ためしてみる。";b1.remove();};
+  b1.onclick=()=>{setContextWindow(1024,256);msg.innerHTML="省メモリにした（文脈1024 / 一度に読む量256）。もう一度ためしてみる。";b1.remove();};
   const b2=document.createElement("button");b2.id="memDismiss";b2.textContent="閉じる";
   b2.onclick=()=>{d.remove();msg.remove();};
   if(box&&box.parentNode){box.parentNode.insertBefore(msg,box);d.appendChild(b1);d.appendChild(b2);box.parentNode.insertBefore(d,box);}

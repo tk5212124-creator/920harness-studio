@@ -25,13 +25,12 @@ const 合流前 = {
           { from: { node: "A", port: "out" }, to: { node: "C", port: "in" } },
           { from: { node: "C", port: "out" }, to: { node: "out", port: "in" } }] };
 
-// ① 2本目を繋ぐと受け取り方を聞かれ、「まとめて受け取る」で実行できるようになる
+// ① 2本目を繋いだら、確認を出さずにそのまま受け取れる形になる
 await paste(合流前);
 await tap('.nd[data-id="B"] .port.pout');
 await tap('.nd[data-id="C"] .port.pin');
-R['① 聞かれた内容'] = (await p.textContent('#sheetBody')).replace(/\s+/g, ' ').slice(0, 70);
-ok.asked = await p.isVisible('#miMany');
-await tap('#miMany');
+R['① 繋いだ直後のお知らせ'] = (await p.textContent('#hint')).replace(/\s+/g, ' ').slice(0, 60);
+ok.noSheet = !(await p.isVisible('#sheet.show'));      // 毎回の確認シートは出さない
 const s1 = await spec();
 R['① まとめた結果'] = { 'Cの入口': s1.nodes.find(n => n.id === 'C').inputs,
   位置: s1.edges.filter(e => e.to.node === 'C').map(e => e.position), 検証: await vErr() };
@@ -101,54 +100,39 @@ R['⑥ 実行できないときの表示'] = (await p.textContent('#ioStatus')).
 ok.blockedShown = R['⑥ 実行できないときの表示'].includes('実行できない')
   && R['⑥ 実行できないときの表示'].includes('複数incoming');
 
-// ⑦ 入口が複数壊れているときは、まとめて直すボタンが出る（ユーザーの4か所エラーの再現）
-const 壊れ4 = {
-  metadata: { name: "4か所", version: "1" }, providers: { m: { adapter: "mock" } },
+// ⑦ 別々の分岐から来ている2本目は、確認を出さずに Join を1つ挟む
+const 別分岐 = {
+  metadata: { name: "別分岐", version: "1" }, providers: { m: { adapter: "mock" } },
   nodes: [{ id: "in", type: "input", routing: { mode: "parallel", failurePolicy: "fail_fast" } },
           { id: "A", type: "llm", provider: "m", mock: { tag: "A" }, routing: { mode: "parallel", failurePolicy: "fail_fast" } },
           { id: "B", type: "llm", provider: "m", mock: { tag: "B" }, routing: { mode: "parallel", failurePolicy: "fail_fast" } },
-          { id: "理由判断", type: "llm", provider: "m", mock: { echoInput: true } },
-          { id: "方法", type: "llm", provider: "m", mock: { echoInput: true } },
+          { id: "X", type: "llm", provider: "m", mock: { echoInput: true }, inputs: { in: { type: "any", cardinality: "many" } } },
+          { id: "Y", type: "llm", provider: "m", mock: { echoInput: true } },
           { id: "out", type: "output" }],
   edges: [{ from: { node: "in", port: "out" }, to: { node: "A", port: "in" } },
           { from: { node: "in", port: "out" }, to: { node: "B", port: "in" } },
-          { from: { node: "A", port: "out" }, to: { node: "理由判断", port: "in" } },
-          { from: { node: "B", port: "out" }, to: { node: "理由判断", port: "in" } },
-          { from: { node: "A", port: "out" }, to: { node: "方法", port: "in" } },
-          { from: { node: "B", port: "out" }, to: { node: "方法", port: "in" } },
-          { from: { node: "理由判断", port: "out" }, to: { node: "out", port: "in" } }] };
-await paste(壊れ4);
-R['⑦ 2か所のエラー'] = (await vErr()).slice(0, 120);
-ok.conflictDetected = R['⑦ 2か所のエラー'].includes('合流できない配線');
-ok.fixAllOffered = (await p.textContent('#vFixFanIn')).includes('2か所');
-await tap('#vFixFanIn');
-R['⑦ 出た選択肢'] = { まとめて受け取る: await p.isVisible('#miMany'), Joinでまとめる: await p.isVisible('#miJoin'),
-  注意: (await p.textContent('#sheetBody')).includes('DEADLOCK') };
-// 別々の分岐から来ているので「まとめて受け取る」は出さない（出しても実行時に揃わないため）
-ok.onlyJoin = R['⑦ 出た選択肢'].まとめて受け取る === false && R['⑦ 出た選択肢'].Joinでまとめる && R['⑦ 出た選択肢'].注意;
-await tap('#miJoin');
-await tap('#rPar');            // Join が2か所に配るので、配り方も自分で決める
-const s7 = await spec();
-const jn7 = s7.nodes.find(n => n.type === 'join');
-R['⑦ 共有したJoin'] = { id: jn7 && jn7.id, routing: jn7 && jn7.routing,
-  Joinへ: s7.edges.filter(e => jn7 && e.to.node === jn7.id).map(e => `${e.from.node}#${e.position}`),
-  Joinから: s7.edges.filter(e => jn7 && e.from.node === jn7.id).map(e => e.to.node),
-  検証: (await vErr()).trim() || '（エラーなし）' };
-ok.fixAll = R['⑦ 共有したJoin'].検証 === '（エラーなし）'
-  && R['⑦ 共有したJoin'].Joinへ.join(',') === 'A#0,B#1'
-  && R['⑦ 共有したJoin'].Joinから.sort().join(',') === ['理由判断', '方法'].sort().join(',');
-await tap('#reset');   // 前の実行の表示が残ったまま「成功」と読み違えないように
+          { from: { node: "A", port: "out" }, to: { node: "X", port: "in" }, position: 0 },
+          { from: { node: "B", port: "out" }, to: { node: "X", port: "in" }, position: 1 },
+          { from: { node: "A", port: "out" }, to: { node: "Y", port: "in" } },
+          { from: { node: "X", port: "out" }, to: { node: "out", port: "in" } }] };
+await paste(別分岐);
+await tap('.nd[data-id="B"] .port.pout');
+await tap('.nd[data-id="Y"] .port.pin');      // B → Y（A と B は別々の分岐）
+R['⑦ 繋いだ直後'] = (await p.textContent('#hint')).replace(/\s+/g, ' ').slice(0, 50);
+ok.autoJoin = !(await p.isVisible('#sheet.show')) && R['⑦ 繋いだ直後'].includes('Join');
+const s7b = await spec();
+R['⑦ できたJoin'] = { join: s7b.nodes.filter(n => n.type === 'join').map(n => n.id), 検証: (await vErr()).trim() || '（エラーなし）' };
+ok.autoJoinOk = R['⑦ できたJoin'].join.length >= 1 && R['⑦ できたJoin'].検証 === '（エラーなし）';
+await tap('#reset');
 await tap('#run');
 await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
-R['⑦ 実行'] = (await p.textContent('#stateline')).slice(0, 120);
-R['⑦ ログ末尾'] = (await p.textContent('#log')).trim().split('\n').slice(-3).join(' / ').slice(0, 200);
-ok.fixAllRun = R['⑦ 実行'].includes('success');
+R['⑦ 実行'] = (await p.textContent('#stateline')).slice(0, 40);
+ok.autoJoinRun = R['⑦ 実行'].includes('success');
 
 // ⑧ まとめて受け取ったあと、受け取り方をノード編集で変えられる
 await paste(合流前);
 await tap('.nd[data-id="B"] .port.pout');
 await tap('.nd[data-id="C"] .port.pin');
-await tap('#miMany');
 await tap('.nd[data-id="C"]');
 R['⑧ 受け取り方の選択肢'] = await p.locator('[data-f="__merge"] option').allTextContents();
 ok.mergeUI = R['⑧ 受け取り方の選択肢'].length === 5 && R['⑧ 受け取り方の選択肢'][0].includes('改行');
