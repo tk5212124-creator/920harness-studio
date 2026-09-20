@@ -769,7 +769,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト49件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2 + Join/失敗の文2 + JSON強制と取得先4 + ループ/順番5）
+node tests/harness-runtime.mjs      # 自己テスト50件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2 + Join/失敗の文2 + JSON強制と取得先4 + ループ/順番6）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体

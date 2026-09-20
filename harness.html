@@ -4445,6 +4445,26 @@ export async function CreateMLCEngine(model,opt){
   ok("49 出力ノード: 複数の入力をJSON配列／番号付きでまとめて受け取る",
     r1.status==="success"&&JSON.stringify(r1.result.value)==='["a1","b1"]'
     &&r2.status==="success"&&r2.result.value==="1. a1\n2. b1");}
+ // 50 ループの中が「ノードたちの塊」（並列＋合流）でも、周ごとに混ざらずに回る
+ {const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"lp",type:"loop",loop:{id:"lp",max:3}},
+    {id:"A",type:"llm",mock:{tag:"A"},routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"B",type:"llm",mock:{tag:"B"}},{id:"C",type:"llm",mock:{tag:"C"}},
+    {id:"D",type:"llm",mock:{echoPrompt:true},inputs:{in:{type:"any",cardinality:"many"}},merge:{op:"csv"}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"}},
+     {from:{node:"lp",port:"out"},to:{node:"A",port:"in"}},
+     {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"},
+     {from:{node:"A",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"C",port:"in"}},
+     {from:{node:"B",port:"out"},to:{node:"D",port:"in"},position:0},
+     {from:{node:"C",port:"out"},to:{node:"D",port:"in"},position:1},
+     {from:{node:"D",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}}]};
+  const r=await fullRun(sp,{in:"x"});
+  const ds=(r.nodeRuns.D||[]).filter(h=>h.status==="success").map(h=>h.out.value);
+  ok("50 ループの本体がノードの塊（並列＋合流）でも、周ごとに混ざらず3周まわる",
+    validate(sp).length===0&&r.status==="success"&&r.iterationTotal===3
+    &&ds.join("|")==="B1,C1|B2,C2|B3,C3"&&r.result.value==="B3,C3");}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
