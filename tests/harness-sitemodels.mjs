@@ -39,10 +39,9 @@ R['① パネルの表示'] = (await p.textContent('#mdlList')).includes('この
 ok.listed = R['① パネルの表示'] === true;
 
 // ② ノード編集のモデル一覧にも「このサイトから取れる」が出る
-await p.click('.nd[data-id="draft"]');
+await p.click('.nd[data-id="write"]');
 await p.waitForTimeout(300);
-R['② ノード編集の選択肢'] = (await p.locator('[data-f="__prov"] option').allTextContents()).length;
-await p.selectOption('[data-f="__prov"]', '__webllm'); await p.waitForTimeout(300);
+R['② ノード編集の選択肢'] = await p.locator('[data-f="__prov"] option').allTextContents();
 const opts = await p.locator('[data-f="model"] option').allTextContents();
 R['② モデルの選択肢'] = opts.filter(t => /SmolLM2-360M|Qwen2\.5-0\.5B-Instruct-q4f16/.test(t));
 ok.def = R['② モデルの選択肢'].some(t => t.includes('SmolLM2-360M') && t.includes('このサイトから取れる'))

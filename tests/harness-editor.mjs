@@ -22,10 +22,19 @@ async function dragBy(sel, dx, dy) {           // pointer列で掴んで動か�
   await p.mouse.up(); await p.waitForTimeout(120);
 }
 
-// ① 最初から図が出ている（例 ex1 = mock改稿ループ）
-R['① 初期描画'] = { nodes: await p.locator('.nd').count(), edges: await p.locator('#edges path.hit').count(),
-  ids: await p.$$eval('.nd .ndh', e => e.map(x => x.textContent)) };
-ok.init = R['① 初期描画'].nodes === 4 && R['① 初期描画'].edges === 4;
+// ① 最初から図が出ている。既定は「内蔵LLM直列」（mockではない）
+const spec0 = await spec();
+R['① 初期表示'] = { name: spec0.metadata.name, nodes: await p.locator('.nd').count(),
+  edges: await p.locator('#edges path.hit').count(),
+  provider: (spec0.providers.local || {}).adapter, model: (spec0.providers.local || {}).model,
+  mockを使っていない: spec0.nodes.every(n => !n.mock) };
+ok.init = R['① 初期表示'].provider === 'webllm' && R['① 初期表示'].mockを使っていない
+  && R['① 初期表示'].nodes === 3 && R['① 初期表示'].edges === 2;
+
+// 以降はノード操作の確認なので、ノード数の多い mock の例に切り替える
+await tap('#exSeg2 button[data-ex="ex1"]');
+R['①-2 切り替え後'] = { nodes: await p.locator('.nd').count(), edges: await p.locator('#edges path.hit').count() };
+ok.init2 = R['①-2 切り替え後'].nodes === 4 && R['①-2 切り替え後'].edges === 4;
 
 // ② ノードを足す（＋ノード → LLM）
 const before = await counts();

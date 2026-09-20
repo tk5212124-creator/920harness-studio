@@ -171,6 +171,9 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="vErr" id="vErr"></div></div>
 
 <div class="card"><h2>実行ログ</h2><div class="log" id="log"></div>
+<div class="row"><button id="logCopy">ログをコピー</button><button id="logSave">ログを保存</button>
+<button id="repCopy" class="primary">まとめてコピー（Spec＋ログ＋端末）</button><button id="repSave">まとめて保存</button></div>
+<div class="mini" id="logMsg">うまくいかないときは「まとめてコピー」を押して、その文をそのまま外部のLLMや相談先に貼れる（Spec・実行ログ・失敗の理由・端末の対応状況が1つに入る）。</div>
 <div class="mini">Provider は「推論する / Usageを返す / cancelに応答する / 失敗理由を返す」だけ。失敗の波及（fail_fast）は Runtime だけが判断する。</div></div>
 
 <div class="card"><h2>ストリーミング（途中tokenはdata-flowに載せない）</h2><div class="stream" id="stream"></div>
@@ -833,6 +836,9 @@ const OpenAILocalProvider={
       if(isAbort(e)||(signal&&signal.aborted))return{cancelled:true,partial};
       if(e&&e.code)throw e;
       if(oomLike(e&&e.message))throw{code:"RESOURCE_EXHAUSTED",stage:"decode",retryable:true,providerState:"needs_reset",message:errText(e)};
+      if(/GrammarMatcherInit|grammar matcher/i.test(errText(e)))
+        throw{code:"SCHEMA_VALIDATION_ERROR",stage:"decode",retryable:false,
+          message:"このモデルでは、その schema でのJSON強制を組み立てられない（"+errText(e).slice(0,120)+"）。schema を簡単にする（required だけにする等）か、schema を外して文章で受ける"};
       throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,message:"decode中断: "+errText(e)};
     }
     if(signal&&signal.aborted)return{cancelled:true,partial};
@@ -1061,7 +1067,10 @@ const WebLLMProvider={
       max_tokens:req.generation.maxTokens!=null?req.generation.maxTokens:256,
       temperature:req.generation.temperature!=null?req.generation.temperature:0.7};
     if(req.generation.topP!=null)opt.top_p=req.generation.topP;
-    if(req.schema)opt.response_format={type:"json_object"};
+    // 内蔵LLMは「JSONで縛る」を文法（grammar）で本当に強制できる。
+    // ただし type:"json_object" のときは schema を**文字列で**渡さないと
+    // GrammarMatcherInitError（Cannot pass non-string to std::string）になる。
+    if(req.schema)opt.response_format={type:"json_object",schema:JSON.stringify(req.schema)};
     let partial="",text="",usage=null,onAbort=null;
     // decode中の停止は次のchunkを待たずにengineへ伝える（in-flight cooperative cancellation）
     if(req.signal){onAbort=()=>{try{engine.interruptGenerate();}catch(_){}};
@@ -1077,6 +1086,9 @@ const WebLLMProvider={
     }catch(e){
       if(isAbort(e)||(req.signal&&req.signal.aborted))return{cancelled:true,partial};
       if(oomLike(e&&e.message))throw{code:"RESOURCE_EXHAUSTED",stage:"decode",retryable:true,providerState:"needs_reset",message:errText(e)};
+      if(/GrammarMatcherInit|grammar matcher/i.test(errText(e)))
+        throw{code:"SCHEMA_VALIDATION_ERROR",stage:"decode",retryable:false,
+          message:"このモデルでは、その schema でのJSON強制を組み立てられない（"+errText(e).slice(0,140)+"）。schema を簡単にする（required だけにする等）か、schema を外して文章で受ける"};
       throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,message:errText(e)};
     }finally{if(onAbort&&req.signal)req.signal.removeEventListener("abort",onAbort);}
     if(req.signal&&req.signal.aborted)return{cancelled:true,partial};
@@ -1643,7 +1655,7 @@ $("#wlSrcSeg").onclick=e=>{const b=e.target.closest("button");if(!b)return;wlSrc
   log("prov","WebLLM本体: "+(wlSrc==="cdn"?WEBLLM_CDN:WEBLLM_VENDOR));};
 $("#wlDiag").onclick=async()=>{
   $("#wlDiag").disabled=true;
-  try{const d=await webgpuDiagnostics();showDiag(diagnosisText(d));log("prov","端末チェック: WebGPU="+d.webgpu+" adapter="+d.adapter+" f16="+d.f16);}
+  try{const d=await webgpuDiagnostics();lastDiag=d;showDiag(diagnosisText(d));log("prov","端末チェック: WebGPU="+d.webgpu+" adapter="+d.adapter+" f16="+d.f16);}
   catch(e){showDiag("端末チェック失敗: "+errText(e));}
   finally{$("#wlDiag").disabled=false;}
 };
@@ -1692,7 +1704,10 @@ $("#writeSpec").onclick=()=>{
 
 /* --- examples --- */
 const LOCAL_PROV={local:{adapter:"openai_local",endpoint:"http://localhost:11434/v1",model:"qwen2.5:3b",generation:{maxTokens:256,temperature:0.7}}};
-const WEBLLM_PROV={local:{adapter:"webllm",model:"SmolLM2-360M-Instruct-q4f16_1-MLC",useWorker:true,indexedDB:true,generation:{maxTokens:120,temperature:0.7}}};
+/* 最初から選ばれている内蔵LLM。このサイトが配っているモデルなので、
+   HuggingFace に行かずに落とせる（重みは初回に落とすだけで、起動時には落とさない）。 */
+const DEFAULT_MODEL_ID="SmolLM2-360M-Instruct-q4f16_1-MLC";
+const WEBLLM_PROV={local:{adapter:"webllm",model:DEFAULT_MODEL_ID,useWorker:true,indexedDB:true,generation:{maxTokens:120,temperature:0.7}}};
 const EX={
  exW1:{metadata:{name:"内蔵LLM直列",version:"1"},providers:WEBLLM_PROV,
   nodes:[{id:"in",type:"input"},
@@ -2705,12 +2720,13 @@ const customById=id=>customModels.find(m=>m.id===id);
 function webllmModelOptions(){
   const out=customModels.map(m=>({v:m.id,t:m.id+"（自前）"}));
   for(const m of MODEL_CATALOG){
-    out.push({v:m.id,t:`${m.id}${mdlCache[m.id]?" ✔端末にある":(siteModelOf(m.id)?" ◎このサイトから取れる":"")}（約${m.vram}MB）`});
+    out.push({v:m.id,t:`${m.id}${m.id===DEFAULT_MODEL_ID?" ★既定":""}${mdlCache[m.id]?" ✔端末にある":(siteModelOf(m.id)?" ◎このサイトから取れる":"")}（約${m.vram}MB）`});
     if(m.f32)out.push({v:m.f32,t:`${m.f32}${mdlCache[m.f32]?" ✔端末にある":""}（f16不要・約${Math.round(m.vram*1.35)}MB）`});
   }
   return out;
 }
 const mdlCache={};       // id -> 端末にあるか（調べたものだけ）
+let lastDiag=null;       // 端末チェックの結果（調査用メモに載せる）
 /* このサイト自身が配っているモデル（models_index.json）。
    GitHub Actions がデプロイのたびに HuggingFace から取ってきて _site/models/ に入れている。
    ここから取れば HuggingFace に繋がらなくても落とせるし、同一オリジンなので速い。 */
@@ -2761,6 +2777,7 @@ function renderModels(){
     if(cached===true)tags.push('<span class="mtag on">端末にある</span>');
     if(cached===false)tags.push('<span class="mtag">未取得</span>');
     if(siteModelOf(m.id))tags.push('<span class="mtag on">このサイトから取れる</span>');
+    if(m.id===DEFAULT_MODEL_ID)tags.push('<span class="mtag on">最初から選ばれている</span>');
     if(st.status==="ready")tags.push('<span class="mtag on">起動済み</span>');
 
     const d=document.createElement("div");d.className="mrow";
@@ -2956,18 +2973,82 @@ $("#mdlPersist").onclick=async()=>{
   finally{b.disabled=false;updateStorageInfo();}
 };
 $("#mdlF32").onchange=renderModels;
-$("#mdlScan").onclick=async()=>{
-  const b=$("#mdlScan");b.disabled=true;setMdlMsg("端末の中を調べている…（初回は本体の読み込みで少し待つ）");
+/* 端末に何が入っているかを調べる。起動時にも自動で走らせる
+   （押さないと分からないと「更新したら消えた」ように見えるため） */
+async function scanModels(quiet){
+  const b=$("#mdlScan");if(b)b.disabled=true;
+  if(!quiet)setMdlMsg("端末の中を調べている…（初回は本体の読み込みで少し待つ）");
   try{
     for(const m of MODEL_CATALOG){
       mdlCache[m.id]=(await WebLLMProvider.cacheStatus(webllmDef(m.id))).cached;
       if(m.f32)mdlCache[m.f32]=(await WebLLMProvider.cacheStatus(webllmDef(m.f32))).cached;
     }
+    for(const c of customModels)mdlCache[c.id]=(await WebLLMProvider.cacheStatus(webllmDef(c.id))).cached;
     const n=Object.values(mdlCache).filter(Boolean).length;
-    setMdlMsg(n?`端末に ${n} 個ある`:"端末にはまだ1つも入っていない");
-  }catch(e){setMdlMsg("調べられない: "+((e&&e.message)||e));}
-  finally{b.disabled=false;renderModels();}
-};
+    setMdlMsg(n?`端末に ${n} 個ある（この端末の中から起動できる）`:"端末にはまだ1つも入っていない");
+  }catch(e){if(!quiet)setMdlMsg("調べられない: "+errText(e));}
+  finally{if(b)b.disabled=false;renderModels();}
+}
+$("#mdlScan").onclick=()=>scanModels(false);
+/* ---- 調べるための出力（コピー / 保存）------------------------------------
+   画面を選択してコピーさせない。必要な情報を1つの文にまとめて渡せるようにする。 */
+function logText(){return $("#log").textContent.replace(/\n{3,}/g,"\n\n").trim();}
+function reportText(){
+  const L=[];
+  L.push("# Harness Studio 調査用メモ");
+  L.push("日時: "+new Date().toISOString());
+  L.push("版: "+(document.title||""));
+  L.push("URL: "+location.href);
+  L.push("端末: "+navigator.userAgent);
+  const d=lastDiag;
+  L.push("WebGPU: "+(d?`${d.webgpu?"あり":"なし"} / adapter=${d.adapter} / shader-f16=${d.f16}`:"（未確認・「接続の確認」の端末チェックで分かる）"));
+  L.push("このサイトが配るモデル: "+(siteModels.length?siteModels.map(m=>m.id+"("+m.mb+"MB)").join(", "):"なし"));
+  L.push("端末にあるモデル: "+(Object.entries(mdlCache).filter(([,v])=>v).map(([k])=>k).join(", ")||"（無し・未確認）"));
+  L.push("");
+  L.push("## 状態");
+  L.push($("#stateline").textContent);
+  const st=$("#ioStatus");if(st&&st.textContent.trim())L.push(st.textContent.trim());
+  const ve=$("#vErr");if(ve&&ve.textContent.trim())L.push("検証: "+ve.textContent.trim());
+  if(cur&&(cur.errors||[]).length)L.push("失敗: "+JSON.stringify(cur.errors,null,1));
+  L.push("");
+  L.push("## 入力");
+  L.push(JSON.stringify(inputForRun(),null,1));
+  L.push("");
+  L.push("## 実行ログ");
+  L.push(logText()||"（まだ無い）");
+  L.push("");
+  L.push("## Spec（HSL）");
+  try{L.push(specToHSL(Ed.spec).trim());}catch(e){L.push("（書き出せない: "+errText(e)+"）");}
+  L.push("");
+  L.push("## Spec（JSON）");
+  L.push($("#spec").value.trim());
+  return L.join("\n")+"\n";
+}
+async function copyOut(text,label){
+  try{await navigator.clipboard.writeText(text);$("#logMsg").textContent=label+"をコピーした（そのまま貼れる）";}
+  catch(e){
+    // クリップボードが使えない端末では、選べる形で出す
+    const ta=document.createElement("textarea");ta.value=text;
+    ta.style.cssText="position:fixed;left:8px;right:8px;bottom:8px;height:40vh;z-index:99";
+    document.body.appendChild(ta);ta.select();
+    try{document.execCommand("copy");$("#logMsg").textContent=label+"をコピーした";}
+    catch(_){$("#logMsg").textContent="コピーできないので、下の枠から選んでコピーしてください";}
+    setTimeout(()=>ta.remove(),8000);
+  }
+}
+function saveOut(text,name){
+  const b=new Blob([text],{type:"text/plain;charset=utf-8"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download=name;
+  document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
+  $("#logMsg").textContent=name+" を保存した";
+}
+const stamp=()=>new Date().toISOString().replace(/[:.]/g,"-").slice(0,19);
+$("#logCopy").onclick=()=>copyOut(logText()||"（ログは空）","実行ログ");
+$("#logSave").onclick=()=>saveOut(logText()||"（ログは空）","harness-log-"+stamp()+".txt");
+$("#repCopy").onclick=()=>copyOut(reportText(),"調査用メモ");
+$("#repSave").onclick=()=>saveOut(reportText(),"harness-report-"+stamp()+".txt");
+
 /* 実行できない理由を、押した場所のすぐそばに出す（「押しても動かない」を作らない） */
 function noteBlocked(){
   let errs=[];try{errs=validate(JSON.parse($("#spec").value));}catch(e){errs=["JSONとして読めない: "+errText(e)];}
@@ -3000,7 +3081,9 @@ const doCancel=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要
 $("#cancel").onclick=doCancel;$("#cancelTop").onclick=doCancel;
 $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
-setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");loadFromHash();fitView();renderTotals();renderIO();renderModels();updateStorageInfo();loadSiteModels();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
+setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("webllm");loadEx("exW1");loadFromHash();fitView();renderTotals();renderIO();renderModels();updateStorageInfo();
+loadSiteModels().then(scanModels);        // 何が端末にあるかを最初に調べる（押さなくても分かるように）
+setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 
 /* ---- 自己テスト ---- */
 const enc=s=>new TextEncoder().encode(s);
@@ -3183,6 +3266,7 @@ export async function CreateMLCEngine(model,opt){
   if(opt&&opt.initProgressCallback)opt.initProgressCallback({progress:0.5,text:"stub 50%"});
   return {interruptGenerate(){globalThis.__wllmInterrupt=(globalThis.__wllmInterrupt||0)+1;},
     chat:{completions:{async create(o){
+      globalThis.__wllmLastOpt=o;
       const toks=globalThis.__wllmTokens||["A","B","C"];const delay=globalThis.__wllmDelay||0;
       return (async function*(){
         for(const t of toks){if(delay)await new Promise(r=>setTimeout(r,delay));yield{choices:[{delta:{content:t}}]};}
@@ -3201,6 +3285,7 @@ export async function CreateMLCEngine(model,opt){
   if(!url){
     const why=(typeof navigator!=="undefined"&&navigator.gpu)?"stubモジュールをimportできない環境":"navigator.gpu が無い環境";
     skip("27 webllm: streaming/usage",why);skip("28 webllm: decode中cancel→interruptGenerate",why);
+    skip("36 webllm: response_format.schema",why);skip("37 webllm: schema無しでは付けない",why);
   }else{
     globalThis.__wllmTokens=["ブ","ラ","ウ","ザ"];globalThis.__wllmDelay=0;globalThis.__wllmInterrupt=0;
     ModelManager.reset();
@@ -3215,6 +3300,20 @@ export async function CreateMLCEngine(model,opt){
     ok("28 webllm: decode中cancel→interruptGenerate呼出・cancelled・出力は配送しない",
       run.status==="cancelled"&&globalThis.__wllmInterrupt>=1&&!!rec&&rec.status==="cancelled"
       &&run.errors.length===0&&run.deliveries.filter(d=>d.fromNodeId==="a").length===0);
+    // 36 JSONで縛るときは schema を文字列で渡す（渡さないと GrammarMatcherInitError になる）
+    globalThis.__wllmTokens=['{"score": 9}'];globalThis.__wllmDelay=0;globalThis.__wllmLastOpt=null;
+    ModelManager.reset();
+    const spJ=wspec(url);spJ.nodes[1].schema={type:"object",required:["score"]};
+    const rJ=await fullRun(spJ,{});
+    const rf=(globalThis.__wllmLastOpt||{}).response_format||{};
+    ok("36 webllm: JSON強制は response_format.schema を文字列で渡す",
+      rJ.status==="success"&&rf.type==="json_object"&&typeof rf.schema==="string"
+      &&JSON.parse(rf.schema).required[0]==="score");
+    globalThis.__wllmTokens=["ふつうの文章"];globalThis.__wllmLastOpt=null;ModelManager.reset();
+    const spT=wspec(url);
+    await fullRun(spT,{});
+    ok("37 webllm: schemaが無いときは response_format を付けない",
+      !(globalThis.__wllmLastOpt||{}).response_format);
   }}
  // 29 HSL: 全ての例で 書き出し→読み込み が往復する
  {const bad=[];

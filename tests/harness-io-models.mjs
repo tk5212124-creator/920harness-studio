@@ -28,10 +28,10 @@ const tap = async sel => { await p.locator(sel).first().tap(); await p.waitForTi
 const spec = () => p.evaluate(() => JSON.parse(document.querySelector('#spec').value));
 const paste = async obj => { await tap('#btnImport'); await p.fill('#imText', JSON.stringify(obj)); await tap('#imGo'); await tap('#imApply'); };
 
-// ① 最初から入力欄と出力欄がノードに対応して出る（例 ex1 は in と result）
+// ① 最初から入力欄と出力欄がノードに対応して出る（既定の例は in と out）
 R['① 初期'] = { 入力欄: await p.$$eval('#ioIn [data-in]', e => e.map(x => x.dataset.in)),
   出力欄: await p.$$eval('#ioOut [data-out]', e => e.map(x => x.dataset.out)) };
-ok.init = JSON.stringify(R['① 初期']) === JSON.stringify({ 入力欄: ['in'], 出力欄: ['result'] });
+ok.init = JSON.stringify(R['① 初期']) === JSON.stringify({ 入力欄: ['in'], 出力欄: ['out'] });
 
 // ② 入力欄に書いた文字がそのまま実行に渡り、結果が出力欄に出る
 await paste({ metadata: { name: "入出力", version: "1" }, providers: { m: { adapter: "mock" } },

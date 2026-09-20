@@ -1,0 +1,78 @@
+# 本物のモデルで推論できるかを、実際に動かして確かめる。
+# Claude Code の実行環境からは HuggingFace に届かないので、ここ（GitHub Actions）で走らせる。
+# GPUは無く swiftshader（CPUでのWebGPU）なので遅いが、
+# 「GrammarMatcherInitError で落ちる」ような事故はここで捕まえられる。
+name: Real local LLM check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'harness.html'
+      - 'vendor/**'
+      - 'tests/harness-real-llm.mjs'
+      - '.github/workflows/real-llm.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  real:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Playwright と Chromium を入れる
+        run: |
+          set -e
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund playwright@1.49.0
+          npx playwright install --with-deps chromium
+
+      - name: モデルの置き場をキャッシュから戻す
+        id: mcache
+        uses: actions/cache@v4
+        with:
+          path: .modelcache
+          key: mlc-models-${{ hashFiles('models.txt') }}
+
+      - name: モデルを取ってくる
+        if: steps.mcache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          python -m pip install --quiet --upgrade huggingface_hub
+          python tools/models.py fetch
+
+      - name: 取れているか確かめる
+        run: |
+          set -e
+          d=.modelcache/SmolLM2-360M-Instruct-q4f16_1-MLC
+          ls -la "$d" | head -20
+          test -s "$d/mlc-chat-config.json"
+          test -s "$d/ndarray-cache.json"
+          test -n "$(ls "$d"/params_shard_*.bin 2>/dev/null)"
+          test -z "$(find "$d" -type f -size 0)"
+          du -sh "$d"
+
+      - name: 本物のモデルで推論する（素の生成 / JSON強制）
+        env:
+          MODEL_DIR: .modelcache/SmolLM2-360M-Instruct-q4f16_1-MLC
+          MODEL_ID: SmolLM2-360M-Instruct-q4f16_1-MLC
+        run: |
+          set -e
+          export MODEL_DIR="$PWD/$MODEL_DIR"
+          node tests/harness-real-llm.mjs
+
+      - name: 重みを Git に入れていないことを確かめる
+        run: |
+          set -e
+          if git ls-files | grep -E '\.(bin|safetensors|wasm)$' | grep -v '^vendor/' | grep -q .; then
+            echo "::error::重みが Git に入っている"; git ls-files | grep -E '\.(bin|safetensors)$'; exit 1
+          fi
+          echo "OK: 重みは Git に入っていない"
