@@ -84,7 +84,7 @@ const run = async (schema) => p.evaluate(async ({ id, schema, port }) => {
     const t1 = Date.now();
     const r = await PROVIDERS.webllm.invoke({
       input: { messages: [{ role: 'user', content: schema ? '5点満点で3点の評価をJSONで返して' : 'Say hello in one short sentence.' }] },
-      model: id, generation: { maxTokens: 40, temperature: 0 }, schema, handle, onToken: () => {} });
+      model: id, generation: { maxTokens: 120, temperature: 0 }, schema, handle, onToken: () => {} });
     return { ok: true, loadMs, genMs: Date.now() - t1, out: r.output, usage: r.usage };
   } catch (e) { return { ok: false, code: e.code, message: String(e.message || e).slice(0, 300), ms: Date.now() - t0 }; }
 }, { id: MODEL_ID, schema: schema || null, port: PORT });
@@ -94,7 +94,7 @@ R['① 素の生成'] = await run(null);
 ok.plain = R['① 素の生成'].ok === true && R['① 素の生成'].out.type === 'text' && R['① 素の生成'].out.value.length > 0;
 
 // ② JSON強制（実機で GrammarMatcherInitError が出たところ）
-R['② JSON強制'] = await run({ type: 'object', required: ['score'], properties: { score: {} } });
+R['② JSON強制'] = await run({ type: 'object', required: ['score'], properties: { score: { type: 'integer' } } });
 ok.json = R['② JSON強制'].ok === true && R['② JSON強制'].out.type === 'json'
   && R['② JSON強制'].out.value.score !== undefined;
 

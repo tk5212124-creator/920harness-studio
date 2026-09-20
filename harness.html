@@ -817,18 +817,19 @@ const OpenAILocalProvider={
     try{resp=await f(this.base(def)+"/chat/completions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal});}
     catch(e){if(isAbort(e))return{cancelled:true,partial:""};throw{code:"PROVIDER_ERROR",stage:"prefill",retryable:true,message:"リクエスト失敗: "+errText(e)};}
     if(!resp.ok){let t="";try{t=await resp.text();}catch(_){}throw mapHttpError(resp.status,t);}
-    let text="",usage=null,partial="";
+    let text="",usage=null,partial="",fin=null;
     if(!body.stream){
       let j;try{j=await resp.json();}catch(e){throw{code:"PROVIDER_ERROR",retryable:false,message:"JSON応答が壊れている"};}
       text=((j.choices||[{}])[0].message||{}).content||"";usage=j.usage||null;
-      return this.finish(text,usage,req,j);
+      return this.finish(text,usage,req,j,((j.choices||[{}])[0]||{}).finish_reason);
     }
     try{
       await readSSE(resp,ev=>{
         if(ev==="[DONE]")return;
         let j;try{j=JSON.parse(ev);}catch(_){return;}
         if(j.usage)usage=j.usage;
-        const d=((j.choices||[])[0]||{}).delta||{};
+        const c0=((j.choices||[])[0]||{});if(c0.finish_reason)fin=c0.finish_reason;
+        const d=c0.delta||{};
         if(typeof d.content==="string"&&d.content){partial+=d.content;text+=d.content;req.onToken&&req.onToken(d.content);}
         const err=j.error;if(err)throw mapHttpError(500,err.message||JSON.stringify(err));
       },signal);
@@ -842,12 +843,16 @@ const OpenAILocalProvider={
       throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,message:"decode中断: "+errText(e)};
     }
     if(signal&&signal.aborted)return{cancelled:true,partial};
-    return this.finish(text,usage,req,null);
+    return this.finish(text,usage,req,null,fin);
   },
-  finish(text,usage,req,raw){
+  finish(text,usage,req,raw,finishReason){
     const u={apiCalls:1,inputTokens:usage&&usage.prompt_tokens!=null?usage.prompt_tokens:null,
       outputTokens:usage&&usage.completion_tokens!=null?usage.completion_tokens:null,cost:null};
     if(req.schema){
+      // maxTokens で切れていると JSON は必ず閉じない。原因が違うので別の文にする
+      if(finishReason==="length")throw{code:"SCHEMA_VALIDATION_ERROR",retryable:false,
+        message:`途中で切れた（maxTokens ${req.generation&&req.generation.maxTokens!=null?req.generation.maxTokens:256} に達した）ので JSON が閉じていない。`
+          +`maxTokens を増やすか、schema を小さくする。ここまで: ${String(text).slice(0,80)}`};
       let v;try{v=JSON.parse(stripFence(text));}catch(e){throw{code:"SCHEMA_VALIDATION_ERROR",retryable:false,
         message:`JSONとして読めない（モデルはこう返した: ${String(text).slice(0,120)}）。`
           +"小さいモデルは形を外しやすい: prompt の suffix に「JSONだけを出す」と書く / schema を簡単にする / 大きめのモデルにする"};}
@@ -1075,7 +1080,7 @@ const WebLLMProvider={
     // ただし type:"json_object" のときは schema を**文字列で**渡さないと
     // GrammarMatcherInitError（Cannot pass non-string to std::string）になる。
     if(req.schema)opt.response_format={type:"json_object",schema:JSON.stringify(req.schema)};
-    let partial="",text="",usage=null,onAbort=null;
+    let partial="",text="",usage=null,onAbort=null,finish=null;
     // decode中の停止は次のchunkを待たずにengineへ伝える（in-flight cooperative cancellation）
     if(req.signal){onAbort=()=>{try{engine.interruptGenerate();}catch(_){}};
       req.signal.addEventListener("abort",onAbort,{once:true});if(req.signal.aborted)onAbort();}
@@ -1084,7 +1089,9 @@ const WebLLMProvider={
       for await(const chunk of stream){
         if(req.signal&&req.signal.aborted)return{cancelled:true,partial};
         if(chunk.usage)usage=chunk.usage;
-        const d=((chunk.choices||[])[0]||{}).delta||{};
+        const c0=(chunk.choices||[])[0]||{};
+        if(c0.finish_reason)finish=c0.finish_reason;      // length なら maxTokens で切れている
+        const d=c0.delta||{};
         if(typeof d.content==="string"&&d.content){partial+=d.content;text+=d.content;req.onToken&&req.onToken(d.content);}
       }
     }catch(e){
@@ -1096,7 +1103,7 @@ const WebLLMProvider={
       throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,message:errText(e)};
     }finally{if(onAbort&&req.signal)req.signal.removeEventListener("abort",onAbort);}
     if(req.signal&&req.signal.aborted)return{cancelled:true,partial};
-    return OpenAILocalProvider.finish(text,usage,req,null);
+    return OpenAILocalProvider.finish(text,usage,req,null,finish);
   },
   // 端末に保存済みかを見る／消す（モデルは数百MBなので出し入れできるようにする）
   async cacheStatus(def){
@@ -1847,7 +1854,22 @@ function addSchemaFor(id){
       while((m=re.exec(String(src))))fields.add(m[1]);}}
   if(!fields.size)return setHint(id+" が読まれている項目を見つけられなかった");
   const f=[...fields];
-  n.schema={type:"object",required:f,properties:Object.fromEntries(f.map(k=>[k,{}]))};
+  // その項目が式の中でどう比べられているかから、型を決める
+  //  （型を書かないと、文法で縛っても 5.000000000000000005… のような長い数を延々と出して切れる）
+  const typeOf=k=>{
+    const pat=new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*\\.\\s*out\\s*\\.\\s*"+k+"\\s*(==|!=|<=|>=|<|>)\\s*([^\\s&|)]+)","g");
+    for(const e of Ed.spec.edges||[]){
+      for(const src of [e.if,e.loop&&e.loop.until]){if(!src)continue;let m;pat.lastIndex=0;
+        while((m=pat.exec(String(src)))){
+          const v=m[2];
+          if(/^-?\d+$/.test(v))return{type:"integer"};
+          if(/^-?\d*\.\d+$/.test(v))return{type:"number"};
+          if(/^["']/.test(v))return{type:"string"};
+          if(/^(true|false)$/.test(v))return{type:"boolean"};
+        }}}
+    return {};
+  };
+  n.schema={type:"object",required:f,properties:Object.fromEntries(f.map(k=>[k,typeOf(k)]))};
   // 何を返すかをLLMにも伝える（schema だけだと小さいモデルは従いにくい）
   const ask=`必ず JSON だけで答える。形式: {${f.map(k=>`"${k}": …`).join(", ")}}`;
   n.prompt=n.prompt||{};
@@ -3398,6 +3420,13 @@ export async function CreateMLCEngine(model,opt){
   // 条件式が out.<項目> を見ているのに schema が緩い場合は実行時に理由が出る
   ok("35 失敗の文: 何が読めなかったかを言う・[object Object] を出さない",
     r.status==="failed"&&r.errors[0].kind==="REFERENCE_ERROR"&&/あるのは: note/.test(msg)&&msg.includes("c.out.score")&&noObj);}
+ // 38 JSONで縛ったのに maxTokens で切れたら、その理由を言う
+ {let caught=null;
+  try{OpenAILocalProvider.finish('{"score": 5',null,{schema:{type:"object"},generation:{maxTokens:40}},null,"length");}
+  catch(e){caught=e;}
+  const m=(caught||{}).message||"";
+  ok("38 JSON: maxTokensで切れたときは「切れた」と言う（読めないとは言わない）",
+    !!caught&&caught.code==="SCHEMA_VALIDATION_ERROR"&&m.includes("maxTokens 40")&&m.includes("途中で切れた"));}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

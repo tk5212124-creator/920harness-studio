@@ -130,6 +130,14 @@ WebLLM に `response_format: {type:"json_object", schema:"<schemaのJSON文字�
 （実機で出た事故。v0.13.0 で修正）。組み立てられない schema のときは、
 `SCHEMA_VALIDATION_ERROR` として「schema を簡単にする / 外して文章で受ける」まで出す。
 
+**途中で切れたときは「切れた」と言う。** `maxTokens` に達すると JSON は必ず閉じないので、
+`読めない` ではなく `途中で切れた（maxTokens 120 に達した）` と出す（直し方が違うため）。
+
+**schema を自動で作るときは型も決める。** 条件式が `critic.out.score >= 8` のように
+数と比べていれば `{"type":"integer"}` にする。型を書かないと、文法で縛っても
+`5.00000000000000050000000000000000…` のような長い数を出し続けて `maxTokens` で切れる
+（実際に起きた。CIの実推論で確認）。
+
 ### 合流できる配線・できない配線（実行時にDEADLOCKにしないための規則）
 
 Runtime は **同じ分岐グループから出た Delivery しか1つの Execution に揃えない**
@@ -739,6 +747,22 @@ MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデ�
 - 29–31: HSL の往復（全例ロスレス / 未知キー保持 / 壊れた記述は行番号付きで拒否）
 - 32–33: **合流の可否**（別々の分岐からの合流は静的にエラー / Joinを1つ共有した形は実際に流れる）
 - 34–35: **Joinのまとめ方**（markdown / csv / キー付き・必ず付ける文）と**失敗の文**（何が読めなかったかを言う）
+
+### 本物のモデルでの確認（GitHub Actions）
+
+`.github/workflows/real-llm.yml` が、**実際に重みを取って推論する**。
+Claude Code の実行環境からは HuggingFace に届かないので、ここで走らせている。
+
+| 見るもの | 結果（run #2 / 2026-09-20） |
+|---|---|
+| HuggingFace への到達（runner） | ✔ 到達できる |
+| モデル取得（SmolLM2-360M） | ✔ 198MB（q4f16）/ q4f32 はCI用 |
+| WebGPU（GPUの無い機械） | `--enable-unsafe-webgpu --use-angle=swiftshader --enable-features=Vulkan` で adapter が取れる（`shader-f16` は無いので **CIは q4f32 版**） |
+| 素の生成 | ✔ 成功（load 1.9秒 / 生成は CPU実装のため 806秒） |
+| JSON強制（schema付き） | ✔ **GrammarMatcherInitError は出ない**（v0.13.0の修正が効いている）。<br>ただし `maxTokens 40` では長い小数で切れた → 「途中で切れた」と言うようにし、schema に型を付けるようにした |
+| 重みが Git に入っていないこと | ✔ |
+
+GPUのある実機（iPhoneなど）での速度・OOM・実decode中cancelは、**ここでは分からない**。
 
 ### 確認できていないこと
 
