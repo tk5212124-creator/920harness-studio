@@ -133,6 +133,18 @@ R['⑩ 通信が止まる端末'] = { 待った秒数: Math.round((Date.now() - 
 ok.noHang = R['⑩ 通信が止まる端末'].待った秒数 < 50 && R['⑩ 通信が止まる端末'].結果.includes('✗')
   && R['⑩ 通信が止まる端末'].ボタン === '押せる' && R['⑩ 通信が止まる端末'].行に残る.includes('✗');
 
+// ⑪ 同梱ファイルが配信されていない（404）ときに、そうと分かる文言を出す
+//    ＝ Pages に vendor/ を入れ忘れた事故の再発防止。まっさらなページで確かめる
+const p2 = await ctx.newPage();
+await p2.route('**/vendor/web-llm/index.js', route => route.fulfill({ status: 404, contentType: 'text/html', body: '<html>404</html>' }));
+await p2.goto(`http://127.0.0.1:${srv.address().port}/harness.html`);
+await p2.waitForFunction(() => window.__selfTest, null, { timeout: 30000 });
+await p2.locator('#mdlList .mrow:nth-child(1) button[data-act="get"]').tap();
+await p2.waitForFunction(() => /✗/.test(document.querySelector('#mdlMsg').textContent), null, { timeout: 40000 });
+R['⑪ 同梱ファイルが404'] = (await p2.textContent('#mdlMsg')).replace(/\s+/g, ' ').slice(0, 140);
+ok.missingVendor = /404/.test(R['⑪ 同梱ファイルが404']) && /配信されていない/.test(R['⑪ 同梱ファイルが404']);
+await p2.close();
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

@@ -29,6 +29,11 @@ jobs:
           cp harness.html _site/index.html
           cp harness.html _site/harness.html
           cp -r docs _site/docs
+          cp -r vendor _site/vendor
+          # 内蔵LLMの本体が配信物に入っていなければ、ここで落とす
+          # （入れ忘れると端末側は「Importing a module script failed」になるだけで原因が分からない）
+          test -s _site/vendor/web-llm/index.js
+          echo "_site の中身:"; find _site -maxdepth 2 -type f | sort
       - uses: actions/configure-pages@v5
         with:
           enablement: true

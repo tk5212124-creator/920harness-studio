@@ -830,6 +830,16 @@ function webllmModuleUrl(def){
   if(def.moduleSource==="cdn")return WEBLLM_CDN;
   return (typeof location!=="undefined")?new URL(WEBLLM_VENDOR,location.href).href:WEBLLM_VENDOR;
 }
+// 「読み込めない」で終わらせず、そのURLが実際に何を返しているかを見て理由を特定する
+async function diagnoseModuleUrl(url){
+  try{
+    const r=await withTimeout(fetch(url,{method:"HEAD",cache:"no-store"}),8000,()=>new Error("確認も時間切れ"));
+    if(!r.ok)return `HTTP ${r.status}｜このページに同梱ファイルが配信されていない（配信物に vendor/ が入っていない可能性）`;
+    const ct=(r.headers.get("content-type")||"").toLowerCase();
+    if(ct.includes("html"))return "JavaScriptではなくHTMLが返っている（404ページの可能性）";
+    return `HTTP ${r.status} / ${ct||"型不明"} は返るのに、モジュールとして読み込めない`;
+  }catch(e){return "取得そのものができない: "+((e&&e.message)||e);}
+}
 async function loadWebLLMModule(url,timeoutMs){
   if(_webllmMods[url])return _webllmMods[url];
   const ms=timeoutMs||30000;
@@ -838,9 +848,10 @@ async function loadWebLLMModule(url,timeoutMs){
   catch(e){
     if(e&&e.code)throw e;
     const local=/^file:/.test(String(url));
+    const why=local?"file:// で開くと同梱版はimportできない。CDNに切り替えるか、http(s)で配信されたページを使う"
+                   :await diagnoseModuleUrl(url);
     throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,
-      message:`WebLLM本体を読み込めない (${url}): ${e.message||e}`+
-        (local?"｜file:// で開くと同梱版はimportできない。CDNに切り替えるか、http(s)で配信されたページを使う":"")};
+      message:`WebLLM本体を読み込めない: ${why}（${url}）`};
   }
   return _webllmMods[url];
 }
@@ -957,7 +968,12 @@ const WebLLMProvider={
       clearInterval(stallIv);
       if(worker)try{worker.terminate();}catch(_){}
       if(isAbort(e))throw e;
-      if(e&&e.code)throw e;
+      if(e&&e.code){
+        // Worker の中で落ちると理由が出ないことがある。本体URLが何を返しているかを足す
+        if(/Worker内でエラー|Workerが\d+秒/.test(e.message||"")&&!/HTTP|配信/.test(e.message||""))
+          e.message+=`｜本体URLの状態: ${await diagnoseModuleUrl(url)}`;
+        throw e;
+      }
       throw mapWebLLMError(e,def);
     }
   },
