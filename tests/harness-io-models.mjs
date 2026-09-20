@@ -145,6 +145,30 @@ R['⑪ 同梱ファイルが404'] = (await p2.textContent('#mdlMsg')).replace(/\
 ok.missingVendor = /404/.test(R['⑪ 同梱ファイルが404']) && /配信されていない/.test(R['⑪ 同梱ファイルが404']);
 await p2.close();
 
+// ⑫ 出力に届かなかったとき、出力欄に理由が出る（「まだ実行していない」のままにしない）
+await paste({ metadata: { name: "途中で失敗", version: "1" }, providers: { m: { adapter: "mock" } },
+  nodes: [{ id: "in", type: "input" }, { id: "a", type: "llm", provider: "m", mock: { fail: "generic" } }, { id: "res", type: "output" }],
+  edges: [{ from: { node: "in", port: "out" }, to: { node: "a", port: "in" } },
+          { from: { node: "a", port: "out" }, to: { node: "res", port: "in" } }] });
+await tap('#run');
+await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
+R['⑫ 届かなかった出力'] = { 出力欄: (await p.textContent('#ioOut [data-out="res"]')).replace(/\s+/g, ' ').slice(0, 70),
+  状態行: (await p.textContent('#ioStatus')).replace(/\s+/g, ' ').slice(0, 70) };
+ok.outReason = R['⑫ 届かなかった出力'].出力欄.includes('届かなかった') && R['⑫ 届かなかった出力'].出力欄.includes('a')
+  && R['⑫ 届かなかった出力'].状態行.includes('PROVIDER_ERROR');
+
+// ⑬ Gemma は窓サイズの上書きを付けて使う（両方が正だと起動できないため）
+await tap('#mdlList .mrow:nth-child(2) button[data-act="use"]');
+const s13 = await spec();
+R['⑬ Gemmaのoverrides'] = s13.providers.local;
+ok.gemmaOverride = /gemma/.test(s13.providers.local.model) && s13.providers.local.overrides
+  && s13.providers.local.overrides.sliding_window_size === -1;
+
+// ⑭ 保存先の状況が出る
+await p.waitForFunction(() => /使用|保存/.test(document.querySelector('#mdlStore').textContent), null, { timeout: 10000 });
+R['⑭ 保存状況'] = (await p.textContent('#mdlStore')).slice(0, 60);
+ok.storage = /使用 \d+MB/.test(R['⑭ 保存状況']) && /長期保存/.test(R['⑭ 保存状況']);
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

@@ -98,6 +98,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 
 <div class="card" style="margin-bottom:16px"><h2>入出力</h2>
 <div id="ioIn"></div>
+<div class="mini" id="ioStatus"></div>
 <div id="ioOut"></div>
 <div class="mini">入力ノード・出力ノードを足したり消したりすると、ここも増えたり減ったりする。入力は「ノードの名前」で渡る。</div>
 </div>
@@ -107,7 +108,8 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <label class="ck"><input type="checkbox" id="mdlF32">f16非対応の端末向け（q4f32）も出す</label></div>
 <div id="mdlList"></div>
 <div class="bar"><i id="mdlBar"></i></div>
-<div class="mini" id="mdlMsg">Gemma / Qwen / Llama をこの端末に落として動かす。初回だけダウンロードし、以降は端末の中から起動する（サーバもAPIキーも要らない）。</div>
+<div class="row"><button id="mdlPersist">消えないようにする</button><span class="mini" id="mdlStore"></span></div>
+<div class="mini" id="mdlMsg">Gemma / Qwen / Llama をこの端末に落として動かす。初回だけダウンロードし、以降は端末の中から起動する（サーバもAPIキーも要らない）。保存先はこのサイトのブラウザ内ストレージで、<b>アプリを更新しても消えない</b>。</div>
 </div>
 
 <div class="card" style="margin-bottom:16px"><h2>Provider（ローカルLLM）</h2>
@@ -558,7 +560,9 @@ function reviewSpec(spec){
       if(!t&&!(n.prompt&&n.prompt.system))add("warn","プロンプトが空。前のノードの出力がそのまま渡る",n.id);
       if(!(n.generation&&n.generation.maxTokens!=null))add("info","maxTokens 未設定。ローカルLLMだと長く出力し続けることがある",n.id);
       if(n.provider){const def=(spec.providers||{})[n.provider];
-        if(def&&def.adapter!=="mock"&&!def.model&&!n.model)add("error",`provider "${n.provider}" にモデルが無い`,n.id);}
+        if(def&&def.adapter!=="mock"&&!def.model&&!n.model)add("error",`provider "${n.provider}" にモデルが無い`,n.id);
+        if(def&&def.adapter==="webllm"&&n.schema)
+          add("info","端末内の小さいモデルはJSONを外しやすい。守れないと SCHEMA_VALIDATION_ERROR で止まる（suffix に「JSONだけ出力」と書くか、schema を外して meta.len で判定する手もある）",n.id);}
     }
     if(n.type==="join"){
       const card=n.inputs&&n.inputs.items&&n.inputs.items.cardinality;
@@ -898,6 +902,10 @@ function mapWebLLMError(e,def){
     return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"この端末は shader-f16 に非対応。q4f32 のモデルを選ぶ: "+msg};
   if(/Unable to find model record|not found in model_list|Cannot find model/i.test(msg))
     return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:false,message:`モデルID "${def&&def.model}" が一覧に無い: `+msg};
+  if(/WindowSizeConfigurationError|sliding_window_size/i.test(msg))
+    return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:false,
+      message:"このモデルは窓サイズの設定が衝突している（context_window_size と sliding_window_size の両方が正）。"+
+        "providers.local の overrides に {\"sliding_window_size\":-1} を入れると通る: "+msg};
   if(/quota|storage|QuotaExceeded/i.test(msg))
     return{code:"RESOURCE_EXHAUSTED",stage:"model_load",retryable:true,providerState:"needs_reset",message:"端末の保存容量が足りない: "+msg};
   if(oomLike(msg))
@@ -916,6 +924,10 @@ const WebLLMProvider={
     onProgress&&onProgress({progress:0.02,text:"WebLLM本体を読み込み中"});
     const m=await loadWebLLMModule(url);
     const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
+    // モデルごとの上書き（例: gemma3 は context_window_size と sliding_window_size が衝突する）
+    if(def.overrides&&appConfig.model_list)
+      appConfig.model_list=appConfig.model_list.map(r=>r.model_id===def.model
+        ?Object.assign({},r,{overrides:Object.assign({},r.overrides||{},def.overrides)}):r);
     // 進み具合を見張る。一定時間まったく進まなければ「進まない」と伝えて打ち切る
     const stallMs=def.stallMs||120000;
     let lastAt=Date.now(),stallIv=null;
@@ -2271,14 +2283,31 @@ function renderIO(){
       wo.appendChild(l);
     }
   }
+  const st=$("#ioStatus");
+  if(st){
+    if(!cur)st.textContent="";
+    else if(cur.status==="running"||cur.status==="cancelling")st.textContent=`実行中… ${Object.values(cur.nodeRuns||{}).length}ノード目`;
+    else if(cur.status==="success")st.textContent="実行できた";
+    else{const e=(cur.errors||[])[0];
+      st.textContent=`実行は ${cur.status}`+(e?` — ${e.node||""}: ${e.kind||""} ${(e.message||"").slice(0,90)}`:"");}
+    st.style.color=(cur&&cur.status==="failed")?"var(--err)":"var(--sub)";
+  }
   for(const n of outs){
     const el=$("#ioOut").querySelector(`[data-out="${CSS.escape(n.id)}"]`);if(!el)continue;
     const hist=(cur&&cur.nodeRuns&&cur.nodeRuns[n.id])||[];
     const last=hist.filter(h=>h.status==="success").slice(-1)[0];
     const lastAny=hist[hist.length-1];
-    if(last){el.textContent=rvToText(last.out);el.style.color="";}
+    el.style.color="";
+    if(last){el.textContent=rvToText(last.out);}
     else if(lastAny){el.textContent=lastAny.status==="error"?`✗ ${lastAny.errorKind||"失敗"}`:`■ ${lastAny.status}`;el.style.color="var(--sub)";}
-    else{el.textContent="（まだ実行していない）";el.style.color="var(--sub)";}
+    else if(!cur){el.textContent="（まだ実行していない）";el.style.color="var(--sub)";}
+    else if(cur.status==="running"||cur.status==="cancelling"){el.textContent="実行中…";el.style.color="var(--sub)";}
+    else{
+      const e=(cur.errors||[])[0];
+      el.textContent=e?`ここまで届かなかった — ${e.node||"?"} で ${e.kind||"失敗"}\n${(e.message||"").slice(0,120)}`
+                      :`ここまで届かなかった（${cur.status}）`;
+      el.style.color="var(--err)";
+    }
   }
 }
 function inputForRun(){
@@ -2288,16 +2317,19 @@ function inputForRun(){
 }
 
 /* ---- モデル（この端末で動かすLLM） ---- */
+const GEMMA_FIX={sliding_window_size:-1};   // 窓サイズの衝突を避ける（両方が正だと起動できない）
 const MODEL_CATALOG=[
  {id:"SmolLM2-360M-Instruct-q4f16_1-MLC",f32:"SmolLM2-360M-Instruct-q4f32_1-MLC",family:"SmolLM2",vram:376,note:"いちばん小さい。まず動くか確かめる用"},
- {id:"gemma3-1b-it-q4f16_1-MLC",f32:null,family:"Gemma",vram:711,note:"Google Gemma 3 · 1B"},
+ {id:"gemma3-1b-it-q4f16_1-MLC",f32:null,family:"Gemma",vram:711,note:"Google Gemma 3 · 1B",overrides:GEMMA_FIX},
  {id:"Llama-3.2-1B-Instruct-q4f16_1-MLC",f32:"Llama-3.2-1B-Instruct-q4f32_1-MLC",family:"Llama",vram:879,note:"Meta Llama 3.2 · 1B"},
  {id:"Qwen2.5-0.5B-Instruct-q4f16_1-MLC",f32:"Qwen2.5-0.5B-Instruct-q4f32_1-MLC",family:"Qwen",vram:945,note:"Alibaba Qwen2.5 · 0.5B"},
  {id:"Qwen2.5-1.5B-Instruct-q4f16_1-MLC",f32:"Qwen2.5-1.5B-Instruct-q4f32_1-MLC",family:"Qwen",vram:1630,note:"賢いがメモリを食う"},
- {id:"gemma-2-2b-jpn-it-q4f16_1-MLC",f32:"gemma-2-2b-jpn-it-q4f32_1-MLC",family:"Gemma",vram:1895,note:"日本語向け Gemma 2 · 2B。2GB近く要る"}
+ {id:"gemma-2-2b-jpn-it-q4f16_1-MLC",f32:"gemma-2-2b-jpn-it-q4f32_1-MLC",family:"Gemma",vram:1895,note:"日本語向け Gemma 2 · 2B。2GB近く要る",overrides:GEMMA_FIX}
 ];
+const modelOverrides=id=>{const m=MODEL_CATALOG.find(x=>x.id===id||x.f32===id);return m&&m.overrides?m.overrides:null;};
 const mdlCache={};       // id -> 端末にあるか（調べたものだけ）
-function webllmDef(id){return{adapter:"webllm",model:id,useWorker:true,indexedDB:true,moduleSource:wlSrc};}
+function webllmDef(id){const d={adapter:"webllm",model:id,useWorker:true,indexedDB:true,moduleSource:wlSrc};
+  const ov=modelOverrides(id);if(ov)d.overrides=ov;return d;}
 function setMdlMsg(t){$("#mdlMsg").textContent=t;}
 function setMdlBar(p){$("#mdlBar").style.width=Math.round((p||0)*100)+"%";}
 function currentModelId(){const d=(Ed.spec&&Ed.spec.providers&&Ed.spec.providers.local)||{};
@@ -2366,7 +2398,7 @@ async function modelAction(act,id,btn){
       if(!confirm(`${id} の保存データを端末から消す。次に使うときは再ダウンロードになる。`))return;
       mdlActive={id,text:"削除中…"};renderModels();
       await WebLLMProvider.deleteCache(def);
-      mdlCache[id]=false;setMdlMsg(`${id} を削除した`);return;
+      mdlCache[id]=false;setMdlMsg(`${id} を削除した`);updateStorageInfo();return;
     }
     // ここから ダウンロード/起動/動作確認
     let phase="本体を読み込み中",pct=0;
@@ -2412,6 +2444,36 @@ async function modelAction(act,id,btn){
     mdlActive=null;mdlCtl=null;renderModels();
   }
 }
+/* 保存先: このサイト（オリジン）のブラウザ内ストレージ。アプリを更新しても消えない。
+   iOSは一定期間使わないと消すことがあるので、消えにくくする申請も出せる。 */
+async function updateStorageInfo(){
+  const el=$("#mdlStore");if(!el)return;
+  let t=[];
+  try{
+    if(navigator.storage&&navigator.storage.estimate){
+      const s2=await navigator.storage.estimate();
+      t.push(`使用 ${Math.round((s2.usage||0)/1e6)}MB / 上限 ${Math.round((s2.quota||0)/1e6)}MB`);
+    }
+    if(navigator.storage&&navigator.storage.persisted){
+      const p2=await navigator.storage.persisted();
+      t.push(p2?"長期保存: 申請済み":"長期保存: 未申請");
+      const b=$("#mdlPersist");if(b)b.textContent=p2?"長期保存は申請済み":"消えないようにする";
+    }
+  }catch(e){t.push("保存状況を取れない");}
+  el.textContent=t.join(" / ");
+}
+$("#mdlPersist").onclick=async()=>{
+  const b=$("#mdlPersist");b.disabled=true;
+  try{
+    if(!(navigator.storage&&navigator.storage.persist))setMdlMsg("この端末は長期保存の申請に対応していない");
+    else{
+      const okp=await navigator.storage.persist();
+      setMdlMsg(okp?"長期保存が有効になった。ブラウザが勝手に消さなくなる"
+        :"ブラウザが長期保存を認めなかった。ホーム画面に追加すると残りやすくなる（共有 → ホーム画面に追加）");
+    }
+  }catch(e){setMdlMsg("申請できない: "+((e&&e.message)||e));}
+  finally{b.disabled=false;updateStorageInfo();}
+};
 $("#mdlF32").onchange=renderModels;
 $("#mdlScan").onclick=async()=>{
   const b=$("#mdlScan");b.disabled=true;setMdlMsg("端末の中を調べている…（初回は本体の読み込みで少し待つ）");
@@ -2445,7 +2507,7 @@ $("#run").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResum
 $("#cancel").onclick=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
 $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
-setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");loadFromHash();fitView();renderTotals();renderIO();renderModels();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
+setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");loadFromHash();fitView();renderTotals();renderIO();renderModels();updateStorageInfo();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 
 /* ---- 自己テスト ---- */
 const enc=s=>new TextEncoder().encode(s);
