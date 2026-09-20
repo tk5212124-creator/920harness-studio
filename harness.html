@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 最初から本物のローカルLLM v0.13.1</title>
+<title>Harness Studio — 最初から本物のローカルLLM v0.13.2</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -93,7 +93,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.13.1 · 最初から本物のローカルLLM</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.13.2 · 最初から本物のローカルLLM</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -3526,9 +3526,10 @@ export async function CreateMLCEngine(model,opt){
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
 })();
 
-/* 前回の続き（Checkpoint）の復元。
-   図とJSONと実行対象は必ず同じものにする。ここがずれていると
-   「画面は例なのに、実行すると前のハーネスが動く」という状態になる（実機で起きた）。 */
+/* 前回の続き（Checkpoint）の扱い。
+   開いた直後は必ず「そのまま実行できる状態」にする。前回の続きは押したときだけ開く。
+   （以前は前回のSpecを勝手に載せていたので、前回が失敗していると
+     開いた瞬間からエラーが出て、例すら実行できないように見えた） */
 function startFresh(){
   store.clear();
   const b=$("#resumeBanner");if(b){b.classList.remove("show");b.textContent="";}
@@ -3537,19 +3538,32 @@ function startFresh(){
   $("#resume").disabled=true;$("#retry").disabled=true;
   setState("idle");setHint("はじめから: 例「内蔵LLM直列」に戻した");
 }
-(function onload(){
-  const cp=store.load();if(!cp)return;
-  let restored=false;
-  if(cp.specSnapshot){try{setSpecObj(JSON.parse(JSON.stringify(cp.specSnapshot)));   // 図もJSONも前回のものにする
+function openCheckpoint(cp){
+  if(cp.specSnapshot){try{
+    setSpecObj(JSON.parse(JSON.stringify(cp.specSnapshot)));   // 図もJSONも入出力欄も前回のものにする
     document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.classList.remove("on"));
-    fitView();restored=true;}catch(e){}}
-  const b=$("#resumeBanner");b.classList.add("show");
+    fitView();
+  }catch(e){setHint("前回の続きを開けない: "+errText(e));return;}}
   $("#resume").disabled=!(cp.status!=="success"&&cp.resumable);
-  b.innerHTML=`前回の続きを開いた（前回: ${esc(cp.status)}${cp.workQueue&&cp.workQueue[0]?" / 途中="+esc(cp.workQueue[0].phase):""}）。`
-    +(restored?"図もJSONも<b>前回のハーネス</b>になっている。":"")
+  const b=$("#resumeBanner");
+  b.innerHTML=`前回の続きを開いた（前回: ${esc(cp.status)}）。図もJSONも前回のハーネスになっている。`
     +(cp.status==="success"?"終わっているので Resume はできない。":"「Resume」で続きから実行できる。")
     +` <button id="cpFresh">はじめから（例に戻す）</button>`;
   const f=$("#cpFresh");if(f)f.onclick=startFresh;
+  setHint("前回の続きを開いた");
+}
+(function onload(){
+  const cp=store.load();if(!cp)return;
+  // 例はそのまま実行できる状態で置いておき、前回の続きは「開く」を押したときだけ載せる
+  $("#resume").disabled=true;$("#retry").disabled=true;
+  const name=(cp.specSnapshot&&cp.specSnapshot.metadata&&cp.specSnapshot.metadata.name)||"名前なし";
+  const b=$("#resumeBanner");b.classList.add("show");
+  b.innerHTML=`前回の続きがある（${esc(name)} / 前回: ${esc(cp.status)}）。`
+    +`いま出ているのは例で、そのまま実行できる。`
+    +` <button id="cpOpen">前回の続きを開く</button> <button id="cpDrop">捨てる</button>`;
+  const o=$("#cpOpen");if(o)o.onclick=()=>openCheckpoint(cp);
+  const d=$("#cpDrop");if(d)d.onclick=()=>{store.clear();b.classList.remove("show");b.textContent="";
+    $("#resume").disabled=true;setHint("前回の続きを捨てた");};
 })();
 }
 </script>
