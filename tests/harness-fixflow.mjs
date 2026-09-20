@@ -147,6 +147,38 @@ ok.provOpts = R['⑥ Providerの選択肢'].some(t => /内蔵LLM/.test(t) && /^l
   && !R['⑥ Providerの選択肢'].some(t => t.startsWith('＋ 内蔵LLM'));
 await tap('#shClose');
 
+// ⑦ 出力の形をノードごとに選べる（リスト n個 → 箇条書きで次へ渡す）
+await paste({ metadata: { name: "リスト", version: "1" }, providers: { m: { adapter: "mock" } },
+  nodes: [{ id: "in", type: "input" },
+          { id: "列挙", type: "llm", provider: "m", mock: { fixed: { items: ["主語が無い", "結論が無い"] } } },
+          { id: "次", type: "llm", provider: "m", mock: { echoInput: true } },
+          { id: "out", type: "output" }],
+  edges: [{ from: { node: "in", port: "out" }, to: { node: "列挙", port: "in" } },
+          { from: { node: "列挙", port: "out" }, to: { node: "次", port: "in" } },
+          { from: { node: "次", port: "out" }, to: { node: "out", port: "in" } }] });
+await tap('.nd[data-id="列挙"]');
+R['⑦ 出力の形の選択肢'] = await p.locator('[data-f="__shape"] option').allTextContents();
+ok.shapes = ['縛らない', 'リスト', '点数', 'はい', '自分で書く'].every(t => R['⑦ 出力の形の選択肢'].some(x => x.includes(t)));
+await p.selectOption('[data-f="__shape"]', 'list'); await p.waitForTimeout(250);
+const s7 = await spec();
+const n7 = s7.nodes.find(n => n.id === '列挙');
+R['⑦ リストを選んだ'] = { schema: n7.schema, 指示: (n7.prompt || {}).suffix };
+ok.listShape = n7.schema.properties.items.type === 'array'
+  && n7.schema.properties.items.items.type === 'string'
+  && /例: \{"items": \["ひとつめ"/.test(R['⑦ リストを選んだ'].指示);
+await tap('#shClose');
+
+// ⑧ 線の「値の変換」で 配列 → 箇条書き にして次のLLMへ渡せる
+await tap('#edges circle.midhit >> nth=1');
+R['⑧ 変換の選択肢'] = await p.locator('[data-f="transform"] option').allTextContents();
+ok.transforms = R['⑧ 変換の選択肢'].some(t => t.includes('箇条書き'));
+await p.selectOption('[data-f="transform"]', 'list_to_text'); await p.waitForTimeout(200);
+await tap('#shClose');
+await tap('#run');
+await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
+R['⑧ 次のノードが受け取った文'] = (await p.textContent('#ioOut [data-out="out"]')).replace(/\s+/g, ' ').slice(0, 80);
+ok.listRun = R['⑧ 次のノードが受け取った文'].includes('- 主語が無い') && R['⑧ 次のノードが受け取った文'].includes('- 結論が無い');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

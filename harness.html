@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 最初から本物のローカルLLM v0.13.2</title>
+<title>Harness Studio — 出力の形を縛る v0.14.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -93,7 +93,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.13.2 · 最初から本物のローカルLLM</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.14.0 · 出力の形を縛る</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -271,7 +271,7 @@ function mustacheRender(tpl,scope,opt){
     if(tpl.startsWith("{{{",open)){
       const close=tpl.indexOf("}}}",open+3);if(close<0)throw{code:"TEMPLATE_NOT_ALLOWED",message:"unterminated"};
       const key=tpl.slice(open+3,close).trim();
-      if(!/^[A-Za-z0-9_.]+$/.test(key))throw{code:"TEMPLATE_NOT_ALLOWED",message:"invalid key: "+key};
+      if(!/^[^\s{}.]+(?:\.[^\s{}.]+)*$/.test(key))throw{code:"TEMPLATE_NOT_ALLOWED",message:"使えない差し込み名: "+key};
       const v=getPath(scope,key);out+=typeof v==="string"?v:JSON.stringify(v);i=close+3;
     }else{
       const close=tpl.indexOf("}}",open+2);if(close<0)throw{code:"TEMPLATE_NOT_ALLOWED",message:"unterminated"};
@@ -296,6 +296,9 @@ function canonSpec(spec){return JSON.stringify(spec);}
    ================================================================== */
 const HSL_VERSION="hsl/1";
 function jstr(v){return JSON.stringify(v);}
+/* 日本語などの名前は裸では書けないので "…" で囲む（HSLの値はJSONリテラル） */
+const BARE_ID=/^[A-Za-z_][A-Za-z0-9_-]*$/;
+const hslName=id=>BARE_ID.test(String(id))?String(id):JSON.stringify(String(id));
 // 1行を「語」に切る。JSON文字列と {..} [..] は中の空白ごと1語として扱う
 function hslTokens(line){
   const out=[];let i=0;
@@ -330,7 +333,7 @@ function specToHSL(spec){
   L.push(`harness ${jstr(meta.name||"untitled")} v${jstr(String(meta.version||"1")).slice(1,-1)}`);
   L.push("");
   for(const[id,def]of Object.entries(spec.providers||{})){
-    const parts=[`provider ${id} = ${def.adapter}`];
+    const parts=[`provider ${hslName(id)} = ${def.adapter}`];
     for(const[k,v]of Object.entries(def))if(k!=="adapter")parts.push(`${k} ${jstr(v)}`);
     L.push(parts.join(" "));
   }
@@ -339,7 +342,7 @@ function specToHSL(spec){
   if(spec.vars&&Object.keys(spec.vars).length)L.push("");
   const NODE_SKIP=new Set(["id","type","provider","model","prompt","generation","schema","routing","op","sep","template","inputs","mock","labels","prefix","suffix"]);
   for(const n of spec.nodes||[]){
-    L.push(`node ${n.id}: ${n.type||"llm"}${n.provider?" "+n.provider:""}`);
+    L.push(`node ${hslName(n.id)}: ${n.type||"llm"}${n.provider?" "+hslName(n.provider):""}`);
     if(n.model!=null)L.push(`  model ${jstr(n.model)}`);
     const p=n.prompt||{};
     if(p.system!=null)L.push(`  system ${jstr(p.system)}`);
@@ -368,7 +371,7 @@ function specToHSL(spec){
   const ESKIP=new Set(["from","to","if","else","loop","position","transform","priority","validation"]);
   for(const e of spec.edges||[]){
     const port=(e.to.port&&e.to.port!=="in")?"."+e.to.port:"";
-    let t=`${e.from.node} -> ${e.to.node}${port}`;
+    let t=`${hslName(e.from.node)} -> ${hslName(e.to.node)}${port}`;
     if(e.if)t+=` if ${jstr(e.if)}`;
     if(e.else)t+=` else`;
     if(e.loop){t+=` loop ${e.loop.id}`;if(e.loop.max!=null)t+=` max ${e.loop.max}`;if(e.loop.until)t+=` until ${jstr(e.loop.until)}`;}
@@ -381,9 +384,9 @@ function specToHSL(spec){
   }
   const lay=(spec.metadata||{}).layout;
   if(lay&&Object.keys(lay).length){L.push("");
-    for(const[id,q]of Object.entries(lay))L.push(`layout ${id} ${Math.round(q.x)},${Math.round(q.y)}`);}
+    for(const[id,q]of Object.entries(lay))L.push(`layout ${hslName(id)} ${Math.round(q.x)},${Math.round(q.y)}`);}
   const bd=(spec.metadata||{}).bends;
-  if(bd&&Object.keys(bd).length){for(const[k,q]of Object.entries(bd))L.push(`bend ${k} ${Math.round(q.x)},${Math.round(q.y)}`);}
+  if(bd&&Object.keys(bd).length){for(const[k,q]of Object.entries(bd))L.push(`bend ${JSON.stringify(k)} ${Math.round(q.x)},${Math.round(q.y)}`);}
   const MSKIP=new Set(["name","version","layout","bends"]);
   for(const[k,v]of Object.entries(spec.metadata||{}))if(!MSKIP.has(k))L.push(`meta ${k} ${jstr(v)}`);
   return L.join("\n")+"\n";
@@ -437,22 +440,28 @@ function hslToSpec(text){
     else if(k==="var"){if(t[2]!=="=")err(ln,"var <名前> = <値> の形にする");
       spec.vars=spec.vars||{};spec.vars[hslValue(t[1],ln)]=hslValue(t[3],ln);}
     else if(k==="node"){
-      const idRaw=t[1]||"";if(!/:$/.test(idRaw)&&t[2]!==":")err(ln,"node <id>: <種類> の形にする");
+      // node <id>: <種類> [provider]  … <id> は "日本語の名前" のように囲んでもよい
+      const idRaw=t[1]||"";
+      const colonInId=/:$/.test(idRaw);
+      if(!colonInId&&t[2]!==":")err(ln,"node <id>: <種類> の形にする");
+      const rest=colonInId?t.slice(2):t.slice(3);          // ":" が別の語になる場合をどちらも受ける
       const id=hslValue(idRaw.replace(/:$/,""),ln);
-      const type=hslValue(t[2],ln);
-      const n={id,type};if(t[3])n.provider=hslValue(t[3],ln);
+      if(!rest.length)err(ln,"node の種類が無い（input | llm | join | output）");
+      const type=hslValue(rest[0],ln);
+      const n={id,type};if(rest[1])n.provider=hslValue(rest[1],ln);
       spec.nodes.push(n);cur=n;}
     else if(k==="layout"){const id=hslValue(t[1],ln);const m=/^(-?\d+)\s*,\s*(-?\d+)$/.exec(t[2]||"");
       if(!m)err(ln,"layout <id> <x>,<y> の形にする");
       spec.metadata.layout=spec.metadata.layout||{};spec.metadata.layout[id]={x:+m[1],y:+m[2]};}
-    else if(k==="bend"){const key=String(t[1]||"");const m=/^(-?\d+)\s*,\s*(-?\d+)$/.exec(t[2]||"");
+    else if(k==="bend"){let key=String(t[1]||"");
+      if(key[0]==='"'){try{key=JSON.parse(key);}catch(_){}}const m=/^(-?\d+)\s*,\s*(-?\d+)$/.exec(t[2]||"");
       if(!m)err(ln,"bend <つながり> <x>,<y> の形にする");
       spec.metadata.bends=spec.metadata.bends||{};spec.metadata.bends[key]={x:+m[1],y:+m[2]};}
     else if(k==="meta")spec.metadata[t[1]]=hslValue(t[2],ln);
     else if(t[1]==="->"){
-      const to=String(t[2]||"");const dot=to.indexOf(".");
+      const to=String(t[2]||"");const dot=to[0]==='"'?to.indexOf(".",to.indexOf('"',1)):to.indexOf(".");
       const e={from:{node:hslValue(t[0],ln),port:"out"},
-               to:{node:dot<0?to:to.slice(0,dot),port:dot<0?"in":to.slice(dot+1)}};
+               to:{node:hslValue(dot<0?to:to.slice(0,dot),ln),port:dot<0?"in":to.slice(dot+1)}};
       const rest=t.slice(3);
       for(let i=0;i<rest.length;i++){
         const kk=rest[i];
@@ -500,7 +509,7 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
     prefix "…" / suffix "…"（join では文章になる op = concat/markdown/csv/template のときだけ使える）
     inputs {"items":{"type":"any","cardinality":"many"}}（join のとき必須）
     mock {"text":"…"}                     （adapter が mock のとき）
-  <from> -> <to>[.<port>] [if "式"] [else] [loop <id> max <回数> until "式"] [position <番号>] [transform json_stringify|json_parse] [priority <番号>]
+  <from> -> <to>[.<port>] [if "式"] [else] [loop <id> max <回数> until "式"] [position <番号>] [transform json_stringify|json_parse|list_to_text] [priority <番号>]
   layout <id> <x>,<y>                     図の位置（無くてもよい）
   bend <from>><to>[.<port>][#<position>] <x>,<y>   図の線の形（無くてもよい）
 
@@ -519,9 +528,14 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
     jn -> 方法
 - 条件式で使えるのは <node>.out / <node>.meta.len / <node>.meta.tokens / run.* / vars.* / input.*。
   比較は == != < <= > >=、論理は && || !、関数は len() has() regex() count() min() max()。
+- 出力の形を縛りたいときは schema を書く（内蔵LLMでは文法として強制される。プロンプトに「JSONで出せ」と
+  書くだけでは縛りにならない）。個数の決まらないリストは
+  schema {"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"string"}}}}。
 - <node>.out.<フィールド> を見るなら、その node に schema を書く（**書かないとエラーになる**。
   schema が無いとLLMは文章で返すので、.score のような項目は読めない）。
-- ノードIDは英数字と _ のみ。日本語のIDは条件式で使えない。`;
+- ノード名に日本語も使える。その場合は "…" で囲む（例: node "検証": llm local / write -> "検証"）。
+  ただし条件式（if / until）では日本語の名前は使えないので、条件を書くノードは英数字の名前にする。
+  名前に 空白 . " { } > は使えない。`;
 function buildEditPrompt(spec,instruction){
   let hsl;try{hsl=specToHSL(spec);}catch(e){hsl="（書き出せない: "+errText(e)+"）";}
   const F=reviewSpec(spec).filter(f=>f.level!=="info");
@@ -1248,7 +1262,8 @@ function confluenceConflict(spec,nodeId,port){
   return origins.length>1?origins:null;
 }
 function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)){errs.push("nodes無し");return errs;}
-  const ids=new Set();spec.nodes.forEach(n=>{if(!n.id)errs.push("id無し");if(ids.has(n.id))errs.push("id重複: "+n.id);ids.add(n.id);});
+  const ids=new Set();spec.nodes.forEach(n=>{if(!n.id)errs.push("id無し");if(ids.has(n.id))errs.push("id重複: "+n.id);ids.add(n.id);
+    if(n.id&&/[\s."{}>]/.test(String(n.id)))errs.push(`名前に使えない文字がある（空白 . " { } > は使えない）: ${n.id}`);});
   const nodeIds=new Set(spec.nodes.map(n=>n.id));
   // providers定義
   for(const [pid,def] of Object.entries(spec.providers||{})){
@@ -1274,6 +1289,7 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(e.loop){if(loopIds.has(e.loop.id))errs.push("loop id重複: "+e.loop.id);loopIds.add(e.loop.id);
       if(!(e.loop.max>=1))errs.push("loop.max>=1でない: "+e.loop.id);
       if(e.loop.until){try{compileExpr(e.loop.until);}catch(_){errs.push("loop.until parse不可: "+e.loop.until);}}}
+    if(e.transform&&!["json_stringify","json_parse","list_to_text"].includes(e.transform))errs.push("transform不正値: "+e.transform);
     if(e.routing&&e.routing.mode&&!["parallel","first_match"].includes(e.routing.mode))errs.push("routing.mode不正");});
   spec.nodes.forEach(n=>{if(n.routing&&n.routing.mode&&!["parallel","first_match"].includes(n.routing.mode))errs.push("routing.mode不正: "+n.id);});
   const bySrc={},byToPort={};
@@ -1374,6 +1390,11 @@ function applyEdgeAndValidate(rv,edge,toNode,toPort){
   let v=rv;
   if(edge.transform==="json_stringify"){if(v.type!=="json"&&v.type!=="text")throw{code:"TYPE_MISMATCH",message:"json_stringify対象がjson/textでない"};v={type:"text",value:typeof v.value==="string"?v.value:JSON.stringify(v.value)};}
   else if(edge.transform==="json_parse"){if(v.type!=="text")throw{code:"TYPE_MISMATCH",message:"json_parse対象がtextでない"};v={type:"json",value:JSON.parse(v.value)};}
+  else if(edge.transform==="list_to_text"){
+    const arr=Array.isArray(v.value)?v.value:(v.value&&Array.isArray(v.value.items)?v.value.items:null);
+    if(!arr)throw{code:"TYPE_MISMATCH",message:`list_to_text は配列か {"items":[…]} にだけ使える（来たのは ${showVal(v.value)}）`};
+    v={type:"text",value:arr.map(x=>"- "+(typeof x==="string"?x:JSON.stringify(x))).join("\n")};
+  }
   const portDef=toNode&&toNode.inputs&&toNode.inputs[toPort];
   const want=portDef&&portDef.type;
   const bypass=edge.validation&&edge.validation.typeCheck==="bypass";
@@ -1888,6 +1909,33 @@ function setSpecObj(spec,opt){
   edRender();showErrs();renderIO();if(typeof renderModels==="function")renderModels();
 }
 function syncFromCanvas(){$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();}
+/* 出力の形。内蔵LLMでは schema が文法になるので、ここで選んだ形しか出せなくなる。
+   （プロンプトに「JSON形式で出力すること」と書いても、縛りにはならない） */
+const SCHEMA_PRESETS=[
+  {v:"",     t:"縛らない（文章のまま）",              schema:null, ask:null},
+  {v:"list", t:"リスト（項目数は自由・n個）",          schema:{type:"object",required:["items"],properties:{items:{type:"array",items:{type:"string"}}}},
+             ask:`必ず JSON だけで答える。余計な文は書かない。例: {"items": ["ひとつめ", "ふたつめ", "みっつめ"]}`},
+  {v:"score",t:"点数（0〜10の整数）",                 schema:{type:"object",required:["score"],properties:{score:{type:"integer",minimum:0,maximum:10}}},
+             ask:`必ず JSON だけで答える。余計な文は書かない。例: {"score": 7}`},
+  {v:"yesno",t:"はい / いいえ",                      schema:{type:"object",required:["ok"],properties:{ok:{type:"boolean"}}},
+             ask:`必ず JSON だけで答える。余計な文は書かない。例: {"ok": true}`},
+  {v:"text_item",t:"見出し付きの1件（題名と本文）",     schema:{type:"object",required:["title","body"],properties:{title:{type:"string"},body:{type:"string"}}},
+             ask:`必ず JSON だけで答える。余計な文は書かない。例: {"title": "題名", "body": "本文"}`},
+  {v:"custom",t:"自分で書く（JSON schema）",          schema:undefined, ask:null},
+];
+const SHAPE_NOTE={
+  list:"項目数はモデルが決める（毎回変わってよい）。次のノードには配列で届く。線の「値の変換」で <b>箇条書きの文</b> にもできる。",
+  score:"数で返るので、線の <b>if</b> に <code>この.out.score &gt;= 8</code> のような条件が書ける。",
+  yesno:"true / false で返る。線の if に <code>この.out.ok == true</code> と書ける。",
+  text_item:"題名と本文に分かれて返る。",
+  custom:"JSON Schema をそのまま書く（type / required / properties / enum / minimum など）。",
+};
+const schemaPresetOf=sc=>{
+  if(!sc)return "";
+  const j=JSON.stringify(sc);
+  const hit=SCHEMA_PRESETS.find(x=>x.schema&&JSON.stringify(x.schema)===j);
+  return hit?hit.v:"custom";
+};
 /* 条件式が読んでいる項目から schema を作って付ける（中身は Spec に書かれるので見える） */
 function addSchemaFor(id){
   const n=nodeById(id);if(!n)return;
@@ -2325,7 +2373,13 @@ function openNodeSheet(id){
       area("prompt.template.value",getP(n,"prompt.template.value"),"空なら前のノードの出力をそのまま渡す"));
     h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prompt.prefix",getP(n,"prompt.prefix")))}${fld("必ず後ろに付ける文",txt("prompt.suffix",getP(n,"prompt.suffix")))}</div>`;
     h+=`<div class="fld2">${fld("maxTokens",num("generation.maxTokens",getP(n,"generation.maxTokens")))}${fld("temperature",num("generation.temperature",getP(n,"generation.temperature")))}</div>`;
-    h+=fld("JSON schema（出力を縛る・空で無効）",`<textarea data-json="schema" placeholder='{"type":"object","required":["score"]}'>${esc(n.schema?JSON.stringify(n.schema):"")}</textarea>`);
+    const pk=schemaPresetOf(n.schema);
+    h+=fld("出力の形（内蔵LLMなら文法で強制する）",sel("__shape",pk,SCHEMA_PRESETS.map(x=>({v:x.v,t:x.t}))));
+    if(SHAPE_NOTE[pk])h+=`<div class="mini">${SHAPE_NOTE[pk]}</div>`;
+    if(pk==="custom"||pk==="")
+      h+=fld(pk==="custom"?"JSON schema（自分で書く）":"JSON schema（空で無効）",
+        `<textarea data-json="schema" placeholder='{"type":"object","required":["score"]}'>${esc(n.schema?JSON.stringify(n.schema):"")}</textarea>`);
+    else h+=`<div class="mini">いまの schema: <code>${esc(JSON.stringify(n.schema))}</code></div>`;
   }
   if(n.type==="join"){
     h+=fld("まとめ方（どんな形で渡すか）",sel("op",n.op,[
@@ -2397,6 +2451,20 @@ function openNodeSheet(id){
   if(ja)ja.onclick=()=>{n.labels=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&(e.to.port||"in")==="items"&&!e.loop)
       .sort((a,b)=>(a.position||0)-(b.position||0)).map(e=>e.from.node);
     if(!n.labels.length)delete n.labels;syncFromCanvas();openNodeSheet(n.id);};
+  const shp=$("#sheetBody").querySelector('select[data-f="__shape"]');
+  if(shp)shp.onchange=()=>{
+    const pr=SCHEMA_PRESETS.find(x=>x.v===shp.value);
+    if(!pr)return;
+    if(pr.v==="custom"){if(!n.schema)n.schema={type:"object",required:[],properties:{}};}
+    else if(pr.schema===null)delete n.schema;
+    else n.schema=JSON.parse(JSON.stringify(pr.schema));
+    // 返し方の指示も一緒に入れ替える（前に自動で入れたものだけ触る）
+    n.prompt=n.prompt||{};
+    const auto=!n.prompt.suffix||/必ず JSON だけで答える/.test(n.prompt.suffix);
+    if(pr.ask&&auto)n.prompt.suffix=pr.ask;
+    else if(!pr.ask&&auto&&n.prompt.suffix){delete n.prompt.suffix;if(!Object.keys(n.prompt).length)delete n.prompt;}
+    syncFromCanvas();openNodeSheet(n.id);
+  };
   const sc=$("#sheetBody").querySelector('[data-json="schema"]');
   if(sc)sc.oninput=()=>{
     const v=sc.value.trim();
@@ -2438,7 +2506,10 @@ function openEdgeSheet(i){
   if(kind==="loop"){h+=`<div class="fld2">${fld("loop ID",txt("loop.id",getP(e,"loop.id"),"revise"))}${fld("最大回数",num("loop.max",getP(e,"loop.max"),"3"))}</div>`;
     h+=fld("打ち切り条件（真になったら抜ける）",txt("loop.until",getP(e,"loop.until"),"critic.out.score >= 8"));}
   if((e.to.port||"in")==="items")h+=fld("並び順 position",num("position",e.position));
-  h+=fld("値の変換",sel("transform",e.transform,[{v:"",t:"なし"},{v:"json_stringify",t:"json_stringify（json→text）"},{v:"json_parse",t:"json_parse（text→json）"}]));
+  h+=fld("値の変換",sel("transform",e.transform,[{v:"",t:"なし"},
+    {v:"list_to_text",t:"配列 → 箇条書きの文（リストを次のLLMに渡すとき）"},
+    {v:"json_stringify",t:"json_stringify（json→text）"},
+    {v:"json_parse",t:"json_parse（text→json）"}]));
   h+=`<div class="mini">線が重なって見づらいときは、<b>線の途中の丸をドラッグ</b>すると形を変えられる。</div>`;
   h+=`<div class="row">${bendOf(e)?`<button id="eStraight">線の形を戻す</button>`:""}<button class="danger" id="eDel">このつながりを削除</button></div>`;
   openSheet(h);bindClose();bindFields(e);
@@ -3521,6 +3592,34 @@ export async function CreateMLCEngine(model,opt){
   ok("40 schema の型: 緩いと配線だけで落とす／実行時は返ってきた値を文で言う",
     v1.length===1&&v2.length===0&&r.status==="failed"
     &&/"\.\.\."（文字列）/.test(msg)&&/integer/.test(msg));}
+ // 41 日本語の名前でも書き出し→読み込みが往復する（実機のハーネスはノード名が日本語）
+ {const sp={metadata:{name:"日本語の名前",version:"1",layout:{"検証":{x:1,y:2}},bends:{"検証>改稿方針#1":{x:3,y:4}}},providers:{m:{adapter:"mock"}},
+   nodes:[{id:"in",type:"input"},{id:"検証",type:"llm",provider:"m",mock:{tag:"k"}},
+     {id:"改稿方針",type:"llm",provider:"m",mock:{echoInput:true}},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"検証",port:"in"}},
+     {from:{node:"検証",port:"out"},to:{node:"改稿方針",port:"in"}},
+     {from:{node:"改稿方針",port:"out"},to:{node:"out",port:"in"}}]};
+  const t=specToHSL(sp);const d=hslRoundTripDiff(sp);
+  const bad=validate({metadata:{version:"1"},nodes:[{id:"あ い",type:"input"},{id:"out",type:"output"}],edges:[]});
+  ok("41 HSL: 日本語の名前も往復する／使えない文字は検証で落とす",
+    d===null&&/^node "検証": llm m$/m.test(t)&&bad.some(e=>/名前に使えない文字/.test(e)));}
+ // 42 出力の形: リスト（n個）と、配列→箇条書きの変換
+ {const sp={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+   nodes:[{id:"in",type:"input"},
+     {id:"列挙",type:"llm",provider:"m",mock:{fixed:{items:["A","B","C"]}},
+      schema:{type:"object",required:["items"],properties:{items:{type:"array",items:{type:"string"}}}}},
+     {id:"次",type:"llm",provider:"m",mock:{echoInput:true}},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"列挙",port:"in"}},
+     {from:{node:"列挙",port:"out"},to:{node:"次",port:"in"},transform:"list_to_text"},
+     {from:{node:"次",port:"out"},to:{node:"out",port:"in"}}]};
+  const r=await fullRun(sp,{});
+  const got=((r.nodeRuns["次"]||[])[0]||{}).out;
+  const txt=got&&got.value&&got.value.received&&got.value.received.value;
+  const sp2=JSON.parse(JSON.stringify(sp));sp2.nodes[1].mock={text:"ただの文"};delete sp2.nodes[1].schema;
+  const r2=await fullRun(sp2,{});
+  ok("42 出力の形: リストは配列で返り、箇条書きに変換して次へ渡せる",
+    r.status==="success"&&txt==="- A\n- B\n- C"
+    &&r2.status==="failed"&&/list_to_text は配列/.test((r2.errors[0]||{}).message||""));}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
