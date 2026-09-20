@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.17.0 どこから来た線でも合流できる
+## 1. 現状 — v0.18.0 CPUで動かす道を足す
 
 | 段階 | 状態 |
 |---|---|
@@ -43,7 +43,8 @@ iPhone でもPCでも同じ操作。
 | 出力の形を縛る v0.14.0（ノードごとに出力の形を選ぶ・リスト(n個)・配列を箇条書きに・日本語のノード名） | 実装済み |
 | 落ちない工夫と入力のまとめ方 v0.15.0（モデルは同時に1つ・文脈の長さ・落ちた後の案内・複数入力の受け取り方） | 実装済み |
 | 確認を減らして迷わせない v0.16（2本目は聞かずに繋ぐ・受け取り方は全LLMノードに・版の確認・JSONの反映を言う） | 実装済み |
-| **どこから来た線でも合流できる v0.17.0（分岐グループをまたぐ合流をRuntimeが1つの実行に揃える） | **いまここ** |
+| どこから来た線でも合流できる v0.17.0（分岐グループをまたぐ合流をRuntimeが1つの実行に揃える） | 実装済み |
+| **CPUで動かす道 v0.18.0（Wllama / GGUF / WebGPU不要。WebGPUで落ちる端末の逃げ道） | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -533,7 +534,33 @@ layout gate 20,142
 
 ---
 
-## 5. 3つの adapter
+## 4.5 CPUで動かす道（Wllama / GGUF / WebGPU不要）
+
+**WebGPU経由（WebLLM）で端末ごと落ちるときの、もう一本の道。** llama.cpp を WASM で動かす
+[wllama](https://github.com/ngxson/wllama) を同梱し、GGUF を **CPU だけ**で動かす（`n_gpu_layers: 0`）。
+
+```
+provider cpu = wllama url "https://…/qwen2.5-0.5b-instruct-q4_k_m.gguf" contextSize 1024 gpuLayers 0
+```
+
+- **自動では切り替えない。** 使うかどうかはノード編集で選ぶ（`＋ CPUで動かすLLM（WebGPUを使わない）`）。
+  WebLLM 側の動きには一切触っていない。
+- 本体（`vendor/wllama/`）も **Safari用の互換ビルド**（`vendor/wllama/compat/`）も同梱し、
+  **CDNには行かない**（wllama は既定だと jsDelivr から互換ビルドを取るので、明示的に自分の置き場を渡している）。
+- 重みは GGUF。いまは HuggingFace から端末が直接取る（このサイトに置くこともできる）。
+- **JSONで縛る**のも効く（`response_format: json_schema` → llama.cpp の文法）。
+- 速度は WebGPU 版よりかなり遅い。**落ちるより遅い方がまし**、という位置づけ。
+
+| 見るもの（`harness-wllama.mjs`） | 期待 |
+|---|---|
+| ロードの渡し方 | GGUFのURL・`n_ctx`・**`n_gpu_layers: 0`**・自分の置き場の wasm と互換ビルド |
+| ハーネスとして動く | streaming が onToken に流れ、usage が入る |
+| decode中のcancel | `cancelled`（`failed`ではない）・出力は配送しない |
+| JSONで縛る | `response_format: json_schema` が渡り、json で返る |
+| 片付け | 別のGGUFを読むと前のを `exit()` する（同時に1つだけ） |
+| 同梱本体 | `vendor/wllama/index.js` が実ブラウザから読め、wasm も互換ビルドも 200 |
+
+## 5. 4つの adapter
 
 | adapter | 中身 | 料金 | 必要なもの |
 |---|---|---|---|
@@ -707,6 +734,8 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 node tests/harness-runtime.mjs      # 自己テスト44件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2 + Join/失敗の文2 + JSON強制と取得先4）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
+node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
+GGUF_PATH=<….gguf> node tests/harness-real-wllama.mjs   # 本物のGGUFをCPUで動かす（無ければSKIP）
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
 node tests/harness-share.mjs        # 書き出し・共有リンク・取り込み・診断を通しで操作
 node tests/harness-ai-loop.mjs      # 外部LLMとの往復（1枚を出す→返答を口に入れる→差分→適用）

@@ -51,6 +51,13 @@ def fetch_one(repo, dest):
     shutil.rmtree(os.path.join(dest, ".cache"), ignore_errors=True)
 
 
+def fetch_gguf(repo, filename, dest):
+    """GGUFを1つ取ってくる（CIでのCPU実行テスト用）。"""
+    from huggingface_hub import hf_hub_download
+    path = hf_hub_download(repo_id=repo, filename=filename, local_dir=dest)
+    print("downloaded:", path, os.path.getsize(path), "bytes", flush=True)
+
+
 def stage():
     out = []
     for repo, mid in entries():
@@ -81,8 +88,12 @@ if __name__ == "__main__":
         if len(sys.argv) != 4:
             sys.exit("使い方: tools/models.py fetch1 <HFのリポジトリ> <保存先>")
         fetch_one(sys.argv[2], sys.argv[3])
+    elif cmd == "gguf":
+        if len(sys.argv) != 5:
+            sys.exit("使い方: tools/models.py gguf <HFのリポジトリ> <ファイル名> <保存先>")
+        fetch_gguf(sys.argv[2], sys.argv[3], sys.argv[4])
     elif cmd == "list":
         for repo, mid in entries():
             print(repo, mid)
     else:
-        sys.exit("使い方: tools/models.py fetch|fetch1|stage|list")
+        sys.exit("使い方: tools/models.py fetch|fetch1|gguf|stage|list")
