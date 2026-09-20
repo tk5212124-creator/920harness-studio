@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — ノードごとのモデルと合流 v0.10.0</title>
+<title>Harness Studio — 読める失敗とまとめ方 v0.11.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -40,6 +40,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 #edges .midhit{fill:transparent;stroke:none;pointer-events:all;cursor:pointer}
 #edges .mid{fill:#fff;stroke:#9aa4ae;stroke-width:2;pointer-events:none}
 #edges .mid.on{fill:var(--accent);stroke:var(--accent)}
+#edges .mid.bent{stroke:var(--accent)}
 #edges .elabel{font:600 10px ui-monospace,monospace;fill:var(--sub);pointer-events:none}
 #nodes{position:absolute;left:0;top:0}
 .nd{position:absolute;width:150px;box-sizing:border-box;background:#fff;border:2px solid var(--line);border-radius:10px;padding:7px 9px;box-shadow:0 1px 3px rgba(0,0,0,.08);cursor:grab}
@@ -92,7 +93,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.10.0 · ノードごとのモデルと合流</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.11.0 · 読める失敗とまとめ方</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -113,7 +114,9 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="mini" id="mdlMsg">Gemma / Qwen / Llama をこの端末に落として動かす。初回だけダウンロードし、以降は端末の中から起動する（サーバもAPIキーも要らない）。保存先はこのサイトのブラウザ内ストレージで、<b>アプリを更新しても消えない</b>。</div>
 </div>
 
-<div class="card" style="margin-bottom:16px"><h2>Provider（ローカルLLM）</h2>
+<div class="card" style="margin-bottom:16px"><h2>接続の確認（上級者向け）</h2>
+<div class="mini">ここは<b>繋がるかどうかを試す場所</b>。ふだんは触らなくてよい。
+どのモデルを使うかは<b>ノードをタップして「このノードで使うモデル」</b>で決める。</div>
 <div class="row"><div class="seg" id="adapterSeg">
 <button data-ad="mock" class="on">mock</button><button data-ad="openai_local">OpenAI互換ローカル</button><button data-ad="webllm">内蔵LLM（WebGPU）</button>
 </div></div>
@@ -134,7 +137,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <pre class="diag" id="diagOut" style="display:none"></pre>
 </div>
 <div class="row">
-<button id="probe">接続 / モデルロード</button><button id="writeSpec">Specのproviders.localに書き込む</button>
+<button id="probe">接続 / モデルロード</button><button id="writeSpec">この設定を Spec の providers.local にする</button>
 <span id="provState" class="pill">unloaded</span>
 </div>
 <div class="bar"><i id="provBar"></i></div>
@@ -209,8 +212,17 @@ function parseE(tk){let p=0;const pk=()=>tk[p],eat=()=>tk[p++];const ex=v=>{cons
   const ast=or();if(p<tk.length)throw{code:"EXPRESSION_PARSE_ERROR"};return ast;}
 function evalExpr(ast,ctx){const S=v=>{if(typeof v!=="string")throw{code:"EXPRESSION_EVALUATION_ERROR"};return v;};const N=v=>{if(typeof v!=="number")throw{code:"EXPRESSION_EVALUATION_ERROR"};return v;};const A=v=>{if(!Array.isArray(v))throw{code:"EXPRESSION_EVALUATION_ERROR"};return v;};const B=v=>{if(v!==true&&v!==false)throw{code:"EXPRESSION_EVALUATION_ERROR"};return v;};
   const fns={len:a=>Array.isArray(a)?a.length:[...S(a)].length,has:a=>a!==ABSENT&&a!==null&&a!==undefined,regex:(t,p)=>new RegExp(S(p)).test(S(t)),count:(arr,v)=>A(arr).filter(x=>x===v).length,min:(...a)=>Math.min(...a.map(N)),max:(...a)=>Math.max(...a.map(N)),json_parse:t=>JSON.parse(S(t)),json_stringify:v=>JSON.stringify(v)};
-  const rid=name=>{if(name in ctx.root)return ctx.root[name];throw{code:"REFERENCE_ERROR"};};
-  function mem(o,pr){if(o===ABSENT||o===null||o===undefined)throw{code:"REFERENCE_ERROR"};if(typeof o==="object"){if(pr in o)return o[pr];throw{code:"REFERENCE_ERROR"};}throw{code:"REFERENCE_ERROR"};}
+  // 参照が外れたときは「何が無かったか」を必ず文にする（[object Object] を出さない）
+  const near=(o,k)=>Object.keys(o||{}).slice(0,8).join(", ")||"（空）";
+  const rid=name=>{if(name in ctx.root)return ctx.root[name];
+    throw{code:"REFERENCE_ERROR",message:`${name} が無い（使えるのは: ${near(ctx.root)}）`};};
+  function mem(o,pr){
+    if(o===ABSENT||o===null||o===undefined)throw{code:"REFERENCE_ERROR",message:`${pr} を読もうとしたが、その手前が空（まだ値が無い）`};
+    if(typeof o==="string")throw{code:"REFERENCE_ERROR",message:`${pr} を読もうとしたが、そこは文章（JSONではない）。読みたいノードに schema を付けると JSON で返る`};
+    if(typeof o==="number"||typeof o==="boolean")throw{code:"REFERENCE_ERROR",message:`${pr} を読もうとしたが、そこは ${typeof o==="number"?"数値":"真偽値"}（中に項目は無い）`};
+    if(typeof o==="object"){if(pr in o)return o[pr];
+      throw{code:"REFERENCE_ERROR",message:`${pr} がその中に無い（あるのは: ${near(o)}）`};}
+    throw{code:"REFERENCE_ERROR",message:`${pr} が読めない`};}
   function ev(n){switch(n.type){case"Lit":return n.v;case"Array":return n.els.map(ev);case"Id":return rid(n.name);
     case"Member":{const o=ev(n.obj);const p=n.computed?ev(n.prop):n.prop;const v=mem(o,p);return v===ABSENT?null:v;}
     case"Unary":if(n.op==="!")return !B(ev(n.x));if(n.op==="-")return -N(ev(n.x));break;
@@ -219,7 +231,14 @@ function evalExpr(ast,ctx){const S=v=>{if(typeof v!=="string")throw{code:"EXPRES
     switch(op){case"==":return a===b;case"!=":return a!==b;case"<":return N(a)<N(b);case"<=":return N(a)<=N(b);case">":return N(a)>N(b);case">=":return N(a)>=N(b);case"+":if(typeof a==="number"&&typeof b==="number")return a+b;if(typeof a==="string"&&typeof b==="string")return a+b;throw{code:"EXPRESSION_EVALUATION_ERROR"};case"-":return N(a)-N(b);case"*":return N(a)*N(b);case"/":return N(a)/N(b);case"%":return N(a)%N(b);}throw{code:"EXPRESSION_NOT_ALLOWED"};}
   return ev(ast);}
 const compileExpr=s=>parseE(tokenize(s));
-function evalBool(src,ctx){const v=evalExpr(compileExpr(src),ctx);if(v!==true&&v!==false)throw{code:"EXPRESSION_EVALUATION_ERROR"};return v;}
+function evalBool(src,ctx){const v=evalExpr(compileExpr(src),ctx);
+  if(v!==true&&v!==false)throw{code:"EXPRESSION_EVALUATION_ERROR",message:`式の答えが true/false にならない: "${src}"`};return v;}
+/* 式が読めないときに、どの式のどこで外れたかを1行で言う */
+function evalBoolAt(src,ctx,where){
+  try{return evalBool(src,ctx);}
+  catch(e){throw{code:e.code||"EXPRESSION_EVALUATION_ERROR",retryable:false,
+    message:`${where} の式が読めない: "${src}"`+(e.message?` — ${e.message}`:"")};}
+}
 
 /* ---- Mustache interpolation-only ---- */
 // escape=true: join等の合成用（HTMLエスケープ）。escape=false: prompt用（LLMに渡す生文字列）
@@ -299,7 +318,7 @@ function specToHSL(spec){
   if(spec.providers&&Object.keys(spec.providers).length)L.push("");
   for(const[k,v]of Object.entries(spec.vars||{}))L.push(`var ${k} = ${jstr(v)}`);
   if(spec.vars&&Object.keys(spec.vars).length)L.push("");
-  const NODE_SKIP=new Set(["id","type","provider","model","prompt","generation","schema","routing","op","sep","template","inputs","mock"]);
+  const NODE_SKIP=new Set(["id","type","provider","model","prompt","generation","schema","routing","op","sep","template","inputs","mock","labels","prefix","suffix"]);
   for(const n of spec.nodes||[]){
     L.push(`node ${n.id}: ${n.type||"llm"}${n.provider?" "+n.provider:""}`);
     if(n.model!=null)L.push(`  model ${jstr(n.model)}`);
@@ -318,6 +337,9 @@ function specToHSL(spec){
       L.push(t);}
     if(n.op!=null)L.push(`  op ${n.op}`);
     if(n.sep!=null)L.push(`  sep ${jstr(n.sep)}`);
+    if(n.labels!=null)L.push(`  labels ${jstr(n.labels)}`);
+    if(n.type==="join"&&n.prefix!=null)L.push(`  prefix ${jstr(n.prefix)}`);
+    if(n.type==="join"&&n.suffix!=null)L.push(`  suffix ${jstr(n.suffix)}`);
     if(n.template)L.push(`  template ${jstr(n.template)}`);
     if(n.inputs)L.push(`  inputs ${jstr(n.inputs)}`);
     if(n.mock)L.push(`  mock ${jstr(n.mock)}`);
@@ -341,7 +363,9 @@ function specToHSL(spec){
   const lay=(spec.metadata||{}).layout;
   if(lay&&Object.keys(lay).length){L.push("");
     for(const[id,q]of Object.entries(lay))L.push(`layout ${id} ${Math.round(q.x)},${Math.round(q.y)}`);}
-  const MSKIP=new Set(["name","version","layout"]);
+  const bd=(spec.metadata||{}).bends;
+  if(bd&&Object.keys(bd).length){for(const[k,q]of Object.entries(bd))L.push(`bend ${k} ${Math.round(q.x)},${Math.round(q.y)}`);}
+  const MSKIP=new Set(["name","version","layout","bends"]);
   for(const[k,v]of Object.entries(spec.metadata||{}))if(!MSKIP.has(k))L.push(`meta ${k} ${jstr(v)}`);
   return L.join("\n")+"\n";
 }
@@ -362,8 +386,9 @@ function hslToSpec(text){
       if(k==="model")cur.model=one();
       else if(k==="system"){cur.prompt=cur.prompt||{};cur.prompt.system=one();}
       else if(k==="prompt"){cur.prompt=cur.prompt||{};cur.prompt.template={syntax:"mustache",mode:"interpolation_only",value:one()};}
-      else if(k==="prefix"){cur.prompt=cur.prompt||{};cur.prompt.prefix=one();}
-      else if(k==="suffix"){cur.prompt=cur.prompt||{};cur.prompt.suffix=one();}
+      else if(k==="prefix"){if(cur.type==="join")cur.prefix=one();else{cur.prompt=cur.prompt||{};cur.prompt.prefix=one();}}
+      else if(k==="suffix"){if(cur.type==="join")cur.suffix=one();else{cur.prompt=cur.prompt||{};cur.prompt.suffix=one();}}
+      else if(k==="labels")cur.labels=one();
       else if(k==="prompt_set"){cur.prompt=cur.prompt||{};cur.prompt[rest[0]]=hslValue(rest[1],ln);}
       else if(k==="gen")cur.generation=one();
       else if(k==="schema")cur.schema=one();
@@ -401,6 +426,9 @@ function hslToSpec(text){
     else if(k==="layout"){const id=hslValue(t[1],ln);const m=/^(-?\d+)\s*,\s*(-?\d+)$/.exec(t[2]||"");
       if(!m)err(ln,"layout <id> <x>,<y> の形にする");
       spec.metadata.layout=spec.metadata.layout||{};spec.metadata.layout[id]={x:+m[1],y:+m[2]};}
+    else if(k==="bend"){const key=String(t[1]||"");const m=/^(-?\d+)\s*,\s*(-?\d+)$/.exec(t[2]||"");
+      if(!m)err(ln,"bend <つながり> <x>,<y> の形にする");
+      spec.metadata.bends=spec.metadata.bends||{};spec.metadata.bends[key]={x:+m[1],y:+m[2]};}
     else if(k==="meta")spec.metadata[t[1]]=hslValue(t[2],ln);
     else if(t[1]==="->"){
       const to=String(t[2]||"");const dot=to.indexOf(".");
@@ -446,11 +474,16 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
     schema {"type":"object","required":["score"],"properties":{"score":{"type":"integer","minimum":0,"maximum":10}}}
     route parallel failure fail_fast      出口が2本以上で全部に流すとき
     route first_match on_no_match error   条件で1本だけ選ぶとき
-    op json_array | concat | json_object | template    （join のとき）
+    op concat | markdown | csv | json_array | json_object | template   （join のとき必須）
+        concat=文章のままつなぐ / markdown=見出し付き / csv=カンマつなぎ1行
+        json_array=配列 / json_object=キー付き（labels か keys が要る） / template=差し込む
+    labels ["案A","案B"]   （join。つないだ順の名前。markdown の見出し・csv の見出し行・json_object のキーになる）
+    prefix "…" / suffix "…"（join では文章になる op = concat/markdown/csv/template のときだけ使える）
     inputs {"items":{"type":"any","cardinality":"many"}}（join のとき必須）
     mock {"text":"…"}                     （adapter が mock のとき）
   <from> -> <to>[.<port>] [if "式"] [else] [loop <id> max <回数> until "式"] [position <番号>] [transform json_stringify|json_parse] [priority <番号>]
   layout <id> <x>,<y>                     図の位置（無くてもよい）
+  bend <from>><to>[.<port>][#<position>] <x>,<y>   図の線の形（無くてもよい）
 
 守ること:
 - input は1つ、output は1つ以上。すべてのノードが input から辿れて output に届くこと。
@@ -467,10 +500,11 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
     jn -> 方法
 - 条件式で使えるのは <node>.out / <node>.meta.len / <node>.meta.tokens / run.* / vars.* / input.*。
   比較は == != < <= > >=、論理は && || !、関数は len() has() regex() count() min() max()。
-- <node>.out.<フィールド> を見るなら、その node に schema を書く（JSONで返る保証がないため）。
+- <node>.out.<フィールド> を見るなら、その node に schema を書く（**書かないとエラーになる**。
+  schema が無いとLLMは文章で返すので、.score のような項目は読めない）。
 - ノードIDは英数字と _ のみ。日本語のIDは条件式で使えない。`;
 function buildEditPrompt(spec,instruction){
-  let hsl;try{hsl=specToHSL(spec);}catch(e){hsl="（書き出せない: "+(e.message||e)+"）";}
+  let hsl;try{hsl=specToHSL(spec);}catch(e){hsl="（書き出せない: "+errText(e)+"）";}
   const F=reviewSpec(spec).filter(f=>f.level!=="info");
   return [HSL_GUIDE,
     "=== いまのハーネス ===",hsl.trim(),
@@ -597,13 +631,13 @@ function reviewSpec(spec){
   const used=new Set(nodes.map(n=>n.provider).filter(Boolean));
   for(const pid of Object.keys(spec.providers||{}))if(!used.has(pid))add("info",`provider "${pid}" はどのノードからも使われていない`);
   // validate の結果も混ぜる（実行前に弾かれるもの）
-  try{for(const m of validate(spec))add("error",m);}catch(e){add("error","spec不正: "+(e.message||e));}
+  try{for(const m of validate(spec))add("error",m);}catch(e){add("error","spec不正: "+errText(e));}
   const order={error:0,warn:1,info:2};
   return F.sort((a,b)=>order[a.level]-order[b.level]);
 }
 // 書き出して読み直すと元に戻るか（戻らない箇所を返す）
 function hslRoundTripDiff(spec){
-  let back;try{back=hslToSpec(specToHSL(spec));}catch(e){return["HSLに書き出せない: "+(e.message||e)];}
+  let back;try{back=hslToSpec(specToHSL(spec));}catch(e){return["HSLに書き出せない: "+errText(e)];}
   const diffs=[];
   const walk=(a,b,path)=>{
     if(JSON.stringify(a)===JSON.stringify(b))return;
@@ -689,7 +723,7 @@ const ModelManager={
         this.states[k]={status:"ready",progress:1,text:"ready",handle,loadCount:st.loadCount};onProgress&&onProgress(this.states[k]);return handle;
       }catch(e){
         if(isAbort(e)){this.states[k]={status:"unloaded",progress:0,text:"cancelled",handle:null,loadCount:st.loadCount};onProgress&&onProgress(this.states[k]);throw e;}
-        this.states[k]={status:"error",progress:0,text:e.message||String(e),handle:null,error:e,loadCount:st.loadCount};onProgress&&onProgress(this.states[k]);throw e;
+        this.states[k]={status:"error",progress:0,text:errText(e),handle:null,error:e,loadCount:st.loadCount};onProgress&&onProgress(this.states[k]);throw e;
       }
     })();
     st.promise=p;return p;
@@ -756,7 +790,7 @@ const OpenAILocalProvider={
     const f=transportOf(def);onProgress&&onProgress({progress:0.2,text:"エンドポイント確認中"});
     let resp;
     try{resp=await f(this.base(def)+"/models",{method:"GET",signal});}
-    catch(e){if(isAbort(e))throw e;throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"接続できない: "+this.base(def)+" ("+(e.message||e)+")"};}
+    catch(e){if(isAbort(e))throw e;throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"接続できない: "+this.base(def)+" ("+errText(e)+")"};}
     if(!resp.ok)throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"モデル一覧が取れない HTTP "+resp.status};
     let names=[];
     try{const j=await resp.json();names=(j.data||j.models||[]).map(x=>x.id||x.name).filter(Boolean);}catch(_){}
@@ -777,7 +811,7 @@ const OpenAILocalProvider={
     if(req.schema)body.response_format={type:"json_object"};
     let resp;
     try{resp=await f(this.base(def)+"/chat/completions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal});}
-    catch(e){if(isAbort(e))return{cancelled:true,partial:""};throw{code:"PROVIDER_ERROR",stage:"prefill",retryable:true,message:"リクエスト失敗: "+(e.message||e)};}
+    catch(e){if(isAbort(e))return{cancelled:true,partial:""};throw{code:"PROVIDER_ERROR",stage:"prefill",retryable:true,message:"リクエスト失敗: "+errText(e)};}
     if(!resp.ok){let t="";try{t=await resp.text();}catch(_){}throw mapHttpError(resp.status,t);}
     let text="",usage=null,partial="";
     if(!body.stream){
@@ -797,8 +831,8 @@ const OpenAILocalProvider={
     }catch(e){
       if(isAbort(e)||(signal&&signal.aborted))return{cancelled:true,partial};
       if(e&&e.code)throw e;
-      if(oomLike(e&&e.message))throw{code:"RESOURCE_EXHAUSTED",stage:"decode",retryable:true,providerState:"needs_reset",message:String(e.message||e)};
-      throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,message:"decode中断: "+(e.message||e)};
+      if(oomLike(e&&e.message))throw{code:"RESOURCE_EXHAUSTED",stage:"decode",retryable:true,providerState:"needs_reset",message:errText(e)};
+      throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,message:"decode中断: "+errText(e)};
     }
     if(signal&&signal.aborted)return{cancelled:true,partial};
     return this.finish(text,usage,req,null);
@@ -885,7 +919,7 @@ async function webgpuDiagnostics(){
           if(a.limits&&a.limits[k]!=null)r.limits[k]=a.limits[k];
         if(a.info)r.adapterInfo={vendor:a.info.vendor||"",architecture:a.info.architecture||"",description:a.info.description||""};
       }else r.adapterError="requestAdapter() が null（GPUを取得できない）";
-    }catch(e){r.adapterError=String(e&&e.message||e);}
+    }catch(e){r.adapterError=errText(e);}
   }
   r.f16=r.features.includes("shader-f16");
   try{if(navigator.storage&&navigator.storage.estimate){const s=await navigator.storage.estimate();
@@ -908,7 +942,7 @@ function diagnosisText(d){
   return L.join("\n");
 }
 function mapWebLLMError(e,def){
-  const msg=String(e&&e.message||e);
+  const msg=errText(e);
   if(/shader-f16|f16/i.test(msg)&&/support|feature|require/i.test(msg))
     return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"この端末は shader-f16 に非対応。q4f32 のモデルを選ぶ: "+msg};
   if(/Unable to find model record|not found in model_list|Cannot find model/i.test(msg))
@@ -972,7 +1006,7 @@ const WebLLMProvider={
         `self.postMessage({__hsReady:1});\n`;
       try{worker=new Worker(URL.createObjectURL(new Blob([src],{type:"text/javascript"})),{type:"module"});}
       catch(e){throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:false,
-        message:"Workerを作れない: "+(e.message||e)+"｜「Workerで動かす」を外すと同じスレッドで試せる"};}
+        message:"Workerを作れない: "+errText(e)+"｜「Workerで動かす」を外すと同じスレッドで試せる"};}
       const bootMs=def.workerBootMs||20000;
       // Workerが本当に起動したかを返事で確かめる（黙って起動しない端末があるため）
       await new Promise((res,rej)=>{
@@ -1000,7 +1034,7 @@ const WebLLMProvider={
       if(isAbort(e))throw e;
       if(e&&e.code){
         // Worker の中で落ちると理由が出ないことがある。本体URLが何を返しているかを足す
-        if(/Worker内でエラー|Workerが\d+秒/.test(e.message||"")&&!/HTTP|配信/.test(e.message||""))
+        if(/Worker内でエラー|Workerが\d+秒/.test(errText(e))&&!/HTTP|配信/.test(errText(e)))
           e.message+=`｜本体URLの状態: ${await diagnoseModuleUrl(url)}`;
         throw e;
       }
@@ -1029,8 +1063,8 @@ const WebLLMProvider={
       }
     }catch(e){
       if(isAbort(e)||(req.signal&&req.signal.aborted))return{cancelled:true,partial};
-      if(oomLike(e&&e.message))throw{code:"RESOURCE_EXHAUSTED",stage:"decode",retryable:true,providerState:"needs_reset",message:String(e.message||e)};
-      throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,message:String(e&&e.message||e)};
+      if(oomLike(e&&e.message))throw{code:"RESOURCE_EXHAUSTED",stage:"decode",retryable:true,providerState:"needs_reset",message:errText(e)};
+      throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,message:errText(e)};
     }finally{if(onAbort&&req.signal)req.signal.removeEventListener("abort",onAbort);}
     if(req.signal&&req.signal.aborted)return{cancelled:true,partial};
     return OpenAILocalProvider.finish(text,usage,req,null);
@@ -1160,7 +1194,7 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(n.prompt&&n.prompt.template){
       if(n.prompt.template.syntax!=="mustache")errs.push("prompt.template.syntax=mustache必須: "+n.id);
       if(n.prompt.template.mode!=="interpolation_only")errs.push("prompt.template.mode=interpolation_only必須: "+n.id);
-      try{mustacheRender(n.prompt.template.value||"",{},{escape:false});}catch(e){errs.push("prompt.template不正: "+n.id+" "+(e.message||""));}
+      try{mustacheRender(n.prompt.template.value||"",{},{escape:false});}catch(e){errs.push("prompt.template不正: "+n.id+" "+errText(e));}
     }
     if(n.schema&&typeof n.schema!=="object")errs.push("schemaはobject必須: "+n.id);
   });
@@ -1185,6 +1219,30 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
       if(cf)errs.push(`合流できない配線: ${key} — 別々の分岐（${cf.join(" / ")}）から来ているので実行時に揃わない。手前で Join を1つ共有する`);}
     if(card==="many"&&nonLoop.length>1){const pos=nonLoop.map(e=>e.position);if(pos.some(p=>p==null))errs.push("position未指定: "+key);
       else{if(new Set(pos).size!==pos.length)errs.push("position重複: "+key);const sorted=[...pos].sort((a,b)=>a-b);for(let i=0;i<sorted.length;i++)if(sorted[i]!==i){errs.push("position gap: "+key);break;}}}});
+  // 条件式が <node>.out.<項目> を見ているのに、その node が JSON を返す保証が無い
+  //  （mock は返す形が宣言されているので対象外。LLMは schema が無いと文章で返る）
+  {const exprs=[];
+   (spec.edges||[]).forEach(e=>{if(e.if)exprs.push({src:e.if,where:`${e.from.node} → ${e.to.node} の if`});
+     if(e.loop&&e.loop.until)exprs.push({src:e.loop.until,where:`loop[${e.loop.id}] の until`});});
+   const re=/\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*out\s*\.\s*([A-Za-z0-9_$]+)/g;
+   const seen=new Set();
+   for(const{src,where}of exprs){let m;re.lastIndex=0;
+     while((m=re.exec(String(src)))){
+       const nd=spec.nodes.find(x=>x.id===m[1]);if(!nd||nd.schema)continue;
+       // mock は返す形が宣言されている。JSONで返る指定（fixed/scoreByIteration/echoInput）なら読める
+       if(nd.mock&&(nd.mock.fixed!==undefined||nd.mock.scoreByIteration!==undefined||nd.mock.echoInput))continue;
+       if(nd.type!=="llm"&&nd.type!==undefined&&nd.type!=="tool")continue;
+       const key=`${m[1]}.out.${m[2]}`;if(seen.has(key))continue;seen.add(key);
+       errs.push(`${where} が ${key} を見ているのに ${m[1]} に schema が無い（文章で返るとこの式は読めない）: ${m[1]}`);}}}
+  spec.nodes.forEach(n=>{if(n.type!=="join")return;
+    const OPS=["json_array","concat","markdown","csv","json_object","template"];
+    if(!n.op)errs.push("join に op（まとめ方）が無い: "+n.id);
+    else if(!OPS.includes(n.op))errs.push(`join の op が不正（${OPS.join(" / ")}）: ${n.id}`);
+    if((n.prefix!=null||n.suffix!=null)&&!JOIN_TEXT_OPS.includes(n.op))
+      errs.push(`prefix/suffix は文章になるまとめ方（${JOIN_TEXT_OPS.join(" / ")}）でだけ使える: ${n.id}`);
+    if(n.labels!=null&&!Array.isArray(n.labels))errs.push("labels は配列にする: "+n.id);
+    if(n.op==="json_object"&&!(n.keys&&n.keys.length)&&!(n.labels&&n.labels.length))
+      errs.push("json_object には keys か labels（項目の名前）が要る: "+n.id);});
   spec.nodes.forEach(n=>{if(n.type==="join"&&n.op==="template"){
     if(!n.template||n.template.syntax!=="mustache")errs.push("template.syntax=mustache必須: "+n.id);
     if(!n.template||n.template.mode!=="interpolation_only")errs.push("template.mode=interpolation_only必須: "+n.id);}});
@@ -1288,14 +1346,43 @@ function resolveTargetContext(run,spec,fromExec,edge,loopEntries){
 function enqueueTo(run,spec,edge,ctx){const dup=Object.values(run.executions).find(x=>x.nodeId===edge.to.node&&x.status==="ready"&&NN(x.activationId)===NN(ctx.activationId)&&NN(x.loopInstanceId)===NN(ctx.loopInstanceId)&&NN(x.iteration)===NN(ctx.iteration));
   if(dup)return dup;return makeExec(run,edge.to.node,ctx);}
 
+/* Join のまとめ方。text になる op（concat/markdown/csv/template）では
+   prefix / suffix（必ず付ける文）を前後に足せる。json になる op では使えない（黙って無視しない）。 */
+const JOIN_TEXT_OPS=["concat","markdown","csv","template"];
+const joinLabel=(node,i)=>(node.labels&&node.labels[i]!=null)?String(node.labels[i]):null;
+const joinText=v=>typeof v==="string"?v:JSON.stringify(v);
+const csvCell=v=>{const t=joinText(v);return /[",\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t;};
 function runJoin(node,inputs){const items=(inputs.items||[]).map(rv=>rv?rv.value:null);
+  const wrap=t=>(node.prefix?node.prefix+"\n\n":"")+t+(node.suffix?"\n\n"+node.suffix:"");
   if(node.op==="json_array")return{type:"json",value:items};
-  if(node.op==="concat"){for(const x of items)if(typeof x!=="string")throw{code:"JOIN_TYPE_ERROR"};return{type:"text",value:items.join(node.sep||"\n")};}
-  if(node.op==="json_object"){const o={};(node.keys||[]).forEach(k=>o[k.key]=items[k.position]);return{type:"json",value:o};}
-  if(node.op==="template")return{type:"text",value:mustacheRender(node.template&&node.template.value||"",{items})};
-  throw{code:"JOIN_OP_ERROR"};}
+  if(node.op==="concat"){for(const x of items)if(typeof x!=="string")throw{code:"JOIN_TYPE_ERROR",message:"concat は文字列だけをつなぐ（JSONが来た）。markdown か csv を使うか、transform json_stringify を付ける"};
+    return{type:"text",value:wrap(items.join(node.sep||"\n"))};}
+  if(node.op==="markdown"){
+    const body=items.map((v,i)=>{const lb=joinLabel(node,i);
+      return lb?`## ${lb}\n\n${joinText(v)}`:`- ${joinText(v)}`;}).join("\n\n");
+    return{type:"text",value:wrap(body)};}
+  if(node.op==="csv"){
+    const head=(node.labels&&node.labels.length)?node.labels.map(csvCell).join(",")+"\n":"";
+    return{type:"text",value:wrap(head+items.map(csvCell).join(","))};}
+  if(node.op==="json_object"){const o={};
+    if(node.keys&&node.keys.length)node.keys.forEach(k=>o[k.key]=items[k.position]);
+    else if(node.labels&&node.labels.length)node.labels.forEach((k,i)=>o[String(k)]=items[i]);
+    else throw{code:"JOIN_OP_ERROR",message:"json_object には keys か labels（項目の名前）が要る"};
+    return{type:"json",value:o};}
+  if(node.op==="template")return{type:"text",value:wrap(mustacheRender(node.template&&node.template.value||"",{items,labels:node.labels||[]}))};
+  throw{code:"JOIN_OP_ERROR",message:"知らないまとめ方: "+node.op};}
 
-function failRun(run,nodeId,err,store,recordNodeFailure){run.status="failed";run.resumable=true;run.errors.push({node:nodeId,kind:err.code||"ERROR",message:err.message||String(err)});
+/* エラーを必ず読める文にする（[object Object] を絶対に出さない） */
+function errText(e){
+  if(e==null)return "（理由不明）";
+  if(typeof e==="string")return e;
+  if(e.message)return String(e.message);
+  if(e instanceof Error)return e.name+": "+e.message;
+  const c=e.code?String(e.code):"";
+  const rest=Object.keys(e).filter(k=>k!=="code").map(k=>`${k}=${typeof e[k]==="object"?JSON.stringify(e[k]):e[k]}`).join(" ");
+  return (c||"ERROR")+(rest?" "+rest:"");
+}
+function failRun(run,nodeId,err,store,recordNodeFailure){run.status="failed";run.resumable=true;run.errors.push({node:nodeId,kind:err.code||"ERROR",message:errText(err)});
   if(recordNodeFailure&&nodeId)(run.nodeRuns[nodeId]=run.nodeRuns[nodeId]||[]).push({out:null,raw:null,usage:null,meta:{len:null,tokens:null,bytes:null},status:"error",errorKind:err.code||"ERROR"});
   if(store)store.save(run);}
 
@@ -1303,7 +1390,7 @@ function handleExecutionFailure(run,spec,ex,err,store,log){
   ex.status="failed";ex.errorKind=err.code||"ERROR";
   if(ex.attempts&&ex.attempts.length){const at=ex.attempts[ex.attempts.length-1];at.status="failed";at.error={code:err.code||"ERROR",stage:err.stage};at.endedAt=Date.now();}
   (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:null,raw:null,usage:null,meta:{len:null,tokens:null,bytes:null},status:"error",errorKind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable});
-  run.errors.push({node:ex.nodeId,execId:ex.execId,kind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable,message:err.message||String(err)});
+  run.errors.push({node:ex.nodeId,execId:ex.execId,kind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable,message:errText(err)});
   log&&log("err",`✗ ${ex.nodeId}: ${err.code||"ERROR"}${err.stage?"("+err.stage+")":""} ${err.message||""}`);
   const gid=findBranchGroupId(run,ex);
   if(gid){const g=run.branchGroups[gid];g.failures.push({execId:ex.execId,nodeId:ex.nodeId,kind:err.code||"ERROR"});
@@ -1413,7 +1500,7 @@ function routeExec(spec,run,ex,byId,loopEntries,log){
   if(outEdges.length===0)return{kind:"completed"};
   const loopEdge=outEdges.find(e=>e.loop);
   if(loopEdge){const lid=loopEdge.loop.id;const inst=ex.loopInstanceId;const iter=run.loopInstances[inst].iteration;const max=loopEdge.loop.max;
-    const ctx=buildCtx(run,spec,inst);let untilTrue=false;if(loopEdge.loop.until)untilTrue=evalBool(loopEdge.loop.until,ctx);
+    const ctx=buildCtx(run,spec,inst);let untilTrue=false;if(loopEdge.loop.until)untilTrue=evalBoolAt(loopEdge.loop.until,ctx,`loop[${lid}] の until`);
     log&&log("loop",`↻ loop[${lid}] iter=${iter}/${max} until=${untilTrue}`);
     if(untilTrue||iter>=max){run.loopInstances[inst].active=false;
       const elseE=outEdges.find(e=>e.else)||outEdges.find(e=>!e.loop&&!e.if);
@@ -1425,9 +1512,10 @@ function routeExec(spec,run,ex,byId,loopEntries,log){
   const isFM=condEdges.length>0||(routing&&routing.mode==="first_match");
   if(isFM){const ifEdges=condEdges.filter(e=>e.if&&!e.else).sort((a,b)=>(a.priority||0)-(b.priority||0));const elseEdge=condEdges.find(e=>e.else);
     const ctx=buildCtx(run,spec,ex.loopInstanceId);let chosen=null;
-    for(const e of ifEdges){if(evalBool(e.if,ctx)){chosen=e;break;}}
+    for(const e of ifEdges){if(evalBoolAt(e.if,ctx,`${node.id} → ${e.to.node} の if`)){chosen=e;break;}}
     if(!chosen&&elseEdge)chosen=elseEdge;
-    if(!chosen){const mode=(routing&&routing.onNoMatch)||"error";if(mode==="error")throw{code:"NO_MATCH"};return{kind:"paused"};}
+    if(!chosen){const mode=(routing&&routing.onNoMatch)||"error";
+      if(mode==="error")throw{code:"NO_MATCH",message:`${node.id}: どの if にも当たらず、else も無い（on_no_match=error）`};return{kind:"paused"};}
     const tctx=resolveTargetContext(run,spec,ex,chosen,loopEntries);makeDelivery(run,spec,chosen,ex._rv,ex.execId,tctx);enqueueTo(run,spec,chosen,tctx);
     log&&log("route",`↳ first_match → ${chosen.to.node}`);return{kind:"completed"};}
   const act=outEdges.length>1?`fork#${++run.actSeq}`:ex.activationId;
@@ -1480,7 +1568,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -1543,11 +1631,11 @@ $("#wlSrcSeg").onclick=e=>{const b=e.target.closest("button");if(!b)return;wlSrc
 $("#wlDiag").onclick=async()=>{
   $("#wlDiag").disabled=true;
   try{const d=await webgpuDiagnostics();showDiag(diagnosisText(d));log("prov","端末チェック: WebGPU="+d.webgpu+" adapter="+d.adapter+" f16="+d.f16);}
-  catch(e){showDiag("端末チェック失敗: "+(e.message||e));}
+  catch(e){showDiag("端末チェック失敗: "+errText(e));}
   finally{$("#wlDiag").disabled=false;}
 };
 async function wlRun(btn,fn){const b=$(btn);b.disabled=true;
-  try{await fn();}catch(e){const m=(e&&(e.message||e.code))||String(e);showDiag("失敗: "+m);log("err","✗ "+(e&&e.code||"ERROR")+": "+m);}
+  try{await fn();}catch(e){const m=errText(e);showDiag("失敗: "+m);log("err","✗ "+(e&&e.code||"ERROR")+": "+m);}
   finally{b.disabled=false;renderProvState();}}
 $("#wlModels").onclick=()=>wlRun("#wlModels",async()=>{
   const def=providerDefFromForm();
@@ -1578,7 +1666,7 @@ $("#probe").onclick=async()=>{
   $("#probe").disabled=true;
   try{await ModelManager.ensureLoaded(Object.assign({},def,{adapter:adapterId}),ad,undefined,()=>renderProvState());
     log("ok",`✔ ${adapterId} ready: ${def.model||""}`);}
-  catch(e){log("err",`✗ ${e.code||"ERROR"}: ${e.message||e}`);}
+  catch(e){log("err",`✗ ${e.code||"ERROR"}: ${errText(e)}`);}
   finally{$("#probe").disabled=false;renderProvState();}
 };
 $("#writeSpec").onclick=()=>{
@@ -1716,21 +1804,51 @@ function setSpecObj(spec,opt){
   edRender();showErrs();renderIO();if(typeof renderModels==="function")renderModels();
 }
 function syncFromCanvas(){$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();}
+/* 条件式が読んでいる項目から schema を作って付ける（中身は Spec に書かれるので見える） */
+function addSchemaFor(id){
+  const n=nodeById(id);if(!n)return;
+  const fields=new Set();
+  const re=new RegExp("\\b"+id.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*\\.\\s*out\\s*\\.\\s*([A-Za-z0-9_$]+)","g");
+  for(const e of Ed.spec.edges||[]){
+    for(const src of [e.if,e.loop&&e.loop.until]){if(!src)continue;let m;re.lastIndex=0;
+      while((m=re.exec(String(src))))fields.add(m[1]);}}
+  if(!fields.size)return setHint(id+" が読まれている項目を見つけられなかった");
+  const f=[...fields];
+  n.schema={type:"object",required:f,properties:Object.fromEntries(f.map(k=>[k,{}]))};
+  // 何を返すかをLLMにも伝える（schema だけだと小さいモデルは従いにくい）
+  const ask=`必ず JSON だけで答える。形式: {${f.map(k=>`"${k}": …`).join(", ")}}`;
+  n.prompt=n.prompt||{};
+  if(!n.prompt.suffix)n.prompt.suffix=ask;
+  syncFromCanvas();setHint(`${id} に schema（${f.join(", ")}）を付けた`);
+}
 function showErrs(){
-  let errs=[];try{errs=validate(Ed.spec);}catch(e){errs=["spec不正: "+(e.message||e)];}
+  let errs=[];try{errs=validate(Ed.spec);}catch(e){errs=["spec不正: "+errText(e)];}
   const box=$("#vErr");
   box.innerHTML=errs.length?("⚠ "+errs.slice(0,4).map(esc).join("\n⚠ ")+(errs.length>4?`\n…他${errs.length-4}件`:"")):"";
-  // 入口の合流（many以外への複数incoming / 合流できない配線）は、その場で直せるようにする
-  const targets=[];
+  // 出ているエラーのうち、その場で直せるものはボタンにする（読むだけで詰まらせない）
+  const fixes=[];
+  const fanIn=[];
   for(const m of errs){
-    const r=/^many以外への複数incoming: (.+)\.([^.]+)$/.exec(m)||/^合流できない配線: (.+)\.([^.\s]+) —/.exec(m);
-    if(r&&!targets.some(t=>t.id===r[1]&&t.port===r[2]))targets.push({id:r[1],port:r[2]});}
-  if(targets.length){
+    let r;
+    if((r=/^many以外への複数incoming: (.+)\.([^.]+)$/.exec(m))||(r=/^合流できない配線: (.+)\.([^.\s]+) —/.exec(m))){
+      if(!fanIn.some(t=>t.id===r[1]&&t.port===r[2]))fanIn.push({id:r[1],port:r[2]});continue;}
+    if((r=/^出口が2本以上あるのに routing\.mode が無い.*: (.+)$/.exec(m))||(r=/^parallelではfailurePolicy明示必須: (.+)$/.exec(m))){
+      const id=r[1];
+      if(!fixes.some(f=>f.key==="route:"+id))fixes.push({key:"route:"+id,label:`${id} の出口の流し方を決める`,
+        act:()=>askRouting(id,()=>{syncFromCanvas();setHint(`${id} の出口の流し方を決めた`);})});continue;}
+    if((r=/が (.+?)\.(.+?) を見ているのに .+ に schema が無い.*: (.+)$/.exec(m))){
+      const id=r[3];
+      if(!fixes.some(f=>f.key==="schema:"+id))fixes.push({key:"schema:"+id,label:`${id} に schema を付ける`,
+        act:()=>addSchemaFor(id)});continue;}
+  }
+  if(fanIn.length)fixes.unshift({key:"fanin",label:fanIn.length>1?`入口の合流を直す（${fanIn.length}か所）`:`${fanIn[0].id} の入口をまとめる`,
+    act:()=>askFanIn(fanIn,()=>{syncFromCanvas();setHint("入口の合流を直した");}),id:"vFixFanIn"});
+  if(fixes.length){
     const row=document.createElement("div");row.className="row";
-    const b=document.createElement("button");b.id="vFixFanIn";b.className="primary";
-    b.textContent=targets.length>1?`入口の合流を直す（${targets.length}か所）`:`${targets[0].id} の入口をまとめる`;
-    b.onclick=()=>askFanIn(targets,()=>{syncFromCanvas();setHint(`入口の合流を直した`);});
-    row.appendChild(b);box.appendChild(row);
+    fixes.forEach((f,i)=>{const b=document.createElement("button");
+      if(f.id)b.id=f.id;if(i===0)b.className="primary";
+      b.textContent=f.label;b.onclick=f.act;row.appendChild(b);});
+    box.appendChild(row);
   }
   return errs;
 }
@@ -1833,7 +1951,9 @@ $("#cv").addEventListener("pointerdown",ev=>{
   const eIdx=ev.target.getAttribute&&ev.target.getAttribute("data-edge");
   if(port)press={kind:"port",node:port.dataset.node,side:port.dataset.side};
   else if(node)press={kind:"node",id:node.dataset.id,start:posOf(node.dataset.id),px:ev.clientX,py:ev.clientY};
-  else if(eIdx!=null)press={kind:"edge",i:+eIdx};
+  else if(eIdx!=null){const e=(Ed.spec.edges||[])[+eIdx];
+    const g=e?edgeGeom(e):null;
+    press={kind:"edge",i:+eIdx,px:ev.clientX,py:ev.clientY,start:g?{x:g.mx,y:g.my}:null};}
   else press={kind:"bg",px:ev.clientX,py:ev.clientY,vx:Ed.view.x,vy:Ed.view.y};
   $("#cv").setPointerCapture(ev.pointerId);
 });
@@ -1854,6 +1974,15 @@ $("#cv").addEventListener("pointermove",ev=>{
     const el=document.querySelector('.nd[data-id="'+CSS.escape(press.id)+'"]');
     if(el){el.style.left=L[press.id].x+"px";el.style.top=L[press.id].y+"px";}
     drawEdgesOnly();
+  }else if(press.kind==="edge"&&press.start){
+    if(!moved&&Math.hypot(ev.clientX-press.px,ev.clientY-press.py)<8)return;
+    moved=true;
+    const e=(Ed.spec.edges||[])[press.i];if(!e)return;
+    const a=portXY(e.from.node,"out"),b=portXY(e.to.node,"in");
+    const w=toWorld(ev.clientX,ev.clientY);
+    // 中点が指の位置に来るように制御点を置く（Q曲線の中点は (a+2c+b)/4）
+    setBend(e,{x:Math.round(2*w.x-(a.x+b.x)/2),y:Math.round(2*w.y-(a.y+b.y)/2)});
+    drawEdgesOnly();
   }else if(press.kind==="bg"){
     if(!moved&&Math.hypot(ev.clientX-press.px,ev.clientY-press.py)<6)return;
     moved=true;Ed.view.x=press.vx+(ev.clientX-press.px);Ed.view.y=press.vy+(ev.clientY-press.py);applyView();
@@ -1861,18 +1990,29 @@ $("#cv").addEventListener("pointermove",ev=>{
 });
 // 線 → 当たり判定 → 丸 の順に重ねる。丸を最後に描かないと、
 // 別の辺の当たり判定（太い透明線）が丸を覆ってタップが奪われる。
+/* 線の形（中点をどこに置くか）。位置は metadata.bends に入る。Runtimeは見ない。 */
+const bendOf=e=>(((Ed.spec.metadata||{}).bends)||{})[edgeKey(e)];
+function setBend(e,v){const m=Ed.spec.metadata=Ed.spec.metadata||{};
+  if(v){(m.bends=m.bends||{})[edgeKey(e)]=v;return;}
+  if(m.bends){delete m.bends[edgeKey(e)];if(!Object.keys(m.bends).length)delete m.bends;}}
+const edgeKey=e=>`${e.from.node}>${e.to.node}${(e.to.port&&e.to.port!=="in")?"."+e.to.port:""}${e.position!=null?"#"+e.position:""}`;
+function edgeGeom(e){
+  const a=portXY(e.from.node,"out"),b=portXY(e.to.node,"in");
+  const bd=bendOf(e);
+  if(bd)return{d:`M ${a.x} ${a.y} Q ${bd.x} ${bd.y} ${b.x} ${b.y}`,mx:(a.x+2*bd.x+b.x)/4,my:(a.y+2*bd.y+b.y)/4,bent:true};
+  return{d:edgePath(a,b),mx:(a.x+b.x)/2,my:(a.y+b.y)/2,bent:false};
+}
 function drawEdges(){
   const svg=$("#edges");while(svg.firstChild)svg.removeChild(svg.firstChild);
   const es=Ed.spec.edges||[];
-  const geo=es.map(e=>{const a=portXY(e.from.node,"out"),b=portXY(e.to.node,"in");
-    return{d:edgePath(a,b),mx:(a.x+b.x)/2,my:(a.y+b.y)/2};});
+  const geo=es.map(edgeGeom);
   geo.forEach((g,i)=>{const e=es[i];
     svg.appendChild(mk("path",{d:g.d,class:e.loop?"loop":(e.if||e.else?"cond":"")}));
     svg.appendChild(mk("path",{d:g.d,class:"hit","data-edge":i}));});
   geo.forEach((g,i)=>{const e=es[i];
     const on=Ed.sel&&Ed.sel.kind==="edge"&&Ed.sel.i===i;
     svg.appendChild(mk("circle",{cx:g.mx,cy:g.my,r:17,class:"midhit","data-edge":i}));
-    svg.appendChild(mk("circle",{cx:g.mx,cy:g.my,r:8,class:"mid"+(on?" on":""),"data-edge":i}));
+    svg.appendChild(mk("circle",{cx:g.mx,cy:g.my,r:8,class:"mid"+(on?" on":"")+(g.bent?" bent":""),"data-edge":i}));
     const lab=edgeLabel(e);
     if(lab)svg.appendChild(mk("text",Ed.dir==="tb"
       ?{x:g.mx+13,y:g.my+4,class:"elabel","text-anchor":"start"}
@@ -1883,7 +2023,7 @@ $("#cv").addEventListener("pointerup",ev=>{
   pts.delete(ev.pointerId);if(pts.size<2)pinch0=null;
   const pr=press;press=null;
   if(!pr)return;
-  if(pr.kind==="node"&&moved){syncFromCanvas();return;}
+  if((pr.kind==="node"||pr.kind==="edge")&&moved){syncFromCanvas();setHint(pr.kind==="edge"?"線の形を変えた（辺をタップ →「線の形を戻す」で戻せる）":"");return;}
   if(moved)return;
   if(pr.kind==="port"){
     if(pr.side==="out"){Ed.arm={node:pr.node};paintArm();
@@ -1915,7 +2055,7 @@ function makePortMany(nodeId,port){
 function insertJoin(nodeId,port){
   const ins=edgesInto(nodeId,port);if(!ins.length)return null;
   const jid=newId("jn");
-  const jn={id:jid,type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}};
+  const jn={id:jid,type:"join",op:"markdown",labels:ins.map(e=>e.from.node),inputs:{items:{type:"any",cardinality:"many"}}};
   Ed.spec.nodes.push(jn);
   ins.forEach((e,i)=>{e.to={node:jid,port:"items"};e.position=i;});
   Ed.spec.edges.push({from:{node:jid,port:"out"},to:{node:nodeId,port}});
@@ -1946,7 +2086,8 @@ function fanInGroups(seeds){
 function insertSharedJoin(g){
   if(!g.targets.length)return null;
   const jid=newId("jn");
-  const jn={id:jid,type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}};
+  const srcs0=edgesInto(g.targets[0].id,g.targets[0].port).map(e=>e.from.node);
+  const jn={id:jid,type:"join",op:"markdown",labels:srcs0,inputs:{items:{type:"any",cardinality:"many"}}};
   Ed.spec.nodes.push(jn);
   const srcs=edgesInto(g.targets[0].id,g.targets[0].port).map(e=>({node:e.from.node,port:e.from.port||"out"}));
   for(const t of g.targets){
@@ -2050,9 +2191,13 @@ function bindFields(obj,after){
 function openNodeSheet(id){
   const n=nodeById(id);if(!n)return;
   const provs=Object.keys(Ed.spec.providers||{});
+  const adLabel={webllm:"内蔵LLM・この端末で動く",openai_local:"OpenAI互換のローカルサーバ",mock:"テスト用・推論しない"};
+  const hasWebllm=provs.some(p=>(Ed.spec.providers[p]||{}).adapter==="webllm");
   const provOpts=[{v:"",t:"(未設定)"}]
-    .concat(provs.map(p=>({v:p,t:p+"（"+((Ed.spec.providers[p]||{}).adapter||"?")+"）"})))
-    .concat([{v:"__webllm",t:"＋ 内蔵LLM（この端末で動く）"},{v:"__mock",t:"mock（テスト用・推論しない）"}]);
+    .concat(provs.map(p=>{const ad=(Ed.spec.providers[p]||{}).adapter||"?";
+      return{v:p,t:`${p}（${adLabel[ad]||ad}）`};}))
+    .concat(hasWebllm?[]:[{v:"__webllm",t:"＋ 内蔵LLM を使えるようにする（この端末で動く）"}])
+    .concat([{v:"__mock",t:"mock（テスト用・推論しない）"}]);
   const provVal=n.provider||(n.mock?"__mock":"");
   const provDef=n.provider?(Ed.spec.providers||{})[n.provider]:null;
   const provAdapter=provDef&&provDef.adapter;
@@ -2076,9 +2221,24 @@ function openNodeSheet(id){
     h+=fld("JSON schema（出力を縛る・空で無効）",`<textarea data-json="schema" placeholder='{"type":"object","required":["score"]}'>${esc(n.schema?JSON.stringify(n.schema):"")}</textarea>`);
   }
   if(n.type==="join"){
-    h+=fld("まとめ方",sel("op",n.op,[{v:"json_array",t:"json_array（配列にする）"},{v:"concat",t:"concat（文字列を繋ぐ）"},{v:"json_object",t:"json_object（キー付き）"},{v:"template",t:"template（差し込む）"}]));
+    h+=fld("まとめ方（どんな形で渡すか）",sel("op",n.op,[
+      {v:"concat",t:"文章のまま（つなぐ）"},
+      {v:"markdown",t:"Markdown（見出し付き／箇条書き）"},
+      {v:"csv",t:"カンマつなぎ（CSV・1行）"},
+      {v:"json_array",t:"JSONの配列"},
+      {v:"json_object",t:"JSONのキー付き（名前が要る）"},
+      {v:"template",t:"テンプレに差し込む"}]));
     if(n.op==="concat")h+=fld("区切り",txt("sep",n.sep,"\\n"));
-    if(n.op==="template")h+=fld("テンプレ（{{{items.0}}}）",area("template.value",getP(n,"template.value")));
+    if(n.op==="template")h+=fld("テンプレ（{{{items.0}}} / {{{labels.0}}}）",area("template.value",getP(n,"template.value")));
+    if(["markdown","csv","json_object"].includes(n.op)){
+      const srcs=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&(e.to.port||"in")==="items"&&!e.loop)
+        .sort((a,b)=>(a.position||0)-(b.position||0)).map(e=>e.from.node);
+      h+=fld("それぞれの名前（つないだ順・カンマ区切り）",
+        txt("__labels",(n.labels||[]).join(", "),srcs.join(", ")||"案A, 案B"));
+      h+=`<div class="mini">空なら名前なし（markdownは箇条書き・csvは見出し無し）。<button id="jnAuto">つないだノード名を入れる</button></div>`;
+    }
+    if(JOIN_TEXT_OPS.includes(n.op))
+      h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prefix",n.prefix))}${fld("必ず後ろに付ける文",txt("suffix",n.suffix))}</div>`;
   }
   h+=fld("出口の扱い（分岐するときだけ）",sel("routing.mode",getP(n,"routing.mode"),[{v:"",t:"(未設定・1本だけ出る)"},{v:"parallel",t:"parallel（全部に流す）"},{v:"first_match",t:"first_match（条件で1本選ぶ）"}]));
   if(getP(n,"routing.mode")==="parallel")
@@ -2123,6 +2283,13 @@ function openNodeSheet(id){
     if(Object.keys(o).length)n.overrides=o;else delete n.overrides;
     syncFromCanvas();
   });
+  const lb=$("#sheetBody").querySelector('[data-f="__labels"]');
+  if(lb)lb.oninput=()=>{const a=lb.value.split(",").map(x=>x.trim()).filter(Boolean);
+    if(a.length)n.labels=a;else delete n.labels;syncFromCanvas();};
+  const ja=$("#sheetBody").querySelector('#jnAuto');
+  if(ja)ja.onclick=()=>{n.labels=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&(e.to.port||"in")==="items"&&!e.loop)
+      .sort((a,b)=>(a.position||0)-(b.position||0)).map(e=>e.from.node);
+    if(!n.labels.length)delete n.labels;syncFromCanvas();openNodeSheet(n.id);};
   const sc=$("#sheetBody").querySelector('[data-json="schema"]');
   if(sc)sc.oninput=()=>{
     const v=sc.value.trim();
@@ -2130,6 +2297,10 @@ function openNodeSheet(id){
     else{try{n.schema=JSON.parse(v);sc.style.borderColor="";}catch(e){sc.style.borderColor="var(--err)";return;}}
     syncFromCanvas();
   };
+  const opSel=$("#sheetBody").querySelector('select[data-f="op"]');
+  if(opSel)opSel.addEventListener("change",()=>{
+    if(!JOIN_TEXT_OPS.includes(n.op)){delete n.prefix;delete n.suffix;}
+    syncFromCanvas();openNodeSheet(n.id);});
   const rm=$("#sheetBody").querySelector('[data-f="routing.mode"]');
   if(rm)rm.onchange=()=>{const v=rm.value;
     if(!v){delete n.routing;}else{n.routing=n.routing||{};n.routing.mode=v;
@@ -2161,8 +2332,11 @@ function openEdgeSheet(i){
     h+=fld("打ち切り条件（真になったら抜ける）",txt("loop.until",getP(e,"loop.until"),"critic.out.score >= 8"));}
   if((e.to.port||"in")==="items")h+=fld("並び順 position",num("position",e.position));
   h+=fld("値の変換",sel("transform",e.transform,[{v:"",t:"なし"},{v:"json_stringify",t:"json_stringify（json→text）"},{v:"json_parse",t:"json_parse（text→json）"}]));
-  h+=`<div class="row"><button class="danger" id="eDel">このつながりを削除</button></div>`;
+  h+=`<div class="mini">線が重なって見づらいときは、<b>線の途中の丸をドラッグ</b>すると形を変えられる。</div>`;
+  h+=`<div class="row">${bendOf(e)?`<button id="eStraight">線の形を戻す</button>`:""}<button class="danger" id="eDel">このつながりを削除</button></div>`;
   openSheet(h);bindClose();bindFields(e);
+  const st=$("#eStraight");
+  if(st)st.onclick=()=>{setBend(e,null);syncFromCanvas();openEdgeSheet(i);setHint("線の形を戻した");};
   const kk=$("#sheetBody").querySelector('[data-f="__kind"]');
   kk.onchange=()=>{
     delete e.if;delete e.else;delete e.loop;
@@ -2204,7 +2378,7 @@ function addNode(type){
     if(provs.length)n.provider=provs[0];else n.mock={text:"(mock)"};
     n.prompt={system:"",template:{syntax:"mustache",mode:"interpolation_only",value:"{{{in}}}"}};
     delete n.prompt.system;}
-  if(type==="join"){n.op="json_array";n.inputs={items:{type:"any",cardinality:"many"}};}
+  if(type==="join"){n.op="markdown";n.inputs={items:{type:"any",cardinality:"many"}};}
   Ed.spec.nodes=Ed.spec.nodes||[];Ed.spec.nodes.push(n);
   const r=$("#cv").getBoundingClientRect();
   const c=toWorld(r.left+r.width/2,r.top+r.height/2);
@@ -2258,7 +2432,7 @@ async function copyText(t){
 const specName=()=>((Ed.spec.metadata||{}).name||"harness").replace(/[^\w一-龠ぁ-んァ-ヶー-]/g,"_");
 function openExportSheet(){
   let hsl="",warn="";
-  try{hsl=specToHSL(Ed.spec);}catch(e){hsl="";warn="HSLに書き出せない: "+(e.message||e);}
+  try{hsl=specToHSL(Ed.spec);}catch(e){hsl="";warn="HSLに書き出せない: "+errText(e);}
   const diff=hsl?hslRoundTripDiff(Ed.spec):null;
   if(diff)warn=`この構成はHSLだけでは完全に戻らない（${diff.length}箇所）。共有はJSONを使う:\n`+diff.slice(0,3).join("\n");
   let h=head("書き出す");
@@ -2299,7 +2473,7 @@ function openExportSheet(){
       $("#exLinkCopy").onclick=async()=>{$("#exLinkCopy").textContent=(await copyText(url))?"コピーした":"コピーできない";};
       $("#exShare").style.display=navigator.share?"":"none";
       $("#exShare").onclick=()=>navigator.share({title:(Ed.spec.metadata||{}).name||"harness",url}).catch(()=>{});
-    }catch(e){$("#exLinkInfo").textContent="作れない: "+(e.message||e);}
+    }catch(e){$("#exLinkInfo").textContent="作れない: "+errText(e);}
   };
 }
 function detectFormat(text){
@@ -2315,7 +2489,7 @@ function previewImport(raw,fromWhere){
   let got;
   try{got=parseHarnessText(raw);}
   catch(e){
-    box.innerHTML=`<div class="vErr">⚠ 読み取れない${e.line?`（${e.line}行目）`:""}: ${esc(e.message||e)}</div>`
+    box.innerHTML=`<div class="vErr">⚠ 読み取れない${e.line?`（${e.line}行目）`:""}: ${esc(errText(e))}</div>`
       +`<div class="row"><button id="imErrCopy">このエラーをAIに返す文面をコピー</button></div>`;
     $("#imErrCopy").onclick=async()=>{$("#imErrCopy").textContent=(await copyText(errorReplyText(e,raw)))?"コピーした":"コピーできない";};
     return;}
@@ -2349,7 +2523,7 @@ function openImportSheet(){
     const m=/#s=([A-Za-z0-9\-_]+)/.exec(t);
     if(m){try{const sp=await decodeShare(m[1]);setSpecObj(sp);fitView();closeSheet();
         setHint("共有リンクから取り込んだ");return;}
-      catch(e){return $("#imResult").innerHTML=`<div class="vErr">⚠ リンクを復元できない: ${esc(e.message||e)}</div>`;}}
+      catch(e){return $("#imResult").innerHTML=`<div class="vErr">⚠ リンクを復元できない: ${esc(errText(e))}</div>`;}}
     previewImport(t,"貼り付け");
   };
   $("#imFile").onclick=()=>$("#fileIn").click();
@@ -2387,7 +2561,7 @@ async function loadFromHash(){
     setHint("共有リンクから読み込んだ（この端末には保存されていない）");
     document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.classList.remove("on"));
     return true;}
-  catch(e){setHint("共有リンクを読めない: "+(e.message||e));return false;}
+  catch(e){setHint("共有リンクを読めない: "+errText(e));return false;}
 }
 $("#spec").addEventListener("input",()=>{
   let o;try{o=JSON.parse($("#spec").value);}catch(e){$("#vErr").textContent="⚠ JSON: "+e.message;return;}
@@ -2471,7 +2645,7 @@ function renderIO(){
     else if(cur.status==="running"||cur.status==="cancelling")st.textContent=`実行中… ${Object.values(cur.nodeRuns||{}).length}ノード目`;
     else if(cur.status==="success")st.textContent="実行できた";
     else{const e=(cur.errors||[])[0];
-      st.textContent=`実行は ${cur.status}`+(e?` — ${e.node||""}: ${e.kind||""} ${(e.message||"").slice(0,90)}`:"");}
+      st.textContent=`実行は ${cur.status}`+(e?` — ${e.node||""}: ${e.kind||""} ${errText(e).slice(0,90)}`:"");}
     st.style.color=(cur&&cur.status==="failed")?"var(--err)":"var(--sub)";
   }
   for(const n of outs){
@@ -2486,7 +2660,7 @@ function renderIO(){
     else if(cur.status==="running"||cur.status==="cancelling"){el.textContent="実行中…";el.style.color="var(--sub)";}
     else{
       const e=(cur.errors||[])[0];
-      el.textContent=e?`ここまで届かなかった — ${e.node||"?"} で ${e.kind||"失敗"}\n${(e.message||"").slice(0,120)}`
+      el.textContent=e?`ここまで届かなかった — ${e.node||"?"} で ${e.kind||"失敗"}\n${errText(e).slice(0,120)}`
                       :`ここまで届かなかった（${cur.status}）`;
       el.style.color="var(--err)";
     }
@@ -2739,9 +2913,11 @@ $("#mdlPersist").onclick=async()=>{
     else{
       const okp=await navigator.storage.persist();
       setMdlMsg(okp?"長期保存が有効になった。ブラウザが勝手に消さなくなる"
-        :"ブラウザが長期保存を認めなかった。ホーム画面に追加すると残りやすくなる（共有 → ホーム画面に追加）");
+        :"ブラウザが長期保存を認めなかった（iOSのSafariはタブで開いている間は基本的に断る）。"
+         +"共有 → ホーム画面に追加 でアプリとして開き直してからもう一度押すと通ることがある。"
+         +"通らなくても、落としたモデルがすぐ消えるわけではない（しばらく使わないと片付けられることがある、という話）");
     }
-  }catch(e){setMdlMsg("申請できない: "+((e&&e.message)||e));}
+  }catch(e){setMdlMsg("申請できない: "+errText(e));}
   finally{b.disabled=false;updateStorageInfo();}
 };
 $("#mdlF32").onchange=renderModels;
@@ -2759,7 +2935,7 @@ $("#mdlScan").onclick=async()=>{
 };
 /* 実行できない理由を、押した場所のすぐそばに出す（「押しても動かない」を作らない） */
 function noteBlocked(){
-  let errs=[];try{errs=validate(JSON.parse($("#spec").value));}catch(e){errs=["JSONとして読めない: "+(e.message||e)];}
+  let errs=[];try{errs=validate(JSON.parse($("#spec").value));}catch(e){errs=["JSONとして読めない: "+errText(e)];}
   const st=$("#ioStatus");
   if(st)st.textContent="実行できない — 先に直すところがある: "+(errs[0]||"検証エラー")+(errs.length>1?`（他${errs.length-1}件）`:"");
   setHint("実行できない: "+(errs[0]||"検証エラー"));
@@ -2768,7 +2944,7 @@ function noteBlocked(){
 async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec){noteBlocked();return;}
   store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
   setRunUI(true);setState("running");
-  try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+(e.message||e));}
+  try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}
   report();}
 async function stepOne(){const spec=parseSpec();if(!spec){noteBlocked();return;}
   if(!cur||cur.status!=="running"){clearLog();clearStream();store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();}
@@ -2776,11 +2952,11 @@ async function stepOne(){const spec=parseSpec();if(!spec){noteBlocked();return;}
 async function doResume(){clearLog();const cp=store.load();if(!cp){log("err","Checkpointなし");return;}if(cp.status==="success"){log("err","terminal success はResume不可");return;}
   const spec=parseSpec();if(!spec)return;if(canonSpec(spec)!==cp.specCanon){log("err","Spec変更のためResume拒否（自動移行しない）");return;}
   cur=cp;ctl=newCtl();log("cp",`▣ Resume: status=${cp.status} queue先頭=${JSON.stringify(cp.workQueue[0])}`);
-  setRunUI(true);try{await resumeRun(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+(e.message||e));}report();}
+  setRunUI(true);try{await resumeRun(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}report();}
 async function doRetry(){const spec=parseSpec();if(!spec||!cur)return;
   const failed=Object.values(cur.executions).find(e=>e.status==="failed");if(!failed){log("err","failedなExecutionが無い");return;}
   log("cp",`▣ Retry: ${failed.execId}（iteration不変・attempt+1）`);ctl=newCtl();setRunUI(true);
-  try{await retryExecution(spec,cur,failed.execId,store,log,ctl);}catch(e){log("err","例外: "+(e.message||e));}report();}
+  try{await retryExecution(spec,cur,failed.execId,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}report();}
 $("#run").onclick=runAll;$("#runTop").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResume;$("#retry").onclick=doRetry;
 const doCancel=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
 $("#cancel").onclick=doCancel;$("#cancelTop").onclick=doCancel;
@@ -3049,7 +3225,36 @@ export async function CreateMLCEngine(model,opt){
   const r=await fullRun(sp,{});
   const both=["C","D"].every(id=>(r.nodeRuns[id]||[]).some(h=>h.status==="success"));
   ok("33 合流: Joinを1つ共有すれば2か所に配っても揃う",validate(sp).length===0&&r.status==="success"&&both);}
- }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${(e&&e.message)||JSON.stringify(e)}`);}
+ // 34 Join のまとめ方（文章のまま / Markdown / CSV / キー付き）と、必ず付ける文
+ {const mk=(op,extra)=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+   nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+     {id:"A",type:"llm",provider:"m",mock:{tag:"案A"}},{id:"B",type:"llm",provider:"m",mock:{tag:"案B"}},
+     Object.assign({id:"jn",type:"join",op,inputs:{items:{type:"any",cardinality:"many"}}},extra||{}),
+     {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"jn",port:"items"},position:0},
+     {from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:1},
+     {from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}]});
+  const md=await fullRun(mk("markdown",{labels:["案A","案B"],prefix:"以下は2案。",suffix:"選んで。"}),{});
+  const csv=await fullRun(mk("csv",{labels:["a","b"]}),{});
+  const obj=await fullRun(mk("json_object",{labels:["a","b"]}),{});
+  const badPrefix=validate(mk("json_array",{prefix:"x"}));
+  ok("34 Join: markdown/csv/キー付き・必ず付ける文が効く",
+    md.result.value==="以下は2案。\n\n## 案A\n\n案A1\n\n## 案B\n\n案B1\n\n選んで。"
+    &&csv.result.value==="a,b\n案A1,案B1"&&JSON.stringify(obj.result.value)==='{"a":"案A1","b":"案B1"}'
+    &&badPrefix.length===1&&/prefix\/suffix/.test(badPrefix[0]));}
+ // 35 失敗は必ず読める文になる（[object Object] を出さない）
+ {const sp={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+   nodes:[{id:"in",type:"input"},{id:"c",type:"llm",provider:"m",mock:{fixed:{note:"x"}},schema:{type:"object"},routing:{mode:"first_match",onNoMatch:"error"}},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"c",port:"in"}},
+     {from:{node:"c",port:"out"},to:{node:"out",port:"in"},priority:0,if:"c.out.score >= 8"}]};
+  const r=await fullRun(sp,{});
+  const msg=(r.errors[0]||{}).message||"";
+  const noObj=!msg.includes("[object Object]")&&errText({code:"X",a:1})==="X a=1"&&errText("なま")==="なま";
+  // 条件式が out.<項目> を見ているのに schema が緩い場合は実行時に理由が出る
+  ok("35 失敗の文: 何が読めなかったかを言う・[object Object] を出さない",
+    r.status==="failed"&&r.errors[0].kind==="REFERENCE_ERROR"&&/あるのは: note/.test(msg)&&msg.includes("c.out.score")&&noObj);}
+ }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
 })();

@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.10.0 ノードごとのモデルと合流
+## 1. 現状 — v0.11.0 読める失敗とまとめ方
 
 | 段階 | 状態 |
 |---|---|
@@ -36,7 +36,8 @@ iPhone でもPCでも同じ操作。
 | HSL・共有・診断 v0.7.0（言語で書き出す/取り込む・リンク共有・構造診断） | 実装済み |
 | 外部LLMとの往復 v0.8.0（1枚を渡す→返答を口に入れると図になる。差分を見てから適用） | 実装済み |
 | 入出力とモデル v0.9.0（入力/出力ノードに連動する欄・Gemma/Qwen/Llamaを端末に落とす） | 実装済み |
-| **ノードごとのモデルと合流 v0.10.0（ノード編集でモデルを選ぶ・1つの入口に複数の線を入れる）** | **いまここ** |
+| ノードごとのモデルと合流 v0.10.0（ノード編集でモデルを選ぶ・1つの入口に複数の線を入れる） | 実装済み |
+| **読める失敗とまとめ方 v0.11.0（失敗の理由を必ず文で出す・出たエラーをその場で直す・Joinのまとめ方と追加文言・線の形）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -66,6 +67,33 @@ iPhone でもPCでも同じ操作。
   どちらかを選ぶまで線は張らない。すでにそうなっている Spec を取り込んだときは、
   検証エラーの横に**その場で直せるボタン**が出る（`入口の合流を直す（2か所）`）。
 
+### 失敗したときに何が起きたか分かるようにする
+
+**`[object Object]` を出さない。** 失敗の理由は必ず文にする。特に条件式が読めなかったときは、
+どの式のどこで外れたかまで言う:
+
+```
+critic: REFERENCE_ERROR loop[revise] の until の式が読めない: "critic.out.score>=8"
+  — score を読もうとしたが、そこは文章（JSONではない）。読みたいノードに schema を付けると JSON で返る
+```
+
+```
+critic: REFERENCE_ERROR critic → out の if の式が読めない: "critic.out.score >= 8"
+  — score がその中に無い（あるのは: note, reason）
+```
+
+**そもそも実行前に止める。** 条件式が `<node>.out.<項目>` を見ているのに、その node に `schema` が無いときは
+**配線だけで分かる**ので検証エラーにする（LLMは schema が無いと文章で返すため、その式は必ず読めない）:
+
+```
+⚠ loop[revise] の until が critic.out.score を見ているのに critic に schema が無い（文章で返るとこの式は読めない）: critic
+```
+
+このエラーには **「critic に schema を付ける」ボタン**が出る。押すと、式が読んでいる項目から
+`{"type":"object","required":["score"],"properties":{"score":{}}}` を作って付け、
+**「必ず JSON だけで答える。形式: {"score": …}」** をそのノードの suffix にも入れる
+（schema だけだと小さいモデルは従いにくいため）。
+
 ### 合流できる配線・できない配線（実行時にDEADLOCKにしないための規則）
 
 Runtime は **同じ分岐グループから出た Delivery しか1つの Execution に揃えない**
@@ -93,6 +121,10 @@ Runtime は **同じ分岐グループから出た Delivery しか1つの Execut
 Join が2か所以上に配ることになるので、**その配り方（parallel / first_match）も改めて聞く**。
 - **実行できないときは、押したボタンのそばに理由が出る。** 検証エラーが残っているのに実行を押した場合、
   入出力パネルに `実行できない — 先に直すところがある: …` が出る（無反応にしない）。
+- **出ているエラーは、その場で直せるものはボタンになる。**
+  「入口の合流を直す」「<node> の出口の流し方を決める」「<node> に schema を付ける」。
+- **線が重なって見づらいときは、線の途中の丸をドラッグして形を変えられる。**
+  位置は `metadata.bends` に入る（Runtimeは見ない）。辺をタップ →「線の形を戻す」で元に戻る。
 - 画面の操作は全部 **HarnessSpec を書き換えているだけ**。JSONタブでいつでも中身が見られるし、
   JSONを直接直せば図に反映される。正本はあくまで Spec。
 - 実行すると図のノードが色で動く（実行中＝青く脈打つ / 成功＝緑 / 失敗＝赤 / cancelled＝黄）。
@@ -136,7 +168,7 @@ Join が2か所以上に配ることになるので、**その配り方（parall
 
 | 欄 | すること |
 |---|---|
-| Provider | `＋ 内蔵LLM（この端末で動く）` を選ぶと、無ければ `providers.local`（adapter: webllm）を作ってそのノードに割り当てる |
+| Provider | `＋ 内蔵LLM を使えるようにする` を選ぶと、無ければ `providers.local`（adapter: webllm）を作ってそのノードに割り当てる。すでにあれば `local（内蔵LLM・この端末で動く）` として並び、**同じものが二重に出ない** |
 | このノードで使うモデル | 一覧から選ぶ。選んだ値は `node.model`（provider の既定を上書き）。端末にあるモデルには `✔ 端末にある` が付く |
 
 `node.model` を変えると、そのモデルに必要な起動オプションも `node.overrides` に書き込まれる
@@ -208,6 +240,37 @@ Gemma 用の上書きは付かない（別のモデルに他のモデルの設�
 **待ち続けて固まらないようにしてある。** 通信が途中で止まる端末があるため、
 本体の取得は30秒、Workerの起動は20秒、ダウンロードの無進捗は120秒で打ち切り、
 理由（通信が止まっている／Workerが起動しない／容量が足りない）を行に出してボタンを戻す。
+
+---
+
+## 2.5 Join（複数の出力を1つにまとめる）
+
+**まとめ方（`op`）を選ぶ。** 下流が LLM なら、そのまま読める文章の形にできる。
+
+| まとめ方 | 出るもの | 例 |
+|---|---|---|
+| `concat`（文章のまま） | text | `案A1` + 区切り + `案B1` |
+| `markdown`（見出し付き） | text | `## 案A` → 本文 → `## 案B` → 本文（名前が無ければ `- ` の箇条書き） |
+| `csv`（カンマつなぎ） | text | `a,b` の見出し行 + `案A1,案B1`（`,` `"` 改行は自動で括る） |
+| `json_array` | json | `["案A1","案B1"]` |
+| `json_object` | json | `{"a":"案A1","b":"案B1"}`（名前が要る） |
+| `template` | text | `{{{items.0}}}` / `{{{labels.0}}}` を差し込む |
+
+- **それぞれの名前（`labels`）** は、つないだ順に付ける。`markdown` の見出し・`csv` の見出し行・
+  `json_object` のキーになる。ノード編集の**「つないだノード名を入れる」**で自動で入る。
+- **必ず前に付ける文 / 後ろに付ける文（`prefix` / `suffix`）** を Join にも書ける。
+  文章になるまとめ方（`concat` / `markdown` / `csv` / `template`）のときだけで、
+  JSON になるまとめ方に書くと**黙って無視せず検証エラーにする**。
+- エディタで作った Join の既定は `markdown`（下流のLLMがいちばん読みやすいため）。
+
+```
+node jn: join
+  op markdown
+  labels ["案A","案B"]
+  prefix "以下は2つの案です。"
+  suffix "どちらが良いか、理由とともに選んでください。"
+  inputs {"items":{"type":"any","cardinality":"many"}}
+```
 
 ---
 
@@ -465,7 +528,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 | パネル | 何が見えるか |
 |---|---|
 | ハーネス編集 | ノードの図（タップ・ドラッグで編集）／ JSONタブ ／ 検証エラー |
-| Provider | adapter切替・endpoint・model・ロード状態（`unloaded/loading/ready/error`）とDL進捗 |
+| 接続の確認（上級者向け） | adapter切替・endpoint・model・ロード状態（`unloaded/loading/ready/error`）とDL進捗。**繋がるか試すだけの場所**で、ふだんは触らない |
 | 例と実行 | 例（内蔵LLM・ローカル4種・mock6種）・実行 / 1 Work Item / Cancel / Resume / Retry |
 | 実行ログ | Node実行・fan-out・loop・失敗種別・cancel理由 |
 | ストリーミング | `onToken` の途中出力（**data-flowには載らない**） |
@@ -478,7 +541,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト33件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2）
+node tests/harness-runtime.mjs      # 自己テスト35件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2 + Join/失敗の文2）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
@@ -486,6 +549,7 @@ node tests/harness-share.mjs        # 書き出し・共有リンク・取り込
 node tests/harness-ai-loop.mjs      # 外部LLMとの往復（1枚を出す→返答を口に入れる→差分→適用）
 node tests/harness-io-models.mjs    # 入出力パネルの連動と、モデルの一覧・選択・ダウンロード
 node tests/harness-fanin.mjs        # 1つの入口に複数の線（合流）・ノードごとのモデル選択・入力直下の実行
+node tests/harness-fixflow.mjs      # 失敗の理由・エラーをその場で直す・Joinのまとめ方・線の形
 ```
 
 ### harness-io-models.mjs が見るもの
@@ -517,6 +581,17 @@ node tests/harness-fanin.mjs        # 1つの入口に複数の線（合流）�
 | ノードで内蔵LLMを選ぶ | `providers.local` が作られ、モデル一覧（Gemma/Qwen/Llama）から選んだ値が `node.model` に入る |
 | 入力直下の実行ボタン | `#runTop` で実行できる |
 | 実行できないとき | 直すところが残っているのに押したら、**押したそばに理由が出る**（無反応にしない） |
+
+### harness-fixflow.mjs が見るもの
+
+| 見るもの | 期待 |
+|---|---|
+| schema が無い条件式 | 取り込んだ時点で検証エラーになり、**「critic に schema を付ける」ボタン**が出る。押すと schema と「JSONだけで答える」指定が入り、エラーが消える |
+| 失敗の文 | `[object Object]` を出さない。`score がその中に無い（あるのは: note）` のように、**何が読めなかったか**を言う |
+| 流し方が無い | **「in の出口の流し方を決める」ボタン**が出て、選ぶとエラーが消える |
+| Joinのまとめ方 | 文章のまま / Markdown / CSV / JSON が選べ、名前と前後の文を入れると**実際にその形で下流に届く** |
+| 線の形 | 線の途中の丸をドラッグすると `metadata.bends` に入り、辺シートの「線の形を戻す」で消える |
+| Providerの選択肢 | `local（内蔵LLM・この端末で動く）` のように中身が分かる名前で出て、**同じものが二重に並ばない** |
 
 ### harness-ai-loop.mjs が見るもの
 
@@ -597,6 +672,7 @@ node tests/harness-fanin.mjs        # 1つの入口に複数の線（合流）�
 - 27–28: webllm adapter（engineを差し替えてAPI形と interruptGenerate を確認）
 - 29–31: HSL の往復（全例ロスレス / 未知キー保持 / 壊れた記述は行番号付きで拒否）
 - 32–33: **合流の可否**（別々の分岐からの合流は静的にエラー / Joinを1つ共有した形は実際に流れる）
+- 34–35: **Joinのまとめ方**（markdown / csv / キー付き・必ず付ける文）と**失敗の文**（何が読めなかったかを言う）
 
 ### 確認できていないこと
 
