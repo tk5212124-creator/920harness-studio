@@ -1,0 +1,5 @@
+# このサイト（GitHub Pages）から配る内蔵LLMのモデル。1行1つ。# はコメント。
+#   <HuggingFaceのMLCモデル> <公開するときの名前（WebLLMのmodel_id）>
+# 重みはリポジトリに入れない。デプロイのたびに Actions が取ってきて配信物に入れる。
+# GitHub Pages の公開サイトは1GBまで。増やすときは合計サイズに注意する。
+mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC SmolLM2-360M-Instruct-q4f16_1-MLC

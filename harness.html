@@ -961,6 +961,16 @@ function mapWebLLMError(e,def){
     return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"モデルの取得に失敗（通信かストレージ）: "+msg};
   return{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:msg};
 }
+/* WebLLM に渡す設定。重みの取得先を差し替えるのはここだけにする。
+   weightsUrl があれば、そのモデルの重みだけ自前の置き場（このサイトなど）から取る。
+   wasm（model_lib）は WebLLM が元から持っているものをそのまま使う。 */
+function buildAppConfig(m,def){
+  const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
+  if(def.weightsUrl&&appConfig.model_list)
+    appConfig.model_list=appConfig.model_list.map(r=>r.model_id===def.model
+      ?Object.assign({},r,{model:def.weightsUrl}):r);
+  return appConfig;
+}
 const WebLLMProvider={
   id:"webllm",label:"WebLLM（アプリ内蔵・WebGPU）",models:WEBLLM_MODELS,
   async ensureLoaded(def,onProgress,signal){
@@ -970,7 +980,7 @@ const WebLLMProvider={
     const url=webllmModuleUrl(def);
     onProgress&&onProgress({progress:0.02,text:"WebLLM本体を読み込み中"});
     const m=await loadWebLLMModule(url);
-    const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
+    const appConfig=buildAppConfig(m,def);
     // 自分で置いたモデル（GitHub Pages・自前サーバなど）を一覧に足す
     if(def.custom&&def.custom.model&&def.custom.model_lib){
       const rec={model:def.custom.model,model_id:def.model,model_lib:def.custom.model_lib};
@@ -1074,12 +1084,12 @@ const WebLLMProvider={
   // 端末に保存済みかを見る／消す（モデルは数百MBなので出し入れできるようにする）
   async cacheStatus(def){
     const m=await loadWebLLMModule(webllmModuleUrl(def));
-    const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
+    const appConfig=buildAppConfig(m,def);
     return{cached:await m.hasModelInCache(def.model,appConfig)};
   },
   async deleteCache(def){
     const m=await loadWebLLMModule(webllmModuleUrl(def));
-    const appConfig=Object.assign({},m.prebuiltAppConfig,{useIndexedDBCache:def.indexedDB!==false});
+    const appConfig=buildAppConfig(m,def);
     await m.deleteModelAllInfoInCache(def.model,appConfig);
     ModelManager.reset();
     return true;
@@ -2694,14 +2704,30 @@ const customById=id=>customModels.find(m=>m.id===id);
 function webllmModelOptions(){
   const out=customModels.map(m=>({v:m.id,t:m.id+"（自前）"}));
   for(const m of MODEL_CATALOG){
-    out.push({v:m.id,t:`${m.id}${mdlCache[m.id]?" ✔端末にある":""}（約${m.vram}MB）`});
+    out.push({v:m.id,t:`${m.id}${mdlCache[m.id]?" ✔端末にある":(siteModelOf(m.id)?" ◎このサイトから取れる":"")}（約${m.vram}MB）`});
     if(m.f32)out.push({v:m.f32,t:`${m.f32}${mdlCache[m.f32]?" ✔端末にある":""}（f16不要・約${Math.round(m.vram*1.35)}MB）`});
   }
   return out;
 }
 const mdlCache={};       // id -> 端末にあるか（調べたものだけ）
+/* このサイト自身が配っているモデル（models_index.json）。
+   GitHub Actions がデプロイのたびに HuggingFace から取ってきて _site/models/ に入れている。
+   ここから取れば HuggingFace に繋がらなくても落とせるし、同一オリジンなので速い。 */
+let siteModels=[];
+const siteModelOf=id=>siteModels.find(m=>m.id===id);
+async function loadSiteModels(){
+  try{
+    const r=await fetch(new URL("models_index.json",location.href).href,{cache:"no-store"});
+    if(!r.ok)return;
+    const j=await r.json();
+    siteModels=(j.models||[]).map(m=>({id:m.id,mb:m.mb,url:new URL(m.path,location.href).href}));
+  }catch(e){siteModels=[];}
+  if(siteModels.length)renderModels();
+}
 function webllmDef(id){const d={adapter:"webllm",model:id,useWorker:true,indexedDB:true,moduleSource:wlSrc};
   const ov=modelOverrides(id);if(ov)d.overrides=ov;
+  const site=siteModelOf(id);
+  if(site)d.weightsUrl=site.url;       // 重みはこのサイトから取る（wasmはWebLLMのものを使う）
   const c=customById(id);
   if(c){d.custom={model:c.model,model_lib:c.model_lib,vram_required_MB:c.vram||undefined};
     if(c.overrides)d.overrides=Object.assign({},d.overrides||{},c.overrides);}
@@ -2728,6 +2754,7 @@ function renderModels(){
     if(m.quant==="q4f32")tags.push('<span class="mtag">f16不要</span>');
     if(cached===true)tags.push('<span class="mtag on">端末にある</span>');
     if(cached===false)tags.push('<span class="mtag">未取得</span>');
+    if(siteModelOf(m.id))tags.push('<span class="mtag on">このサイトから取れる</span>');
     if(st.status==="ready")tags.push('<span class="mtag on">起動済み</span>');
 
     const d=document.createElement("div");d.className="mrow";
@@ -2938,8 +2965,11 @@ $("#mdlScan").onclick=async()=>{
 /* 実行できない理由を、押した場所のすぐそばに出す（「押しても動かない」を作らない） */
 function noteBlocked(){
   let errs=[];try{errs=validate(JSON.parse($("#spec").value));}catch(e){errs=["JSONとして読めない: "+errText(e)];}
-  const st=$("#ioStatus");
-  if(st)st.textContent="実行できない — 先に直すところがある: "+(errs[0]||"検証エラー")+(errs.length>1?`（他${errs.length-1}件）`:"");
+  const msg="実行できない — 先に直すところがある: "+(errs[0]||"検証エラー")+(errs.length>1?`（他${errs.length-1}件）`:"");
+  // 前の実行の結果が残っていると「成功しているのにエラー？」に見えるので、状態行も置き換える
+  $("#stateline").textContent="state: 実行していない（直すところが残っている。下の⚠のボタンで直せる）";
+  cur=null;Ed.run=null;edClearPreview();renderTotals();renderIO();
+  const st=$("#ioStatus");if(st)st.textContent=msg;   // renderIO のあとに書く（消されないように）
   setHint("実行できない: "+(errs[0]||"検証エラー"));
   const box=$("#vErr");if(box&&box.textContent.trim())box.scrollIntoView({block:"center"});
 }
@@ -2964,7 +2994,7 @@ const doCancel=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要
 $("#cancel").onclick=doCancel;$("#cancelTop").onclick=doCancel;
 $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
-setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");loadFromHash();fitView();renderTotals();renderIO();renderModels();updateStorageInfo();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
+setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("mock");loadEx("ex1");loadFromHash();fitView();renderTotals();renderIO();renderModels();updateStorageInfo();loadSiteModels();setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 
 /* ---- 自己テスト ---- */
 const enc=s=>new TextEncoder().encode(s);

@@ -186,6 +186,34 @@ Join が2か所以上に配ることになるので、**その配り方（parall
 | Qwen2.5 1.5B | 約1.6GB |
 | Gemma 2 2B (日本語向け) | 約1.9GB |
 
+### このサイト自身がモデルを配る（HuggingFaceに行かなくてよくする）
+
+**`models.txt` に書いたモデルは、GitHub Actions が毎回のデプロイで HuggingFace から取ってきて、
+GitHub Pages の配信物に入れる。** 重みは **Git に入れない**
+（Git LFS は GitHub Pages では配信できず、1ファイル100MBの制限もあるため）。
+
+```
+models.txt
+  mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC  SmolLM2-360M-Instruct-q4f16_1-MLC
+
+公開されるURL
+  https://<site>/models/<id>/resolve/main/mlc-chat-config.json
+  https://<site>/models/<id>/resolve/main/params_shard_*.bin …
+  https://<site>/models_index.json      ← 何を配っているかの一覧（アプリが読む）
+```
+
+- **`resolve/main/` は必要。** WebLLM は重みURLの下に必ず `resolve/main/` を足す
+  （`vendor/web-llm/index.js` の `cleanModelUrl`: `if(!modelUrl.match(/.+\/resolve\/.+\//)) modelUrl += "resolve/main/"`）。
+  HuggingFace 以外のURLでも同じなので、配信側をこの形にしてある。
+- **wasm（`model_lib`）は差し替えない。** WebLLM が元から持っているものを使い、**重みのURLだけ**を差し替える。
+- アプリは起動時に `models_index.json` を読み、載っているモデルに
+  **`このサイトから取れる`** を付ける。落とすときの取得先もこのサイトになる（同一オリジンなので速い）。
+- **HuggingFace に届かないときは、アプリ本体のデプロイは止めない。** `models_index.json` に載らないだけで、
+  端末は今までどおり HuggingFace から直接落とす（ログに `::warning::` が出る）。
+- 取ってきたモデルは Actions のキャッシュに入るので、毎回のデプロイで落とし直さない。
+- **GitHub Pages の公開サイトは1GBまで。** 合計が900MBを超えたらデプロイ前に止める。
+  増やすときは `models.txt` の行を足す（合計サイズに注意）。
+
 ### モデルはどこに入るか
 
 重みは HuggingFace から端末が直接取る。**初回だけ**で、以降はオフラインでも動く。
@@ -550,6 +578,7 @@ node tests/harness-ai-loop.mjs      # 外部LLMとの往復（1枚を出す→�
 node tests/harness-io-models.mjs    # 入出力パネルの連動と、モデルの一覧・選択・ダウンロード
 node tests/harness-fanin.mjs        # 1つの入口に複数の線（合流）・ノードごとのモデル選択・入力直下の実行
 node tests/harness-fixflow.mjs      # 失敗の理由・エラーをその場で直す・Joinのまとめ方・線の形
+node tests/harness-sitemodels.mjs   # このサイトが配るモデル（取得先が本当に切り替わるか）
 ```
 
 ### harness-io-models.mjs が見るもの

@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Build site (harness.html as index.html)
         run: |
           mkdir -p _site
@@ -33,7 +34,53 @@ jobs:
           # 内蔵LLMの本体が配信物に入っていなければ、ここで落とす
           # （入れ忘れると端末側は「Importing a module script failed」になるだけで原因が分からない）
           test -s _site/vendor/web-llm/index.js
-          echo "_site の中身:"; find _site -maxdepth 2 -type f | sort
+
+      # ---- 内蔵LLMのモデルをこのサイトから配る ----------------------------------
+      # 重みは Git に入れない。Actions が HuggingFace から取ってきて配信物に入れるだけ。
+      # （Git LFS は GitHub Pages では配信できない。1ファイル100MBの制限も避けられる）
+      - name: モデルの置き場をキャッシュから戻す
+        id: mcache
+        uses: actions/cache@v4
+        with:
+          path: .modelcache
+          key: mlc-models-${{ hashFiles('models.txt') }}
+
+      # HuggingFace に届かない環境でも、アプリ本体のデプロイは止めない。
+      # そのときは models_index.json に載らないだけ（端末はHuggingFaceから直接落とす）。
+      - name: HuggingFace に届くか確かめる
+        id: hfcheck
+        if: steps.mcache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          set -e
+          code=$(curl -s -o /dev/null -w '%{http_code}' -L \
+            https://huggingface.co/mlc-ai/SmolLM2-360M-Instruct-q4f16_1-MLC/resolve/main/mlc-chat-config.json)
+          echo "HuggingFace への到達: HTTP $code"
+          test "$code" = "200"
+
+      - name: モデルを取ってくる（Gitには入れない）
+        if: steps.mcache.outputs.cache-hit != 'true' && steps.hfcheck.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -e
+          python -m pip install --quiet --upgrade huggingface_hub
+          python tools/models.py fetch
+
+      - name: 配信物に入れる（WebLLM が読む resolve/main/ の形にする）
+        run: python tools/models.py stage
+
+      - name: サイト全体の大きさを確かめる（GitHub Pages は1GBまで）
+        run: |
+          set -e
+          total=$(du -sm _site | cut -f1)
+          echo "_site 合計: ${total}MB"
+          du -sm _site/* | sort -n
+          if [ "$total" -gt 900 ]; then
+            echo "::error::配信物が ${total}MB。GitHub Pages の上限(1GB)に近いので止める。models.txt を減らす"
+            exit 1
+          fi
+      # --------------------------------------------------------------------------
+
       - uses: actions/configure-pages@v5
         with:
           enablement: true
@@ -42,3 +89,32 @@ jobs:
           path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: 公開されたURLから本当に取れるか確かめる
+        run: |
+          set -e
+          base="${{ steps.deployment.outputs.page_url }}"
+          echo "base=$base"
+          code=000
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            code=$(curl -s -o /tmp/idx.json -w '%{http_code}' -L "${base}models_index.json?t=$i")
+            echo "models_index.json: HTTP $code"
+            [ "$code" = "200" ] && break
+            sleep 10
+          done
+          test "$code" = "200"
+          cat /tmp/idx.json
+          n=$(jq '.models|length' /tmp/idx.json)
+          echo "このサイトが配っているモデル: $n 個"
+          if [ "$n" = "0" ]; then
+            echo "::warning::モデルを配れていない（HuggingFaceから取れなかった）。端末はHuggingFaceから直接落とすことになる"
+          fi
+          i=0
+          while [ "$i" -lt "$n" ]; do
+            path=$(jq -r ".models[$i].path" /tmp/idx.json)
+            u="${base}${path}mlc-chat-config.json"
+            code=$(curl -s -o /dev/null -w '%{http_code}' -L "$u")
+            echo "$u -> HTTP $code"
+            test "$code" = "200"
+            i=$((i+1))
+          done
