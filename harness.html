@@ -841,7 +841,9 @@ const OpenAILocalProvider={
     const u={apiCalls:1,inputTokens:usage&&usage.prompt_tokens!=null?usage.prompt_tokens:null,
       outputTokens:usage&&usage.completion_tokens!=null?usage.completion_tokens:null,cost:null};
     if(req.schema){
-      let v;try{v=JSON.parse(stripFence(text));}catch(e){throw{code:"SCHEMA_VALIDATION_ERROR",retryable:false,message:"JSONとして読めない: "+text.slice(0,120)};}
+      let v;try{v=JSON.parse(stripFence(text));}catch(e){throw{code:"SCHEMA_VALIDATION_ERROR",retryable:false,
+        message:`JSONとして読めない（モデルはこう返した: ${String(text).slice(0,120)}）。`
+          +"小さいモデルは形を外しやすい: prompt の suffix に「JSONだけを出す」と書く / schema を簡単にする / 大きめのモデルにする"};}
       checkSchema(v,req.schema);return{output:{type:"json",value:v},usage:u,raw:raw||text};
     }
     return{output:{type:"text",value:text},usage:u,raw:raw||text};
