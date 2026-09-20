@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — CPUで動かす道を足す v0.18.0</title>
+<title>Harness Studio — ループのノードを足す v0.19.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -49,6 +49,8 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .nd .ndb{font-size:10px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
 .nd .ndp{font-size:10px;color:var(--ink);margin-top:3px;max-height:26px;overflow:hidden;font-family:ui-monospace,monospace;line-height:1.3}
 .nd.t-input{border-color:#8fb4d8}.nd.t-output{border-color:#8fc8a8}.nd.t-join{border-color:#d8c08f}.nd.t-llm{border-color:#b8a6d8}
+.nd.t-loop{border-color:#e0a06c}
+.nd .ndm{font-size:9px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;font-family:ui-monospace,monospace}
 .nd.st-running{border-color:var(--accent);animation:pulse 1s infinite alternate}
 .nd.st-success{border-color:var(--ok);background:#f2fbf6}
 .nd.st-error{border-color:var(--err);background:#fdf4f1}
@@ -78,6 +80,15 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .fld input[type=text],.fld input[type=number],.fld select,.fld textarea{font:inherit;font-size:13px;border:1px solid var(--line);border-radius:7px;padding:7px 8px;background:#fff;color:var(--ink);width:100%}
 .fld textarea{font-family:ui-monospace,Menlo,monospace;font-size:12px;min-height:64px;resize:vertical}
 .fld2{display:flex;gap:8px}.fld2>.fld{flex:1}
+.ordrow{display:flex;gap:6px;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px solid var(--line)}
+.ordrow:last-child{border-bottom:0}
+.ordrow b{min-width:16px;color:var(--sub);font-weight:600}
+.ordrow span.nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ordrow button{padding:3px 10px;font-size:13px}
+.ordrow select{width:auto;flex:0 0 auto;font-size:12px;padding:3px 6px}
+#estop{position:fixed;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:60;display:none;
+  font-weight:700;padding:12px 16px;border-radius:999px;box-shadow:0 3px 14px rgba(0,0,0,.28)}
+#estop.show{display:block}
 .palette{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .palette button{text-align:left;padding:10px 12px;font-size:13px;line-height:1.35}
 .palette b{display:block;font-size:13px}.palette small{color:var(--sub);font-size:11px}
@@ -93,13 +104,13 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.18.0 · CPUで動かす道を足す</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.19.0 · ループのノードを足す</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
 <div class="card" style="margin-bottom:16px"><h2>入出力</h2>
 <div id="ioIn"></div>
-<div class="row"><button class="primary" id="runTop">実行</button><button id="cancelTop" class="danger" disabled>Cancel</button></div>
+<div class="row"><button class="primary" id="runTop">実行</button><button id="cancelTop" class="danger" disabled>■ 緊急停止</button></div>
 <div class="mini" id="ioStatus"></div>
 <div id="ioOut"></div>
 <div class="mini">入力ノード・出力ノードを足したり消したりすると、ここも増えたり減ったりする。入力は「ノードの名前」で渡る。</div>
@@ -167,10 +178,10 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <button data-ex="exW1">内蔵LLM直列</button><button data-ex="exL1">ローカル直列</button><button data-ex="exL2">ローカル並列+Join</button><button data-ex="exL3">JSON契約+文字数分岐</button><button data-ex="exL4">ローカル改稿ループ</button>
 </div></div>
 <div class="row"><div class="seg" id="exSeg2">
-<button data-ex="ex1" class="on">mock改稿ループ</button><button data-ex="ex5">mock並列</button><button data-ex="ex7">mock Loop×並列</button><button data-ex="ex2">mock分岐</button><button data-ex="ex8">mock template</button><button data-ex="ex9">mock fail_fast</button>
+<button data-ex="ex1" class="on">mock改稿ループ</button><button data-ex="ex5">mock並列</button><button data-ex="ex7">mock Loop×並列</button><button data-ex="ex2">mock分岐</button><button data-ex="ex8">mock template</button><button data-ex="ex9">mock fail_fast</button><button data-ex="ex10">mockループノード</button>
 </div></div>
 <div id="jsonView" style="display:none"><textarea id="spec" spellcheck="false"></textarea></div>
-<div class="row"><button class="primary" id="run">実行</button><button id="step">1 Work Item</button><button id="cancel" disabled class="danger">Cancel</button><button id="resume" disabled>Resume</button><button id="retry" disabled>Retry</button><button id="reset">クリア</button></div>
+<div class="row"><button class="primary" id="run">実行</button><button id="step">1 Work Item</button><button id="cancel" disabled class="danger">■ 緊急停止</button><button id="resume" disabled>Resume</button><button id="retry" disabled>Retry</button><button id="reset">クリア</button></div>
 <div class="state" id="stateline">state: idle</div>
 <div class="vErr" id="vErr"></div></div>
 
@@ -193,6 +204,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="tests" id="tests">running…</div>
 <div class="mini">Runtime回帰15件 + Provider契約13件。Provider層は stub transport で決定論的に検証する（実ネットワーク不要）。</div></div>
 </div>
+<button id="estop" class="danger">■ 緊急停止</button>
 <div class="backdrop" id="backdrop"></div>
 <div class="sheet" id="sheet"><div id="sheetBody"></div></div>
 <script>
@@ -499,7 +511,7 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
   provider <id> = <adapter> <key> <値> …     adapter は webllm | wllama | openai_local | mock
       wllama は GGUF を CPU(WASM)で動かす: provider cpu = wllama url "https://…/model.gguf" contextSize 1024 gpuLayers 0
   var <名前> = <値>
-  node <id>: <種類> [provider名]              種類は input | llm | join | output
+  node <id>: <種類> [provider名]              種類は input | llm | join | loop | output
     model "…"
     system "…"        LLMへの役割指定
     prompt "…"        本文。{{{in}}}=前のノードの出力、{{{run_input.<キー>}}}=実行時の入力
@@ -519,7 +531,13 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
         1つの入口に複数の線が入る llm ノードで、それらをどう1つの文にするか。
         op は concat（改行でつなぐ・既定）| numbered（1. 2. …）| markdown（見出し付き）| csv | json_array
     mock {"text":"…"}                     （adapter が mock のとき）
+    set label "直したい文章を貼る"        （input。実行画面の入力欄に出す文言）
+    set default "…"                      （input。最初から入れておく文）
+    set loop {"id":"rev","max":5,"until":"critic.out.score >= 8"}
+        （loop ノード。max を書かないと止まらない＝無限ループ。until が真になったら抜ける）
   <from> -> <to>[.<port>] [if "式"] [else] [loop <id> max <回数> until "式"] [position <番号>] [transform json_stringify|json_parse|list_to_text] [priority <番号>]
+      loop ノードの線: 出口に loopRole "done" を付けると「抜けたあと」。付けなければ「繰り返す先（本体）」。
+      本体の最後から loop ノードへ戻す線は loop <そのノード名> と書く（回数と条件はノード側が持つので max/until は書かない）
   layout <id> <x>,<y>                     図の位置（無くてもよい）
   bend <from>><to>[.<port>][#<position>] <x>,<y>   図の線の形（無くてもよい）
 
@@ -528,7 +546,15 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
 - 出口が2本以上あるノードには route を必ず書く（書かないとエラーになる）。
 - join に入る線には position 0,1,2… を必ず付け、join には inputs の items を書く。
 - 1つの入口に2本以上の線を入れるなら、その node に inputs {"<入口名>":{"type":"any","cardinality":"many"}} を書き、
-  線に position 0,1,2… を付ける（書かないとエラーになる）。
+  線に position 0,1,2… を付ける（0から連番。渡る順番になる）。llm・output・loop・join のどれでも同じ。
+- 同じところを何回も回すなら loop ノードを置く:
+    node lp: loop
+      set loop {"id":"lp","max":5,"until":"critic.out.score >= 8"}
+    lp -> draft                   本体（繰り返す先）
+    lp -> out loopRole "done"     抜けたあと
+    critic -> lp loop "lp"        本体の最後から戻す線
+  max を書かなければ無限に回る（打ち切り条件か緊急停止で止める）。
+  ループの中の値は毎周入れ替わり、ループの外から入れた値（入力ノードなど）は毎周そのまま使える。
 - 合流したノードは、入ってきた値を1つの文にまとめて受け取る。まとめ方は merge で決める
   （書かなければ改行でつなぐ）。別々の分岐から来ていてもよい。
 - 条件式で使えるのは <node>.out / <node>.meta.len / <node>.meta.tokens / run.* / vars.* / input.*。
@@ -581,13 +607,14 @@ function errorReplyText(err,raw){
 }
 /* --- 差分（適用する前に何が変わるかを見せる） --- */
 function edgeSig(e){return JSON.stringify({f:e.from.node,t:e.to.node,p:e.to.port||"in",if:e.if||null,el:!!e.else,
-  loop:e.loop?{id:e.loop.id,max:e.loop.max,until:e.loop.until||null}:null,pos:e.position==null?null:e.position,
+  loop:e.loop?{id:e.loop.id,max:e.loop.max,until:e.loop.until||null}:null,role:e.loopRole||null,pos:e.position==null?null:e.position,
   tr:e.transform||null,pri:e.priority==null?null:e.priority});}
 function edgeLabelOf(e){
   const port=(e.to.port&&e.to.port!=="in")?"."+e.to.port:"";
   let t=`${e.from.node} -> ${e.to.node}${port}`;
   if(e.if)t+=` if ${e.if}`;if(e.else)t+=" else";
-  if(e.loop)t+=` loop ${e.loop.id} max ${e.loop.max}`;
+  if(e.loop)t+=e.loop.max!=null?` loop ${e.loop.id} max ${e.loop.max}`:` loop ${e.loop.id}`;
+  if(e.loopRole)t+=` ${e.loopRole==="done"?"抜けたあと":"繰り返す先"}`;
   if(e.position!=null)t+=` position ${e.position}`;
   return t;}
 function specDiff(a,b){
@@ -660,10 +687,23 @@ function reviewSpec(spec){
       if(/\.out\s*\.\s*[A-Za-z_$]/.test(src)&&target&&(target.type==="llm"||target.type==="tool")&&!target.schema)
         add("warn",`"${r}.out.〜" を見ているのに ${r} に schema が無い。JSONで返る保証がないので実行時に落ちることがある`,r);
     }};
+  const isLoopId=new Set(nodes.filter(n=>n.type==="loop").map(n=>n.id));
   for(const e of edges){
     if(e.if)checkExpr(e.if,`${e.from.node} → ${e.to.node} の if`);
+    if(isLoopId.has(e.to.node)&&e.loop)continue;                       // ループノードへの戻り線
     if(e.loop&&e.loop.until)checkExpr(e.loop.until,`loop ${e.loop.id} の until`);
     if(e.loop&&!e.loop.until)add("warn",`loop "${e.loop.id}" に打ち切り条件(until)が無い。必ず${e.loop.max}回まわる`,e.from.node);
+  }
+  for(const n of nodes){
+    if(n.type!=="loop")continue;
+    const cfg=n.loop||{};
+    const back=edges.filter(e=>e.to.node===n.id&&e.loop);
+    const noMax=cfg.max==null||cfg.max==="";
+    if(cfg.until)checkExpr(cfg.until,`${n.id} の打ち切り条件`);
+    if(noMax&&!cfg.until)add("warn","止まらない（無限ループ）。最大回数か打ち切り条件を入れるか、緊急停止で止める",n.id);
+    else if(noMax)add("info","最大回数が無い。打ち切り条件が真にならないと止まらない（緊急停止で止める）",n.id);
+    if(!back.length)add("warn","戻り線が無いので1回しか流れない。本体の最後のノードからこのノードへつなぐ",n.id);
+    if(!edges.some(e=>e.from.node===n.id&&e.loopRole==="done"))add("info","「抜けたあと」の線が無い。条件が真になった時点で終わる（出力に届かない）",n.id);
   }
   // 使われていない provider
   const used=new Set(nodes.map(n=>n.provider).filter(Boolean));
@@ -1360,6 +1400,13 @@ function mergeInputs(list,merge){
     default:return vals.join(m.sep||"\n");
   }
 }
+/* 複数の入力を1つの値にする。LLMノードの「受け取り方」と同じ決め方を
+   出力ノード・ループノードでも使う（ノードの種類で別の規則を作らない） */
+function mergeToRV(list,merge){
+  const op=(merge&&merge.op)||"concat";
+  if(op==="json_array")return{type:"json",value:list.map(rv=>rv?rv.value:null)};
+  return{type:"text",value:mergeInputs(list,merge)};
+}
 function buildMessages(node,inputs,ex,run){
   const p=node.prompt||{};
   const first=Object.keys(inputs).map(k=>inputs[k]).find(v=>v!==undefined);
@@ -1434,6 +1481,34 @@ function confluenceConflict(spec,nodeId,port){
   const origins=[...new Set(es.map(e=>deliveryOrigin(spec,e)))];
   return origins.length>1?origins:null;
 }
+/* 1つの入口に2本以上の線が入ったら、つないだ順に position を振る（順番が未決定のまま走らせない）。
+   position が既に付いているものはその順を保ち、付いていないものは後ろに回す。
+   2本目が入った入口は「複数受け取る」宣言も入れる（宣言が無いと1本しか渡らない）。
+   Runtime はこれをしない。ここはエディタと読み込みの仕事。順番はノード編集で入れ替えられる。 */
+function inPortGroups(spec){
+  const g={};
+  for(const e of spec.edges||[]){if(e.loop)continue;
+    const key=e.to.node+"\u0000"+(e.to.port||"in");(g[key]=g[key]||[]).push(e);}
+  return g;
+}
+function normalizeInputOrder(spec){
+  let changed=false;
+  const byId={};(spec.nodes||[]).forEach(n=>byId[n.id]=n);
+  for(const[key,es]of Object.entries(inPortGroups(spec))){
+    const cut=key.indexOf("\u0000");const nid=key.slice(0,cut),port=key.slice(cut+1);
+    const node=byId[nid];if(!node||es.length<2)continue;
+    if(es.every(e=>e.if||e.else))continue;                 // 条件分岐は1本しか流れない
+    if(node.type!=="input"){
+      const card=node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
+      if(card!=="many"){node.inputs=node.inputs||{};
+        node.inputs[port]=Object.assign({type:"any"},node.inputs[port]||{},{cardinality:"many"});changed=true;}
+    }
+    const order=es.map((e,i)=>({e,p:e.position==null?Infinity:Number(e.position),i}))
+      .sort((a,b)=>a.p===b.p?a.i-b.i:(a.p<b.p?-1:1));
+    order.forEach((o,i)=>{if(o.e.position!==i){o.e.position=i;changed=true;}});
+  }
+  return changed;
+}
 function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)){errs.push("nodes無し");return errs;}
   const ids=new Set();spec.nodes.forEach(n=>{if(!n.id)errs.push("id無し");if(ids.has(n.id))errs.push("id重複: "+n.id);ids.add(n.id);
     if(n.id&&/[\s."{}>]/.test(String(n.id)))errs.push(`名前に使えない文字がある（空白 . " { } > は使えない）: ${n.id}`);});
@@ -1457,10 +1532,16 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     }
     if(n.schema&&typeof n.schema!=="object")errs.push("schemaはobject必須: "+n.id);
   });
+  const typeOf={};(spec.nodes||[]).forEach(n=>{typeOf[n.id]=n.type;});
   const loopIds=new Set();(spec.edges||[]).forEach(e=>{
     if(!nodeIds.has(e.from.node))errs.push("from node不明: "+e.from.node);
     if(!nodeIds.has(e.to.node))errs.push("to node不明: "+e.to.node);
-    if(e.loop){if(loopIds.has(e.loop.id))errs.push("loop id重複: "+e.loop.id);loopIds.add(e.loop.id);
+    if(e.loopRole&&!["body","done"].includes(e.loopRole))errs.push("出口の役割が不正（body か done）: "+e.from.node+" → "+e.to.node);
+    if(e.loopRole&&typeOf[e.from.node]!=="loop")errs.push("出口の役割はループノードの線だけに付けられる: "+e.from.node);
+    if(e.loop&&typeOf[e.to.node]==="loop"){
+      // ループノードへの戻り線。何回まわるか・いつ抜けるかはノード側が持つので、線には何も書かない
+      if(e.loop.max!=null||e.loop.until)errs.push("戻り線に回数や条件は書けない（ループノードの中で決める）: "+e.from.node+" → "+e.to.node);
+    }else if(e.loop){if(loopIds.has(e.loop.id))errs.push("loop id重複: "+e.loop.id);loopIds.add(e.loop.id);
       if(!(e.loop.max>=1))errs.push("loop.max>=1でない: "+e.loop.id);
       if(e.loop.until){try{compileExpr(e.loop.until);}catch(_){errs.push("loop.until parse不可: "+e.loop.until);}}}
     if(e.transform&&!["json_stringify","json_parse","list_to_text"].includes(e.transform))errs.push("transform不正値: "+e.transform);
@@ -1482,6 +1563,7 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
   {const exprs=[];
    (spec.edges||[]).forEach(e=>{if(e.if)exprs.push({src:e.if,where:`${e.from.node} → ${e.to.node} の if`});
      if(e.loop&&e.loop.until)exprs.push({src:e.loop.until,where:`loop[${e.loop.id}] の until`});});
+   (spec.nodes||[]).forEach(n=>{if(n.type==="loop"&&n.loop&&n.loop.until)exprs.push({src:n.loop.until,where:`${n.id} の打ち切り条件`});});
    const re=/\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*out\s*\.\s*([A-Za-z0-9_$]+)/g;
    const seen=new Set();
    for(const{src,where}of exprs){let m;re.lastIndex=0;
@@ -1518,10 +1600,21 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(n.labels!=null&&!Array.isArray(n.labels))errs.push("labels は配列にする: "+n.id);
     if(n.op==="json_object"&&!(n.keys&&n.keys.length)&&!(n.labels&&n.labels.length))
       errs.push("json_object には keys か labels（項目の名前）が要る: "+n.id);});
+  spec.nodes.forEach(n=>{
+    if(n.type!=="loop")return;
+    const cfg=n.loop||{};
+    if(cfg.max!=null&&cfg.max!==""&&!(Number(cfg.max)>=1))errs.push("ループの最大回数が1以上でない: "+n.id);
+    if(cfg.until){try{compileExpr(cfg.until);}catch(_){errs.push("ループの打ち切り条件が読めない: "+n.id+" — "+cfg.until);}}
+    const outs=(spec.edges||[]).filter(e=>e.from.node===n.id);
+    const body=outs.filter(e=>e.loopRole!=="done"),fin=outs.filter(e=>e.loopRole==="done");
+    if(!body.length)errs.push("ループの繰り返す先が無い（ループノードから線を1本出す）: "+n.id);
+    const fp=n.routing&&n.routing.failurePolicy;
+    if((body.length>1||fin.length>1)&&!fp)errs.push("ループの出口が同じ役割で2本以上あるのに failurePolicy が無い: "+n.id);});
   spec.nodes.forEach(n=>{if(n.type==="join"&&n.op==="template"){
     if(!n.template||n.template.syntax!=="mustache")errs.push("template.syntax=mustache必須: "+n.id);
     if(!n.template||n.template.mode!=="interpolation_only")errs.push("template.mode=interpolation_only必須: "+n.id);}});
   Object.entries(bySrc).forEach(([src,es])=>{const node=spec.nodes.find(n=>n.id===src);const mode=node&&node.routing&&node.routing.mode;
+    if(node&&node.type==="loop")return;        // 出口は「繰り返す先 / 抜けたあと」で分かれている
     const hasCond=es.some(e=>e.if||e.else);const hasPlainFanout=es.filter(e=>!e.if&&!e.else&&!e.loop).length>0;
     if(mode==="parallel"&&hasCond)errs.push("routing.mode=parallelなのに条件Edge(if/else)がある: "+src);
     // 無条件の出口が2本以上あるのに、どう流すかが書かれていない
@@ -1551,7 +1644,11 @@ function nodeView(run,id){const hist=run.nodeRuns[id]||[];const succ=hist.filter
     if(lastAny&&lastAny.status==="cancelled"){const v=emptyView();v.status="cancelled";return v;}return emptyView();}
   let prev=ABSENT;if(last.loopInstanceId){const same=succ.filter(h=>h.loopInstanceId===last.loopInstanceId);const p=same[same.length-2];if(p)prev={out:p.out.value,type:p.out.type,meta:p.meta,usage:p.usage};}
   return{out:last.out?last.out.value:ABSENT,type:last.out?last.out.type:null,raw:last.raw,valid:true,status:"success",meta:last.meta,usage:last.usage,prev};}
-function findLoopMax(spec,loopId){for(const e of spec.edges||[])if(e.loop&&e.loop.id===loopId)return e.loop.max;return null;}
+const isLoopNode=n=>!!n&&n.type==="loop";
+const loopIdOf=n=>(n.loop&&n.loop.id)||n.id;
+function findLoopMax(spec,loopId){
+  for(const n of spec.nodes||[])if(isLoopNode(n)&&loopIdOf(n)===loopId)return (n.loop&&n.loop.max!=null&&n.loop.max!=="")?Number(n.loop.max):null;
+  for(const e of spec.edges||[])if(e.loop&&e.loop.id===loopId)return e.loop.max;return null;}
 function buildCtx(run,spec,activeLoopInstance){
   const root={run:{totalCost:run.totals.cost,currency:"JPY",costSource:"unavailable",apiCalls:run.totals.apiCalls,
     inputTokens:run.totals.inputTokens,outputTokens:run.totals.outputTokens,iterationTotal:run.iterationTotal,
@@ -1564,7 +1661,16 @@ function buildCtx(run,spec,activeLoopInstance){
 /* ---- EdgeDelivery matching ---- */
 function deliveryMatchesExec(d,ex,ignoreActivation){
   if(!ignoreActivation&&NN(d.activationId)!==NN(ex.activationId))return false;
+  // ループの外から入ってきた値は、どの周回でもそのまま使える（周ごとに待ち直さない）。
+  // これが無いと「繰り返しの中のノードが、外からの入力も受けている」配線が必ず待ちで止まる。
+  if(NN(d.loopInstanceId)===null&&NN(ex.loopInstanceId)!==null)return true;
   return NN(d.loopInstanceId)===NN(ex.loopInstanceId)&&NN(d.iteration)===NN(ex.iteration);}
+/* ループノードが2周目以降に読むのは「戻ってきた値」だけ（最初の入力は混ぜない） */
+function deliveryPool(node,ex,ds){
+  if(isLoopNode(node)&&NN(ex.loopInstanceId)!==null){
+    const strict=ds.filter(d=>NN(d.loopInstanceId)===NN(ex.loopInstanceId));
+    if(strict.length)return strict;}
+  return ds;}
 /* 「別々の分岐から来た線が1つの入口に入る」ノード。
    ここだけは分岐グループをまたいで1つの実行に揃える（揃えないと永久に待つ＝DEADLOCK）。
    ループの回や、どの繰り返しかは引き続き区別する（混ざらない）。 */
@@ -1601,7 +1707,7 @@ function resolveInputsForExec(run,spec,ex){const node=spec.nodes.find(n=>n.id===
   const loopInE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&e.loop);for(const e of loopInE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
   const inputs={};
   for(const[port,es]of Object.entries(byPort)){es.sort((a,b)=>(a.position||0)-(b.position||0));const card=node&&node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
-    const ds=run.deliveries.filter(d=>d.toNodeId===ex.nodeId&&d.toPort===port&&deliveryMatchesExec(d,ex,conf));
+    const ds=deliveryPool(node,ex,run.deliveries.filter(d=>d.toNodeId===ex.nodeId&&d.toPort===port&&deliveryMatchesExec(d,ex,conf)));
     if(card==="many"){
       const perEdge={};for(const d of ds){perEdge[d.edgeId]=d;}
       const picked=Object.values(perEdge).sort((a,b)=>a.position-b.position);
@@ -1610,6 +1716,9 @@ function resolveInputsForExec(run,spec,ex){const node=spec.nodes.find(n=>n.id===
   return inputs;}
 function execInputsReady(run,spec,ex){const node=spec.nodes.find(n=>n.id===ex.nodeId);
   const conf=isConfluenceNode(spec,ex.nodeId);
+  // ループノードの2周目以降は、戻り線が1本届けば回る（最初の入力を毎周待たない）
+  if(isLoopNode(node)&&NN(ex.loopInstanceId)!==null)
+    return run.deliveries.some(d=>d.toNodeId===ex.nodeId&&NN(d.loopInstanceId)===NN(ex.loopInstanceId)&&NN(d.iteration)===NN(ex.iteration));
   const inE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId);if(inE.length===0)return true;
   const byPort={};for(const e of inE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
   for(const[port,es]of Object.entries(byPort)){const card=node&&node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
@@ -1641,7 +1750,28 @@ function resolveTargetContext(run,spec,fromExec,edge,loopEntries){
     if(!iid){iid=entry.loopId+"#"+(++run.loopSeq);run.loopInstances[iid]={loopId:entry.loopId,activationId:act,iteration:1,active:true};run.iterationTotal++;}
     return{activationId:fromExec.activationId,loopInstanceId:iid,iteration:run.loopInstances[iid].iteration};}
   return{activationId:fromExec.activationId,loopInstanceId:fromExec.loopInstanceId,iteration:fromExec.iteration};}
+/* ループの本体に入っているノード（そのループノードから辿れて、ループノードには戻らない範囲） */
+function loopBodySets(spec){
+  const m={};
+  for(const n of spec.nodes||[]){
+    if(n.type!=="loop")continue;
+    const set=new Set();const q=loopBodyEdges(spec,n.id).map(e=>e.to.node);
+    while(q.length){const x=q.shift();if(x===n.id||set.has(x))continue;set.add(x);
+      for(const e of spec.edges||[])if(e.from.node===x&&e.to.node!==n.id&&!set.has(e.to.node))q.push(e.to.node);}
+    m[n.id]=set;}
+  return m;}
+/* ループの外から、ループの中のノードへ入る線か */
+function fromOutsideLoopBody(spec,edge){
+  const sets=loopBodySets(spec);
+  for(const[lid,set]of Object.entries(sets)){
+    if(!set.has(edge.to.node))continue;
+    if(edge.from.node===lid||set.has(edge.from.node))continue;
+    return true;}
+  return false;}
 function enqueueTo(run,spec,edge,ctx){
+  // ループの中のノードへ外から入ってきた値は、届けるだけにする（実行を作るのはループが回すとき）。
+  // ここで実行を作ると「周回の値をいつまでも待つ実行」が残って必ず DEADLOCK になる。
+  if(NN(ctx.loopInstanceId)===null&&fromOutsideLoopBody(spec,edge))return null;
   // 別々の分岐から来る合流ノードは、分岐ごとに実行を作らず1つにまとめる
   const c=isConfluenceNode(spec,edge.to.node)?Object.assign({},ctx,{activationId:MERGE_ACT(edge.to.node)}):ctx;
   const dup=Object.values(run.executions).find(x=>x.nodeId===edge.to.node&&x.status==="ready"&&NN(x.activationId)===NN(c.activationId)&&NN(x.loopInstanceId)===NN(c.loopInstanceId)&&NN(x.iteration)===NN(c.iteration));
@@ -1749,7 +1879,7 @@ async function processOneWorkItem(spec,run,store,log,ctl){
   if(run.status!=="running")return{kind:"idle"};
   if(run.workQueue.length===0)return{kind:"idle"};
   const byId={};spec.nodes.forEach(n=>byId[n.id]=n);
-  const loopEntries={};for(const e of spec.edges||[])if(e.loop)loopEntries[e.to.node]={loopId:e.loop.id,edge:e};
+  const loopEntries={};for(const e of spec.edges||[])if(e.loop&&!isLoopNode(byId[e.to.node]))loopEntries[e.to.node]={loopId:e.loop.id,edge:e};
   const wi=run.workQueue[0];const ex=run.executions[wi.execId];
   if(!ex){run.workQueue.shift();return{kind:"skip"};}
   const node=byId[ex.nodeId];if(!node){failRun(run,ex.nodeId,{code:"REFERENCE_ERROR",message:"no node"},store,false);return{kind:"failed"};}
@@ -1765,7 +1895,9 @@ async function processOneWorkItem(spec,run,store,log,ctl){
     ex.attempts=ex.attempts||[];const attempt={attempt:ex.attempts.length+1,status:"running",error:null,partialOutput:null,startedAt:Date.now(),endedAt:null};ex.attempts.push(attempt);
     let rv,usage;
     try{const inputs=resolveInputsForExec(run,spec,ex);
-      if(node.type==="output"){const k=Object.keys(inputs)[0];const rvOut=(k!==undefined&&inputs[k]!==undefined)?inputs[k]:null;run.result=rvOut;
+      if(node.type==="output"){const k=Object.keys(inputs)[0];let rvOut=(k!==undefined&&inputs[k]!==undefined)?inputs[k]:null;
+        if(Array.isArray(rvOut))rvOut=mergeToRV(rvOut,node.merge);      // 複数の線が入っているとき
+        run.result=rvOut;
         (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rvOut,raw:JSON.stringify(rvOut),usage:{apiCalls:0,inputTokens:0,outputTokens:0,cost:null},meta:metaOf(rvOut,null),status:"success"});
         ex.status="completed";run.workQueue.shift();log&&log("data",`● OUTPUT(${node.id}) ← ${JSON.stringify(rvOut)}`);if(store)store.save(run);return{kind:"completed"};}
       if(node.type==="input"){
@@ -1774,6 +1906,10 @@ async function processOneWorkItem(spec,run,store,log,ctl){
         const v=has?run.input[node.id]:run.input;
         rv=(typeof v==="string")?{type:"text",value:v}:{type:"json",value:v};
         usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};log&&log("node",`◇ INPUT(${node.id})`);}
+      else if(node.type==="loop"){
+        const k=Object.keys(inputs)[0];const v=k!==undefined?inputs[k]:undefined;
+        rv=Array.isArray(v)?mergeToRV(v,node.merge):(v!==undefined&&v!==null?v:{type:"text",value:""});
+        usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};}
       else if(node.type==="join"){rv=runJoin(node,inputs);usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};log&&log("node",`⋈ JOIN(${node.id}) → ${JSON.stringify(rv.value)}`);}
       else{
         const res=await invokeNode(spec,run,node,inputs,ex,ctl,log);
@@ -1796,10 +1932,51 @@ async function processOneWorkItem(spec,run,store,log,ctl){
   if(outcome.kind==="paused"){run.status="paused";if(store)store.save(run);return{kind:"paused"};}
   run.workQueue.shift();ex.status="completed";if(store)store.save(run);return{kind:"routed"};
 }
+/* ---- ループノード ----
+   入ってきた値をそのまま通し、出口を「繰り返す先（本体）」と「抜けたあと」に振り分ける。
+   何回まわったか・いつ抜けるかはこのノードが持つ（Runtime は条件式を読むだけ）。
+   最大回数を空にすると止まらない（無限ループ）。止めるのは「緊急停止」。 */
+const loopBodyEdges=(spec,id)=>(spec.edges||[]).filter(e=>e.from.node===id&&e.loopRole!=="done");
+const loopDoneEdges=(spec,id)=>(spec.edges||[]).filter(e=>e.from.node===id&&e.loopRole==="done");
+function routeLoopNode(spec,run,ex,node,log){
+  const cfg=node.loop||{};const lid=loopIdOf(node);
+  let inst=ex.loopInstanceId;
+  if(!inst||!run.loopInstances[inst]||run.loopInstances[inst].loopId!==lid){
+    inst=lid+"#"+(++run.loopSeq);
+    run.loopInstances[inst]={loopId:lid,activationId:NN(ex.activationId),iteration:0,active:true};}
+  const st=run.loopInstances[inst];
+  const done=st.iteration;                                  // ここまでに本体へ流した回数
+  const max=(cfg.max==null||cfg.max==="")?null:Number(cfg.max);
+  let untilTrue=false;
+  if(cfg.until&&done>=1)untilTrue=evalBoolAt(cfg.until,buildCtx(run,spec,inst),`${node.id} の打ち切り条件`);
+  const hitMax=max!=null&&done>=max;
+  log&&log("loop",`↻ ${node.id}[${lid}] ${done}回まわった${max!=null?"/"+max:"（上限なし）"} 打ち切り=${untilTrue}`);
+  const body=loopBodyEdges(spec,node.id),fin=loopDoneEdges(spec,node.id);
+  if(untilTrue||hitMax){
+    st.active=false;
+    if(!fin.length){log&&log("dim",`  ${node.id}: 抜けたあとの線が無いのでここで終わり`);return{kind:"completed"};}
+    return routeEdgeSet(spec,run,ex,node,fin,{activationId:ex.activationId,loopInstanceId:null,iteration:null},log,"抜ける");}
+  if(!body.length)throw{code:"LOOP_NO_BODY",message:`${node.id}: 繰り返す先が無い（ループノードから線を1本出す）`};
+  st.iteration=done+1;run.iterationTotal++;
+  return routeEdgeSet(spec,run,ex,node,body,{activationId:ex.activationId,loopInstanceId:inst,iteration:st.iteration},log,`${st.iteration}周目`);}
+/* 決めた行き先へ流す（2本以上なら分岐グループを作る＝失敗の波及の単位） */
+function routeEdgeSet(spec,run,ex,node,es,ctx,log,label){
+  const act=es.length>1?`fork#${++run.actSeq}`:ctx.activationId;
+  if(es.length>1){
+    const policy=(node.routing||{}).failurePolicy;
+    if(!policy)throw{code:"UNSPECIFIED_ROUTING",message:`${node.id}: 出口が2本以上あるのに routing.failurePolicy が無い`};
+    run.branchGroups[act]={activationId:act,sourceExecId:ex.execId,failurePolicy:policy,status:"running",branches:{},failures:[]};}
+  for(const e of es){const tctx=Object.assign({},ctx,{activationId:act});
+    makeDelivery(run,spec,e,ex._rv,ex.execId,tctx);
+    const nx=enqueueTo(run,spec,e,tctx);
+    if(es.length>1&&nx){nx.branchGroupId=act;run.branchGroups[act].branches[nx.execId]={rootExecId:nx.execId,nodeId:e.to.node,status:"running"};}}
+  log&&log("route",`↳ ${label}: ${es.map(e=>e.to.node).join(", ")}`);
+  return{kind:"completed"};}
 function routeExec(spec,run,ex,byId,loopEntries,log){
   const node=byId[ex.nodeId];const outEdges=(spec.edges||[]).filter(e=>e.from.node===node.id);
+  if(isLoopNode(node))return routeLoopNode(spec,run,ex,node,log);
   if(outEdges.length===0)return{kind:"completed"};
-  const loopEdge=outEdges.find(e=>e.loop);
+  const loopEdge=outEdges.find(e=>e.loop&&!isLoopNode(byId[e.to.node]));
   if(loopEdge){const lid=loopEdge.loop.id;const inst=ex.loopInstanceId;const iter=run.loopInstances[inst].iteration;const max=loopEdge.loop.max;
     const ctx=buildCtx(run,spec,inst);let untilTrue=false;if(loopEdge.loop.until)untilTrue=evalBoolAt(loopEdge.loop.until,ctx,`loop[${lid}] の until`);
     log&&log("loop",`↻ loop[${lid}] iter=${iter}/${max} until=${untilTrue}`);
@@ -1832,10 +2009,19 @@ function routeExec(spec,run,ex,byId,loopEntries,log){
   return{kind:"completed"};}
 
 /* ---- runUntilIdle ---- */
-async function runUntilIdle(spec,run,store,log,ctl){let guard=0;
-  while((run.status==="running"||run.status==="cancelling")&&guard++<5000){const r=await processOneWorkItem(spec,run,store,log,ctl);
+const RUN_GUARD=20000;      // 安全装置。ここまで回ったら止めて Resume に任せる（勝手に諦めない）
+async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
+  while(run.status==="running"||run.status==="cancelling"){
+    if(guard++>=RUN_GUARD){hitGuard=true;break;}
+    // 無限ループでも「緊急停止」を押せるように、ときどきブラウザに順番を返す
+    if((guard%20)===0)await new Promise(r=>setTimeout(r,0));
+    const r=await processOneWorkItem(spec,run,store,log,ctl);
     if(ctl&&ctl.onStep)try{ctl.onStep(run,r);}catch(_){}
     if(r.kind==="idle"||r.kind==="cancelled")break;if(run.status==="running"&&run.workQueue.length===0)break;}
+  if(hitGuard&&run.status==="running"){
+    run.status="paused";run.resumable=true;
+    log&&log("err",`■ 安全装置: ${RUN_GUARD}回まわったので止めた（打ち切り条件が真にならないか、無限ループ）。Resume で続けられる`);
+    if(store)store.save(run);return run;}
   if(run.status==="running"){
     const anyWork=run.workQueue.length>0;const anyReady=Object.values(run.executions).some(e=>e.status==="ready");
     if(!anyWork&&!anyReady){
@@ -2052,7 +2238,19 @@ const EX={
  ex8:{metadata:{name:"template",version:"1"},nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},{id:"A",type:"llm",mock:{tag:"研究A"}},{id:"B",type:"llm",mock:{tag:"研究B"}},{id:"jn",type:"join",op:"template",template:{syntax:"mustache",mode:"interpolation_only",value:"A: {{{items.0}}}\nB: {{{items.1}}}"},inputs:{items:{type:"text",cardinality:"many"}}},{id:"out",type:"output"}],
   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},{from:{node:"A",port:"out"},to:{node:"jn",port:"items"},position:0},{from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:1},{from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}]},
  ex9:{metadata:{name:"fail_fast(OOM)",version:"1"},nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},{id:"A",type:"llm",mock:{fail:"oom"}},{id:"B",type:"llm",mock:{tag:"B"}},{id:"C",type:"llm",mock:{tag:"C"}},{id:"jn",type:"join",op:"json_array",inputs:{items:{type:"text",cardinality:"many"}}},{id:"out",type:"output"}],
-  edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},{from:{node:"in",port:"out"},to:{node:"C",port:"in"}},{from:{node:"A",port:"out"},to:{node:"jn",port:"items"},position:0},{from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:1},{from:{node:"C",port:"out"},to:{node:"jn",port:"items"},position:2},{from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}]}
+  edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},{from:{node:"in",port:"out"},to:{node:"C",port:"in"}},{from:{node:"A",port:"out"},to:{node:"jn",port:"items"},position:0},{from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:1},{from:{node:"C",port:"out"},to:{node:"jn",port:"items"},position:2},{from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}]},
+ ex10:{metadata:{name:"ループノード",version:"1"},
+  nodes:[{id:"in",type:"input",label:"直したい文章を貼る"},
+   {id:"lp",type:"loop",loop:{id:"lp",max:5,until:"critic.out.score >= 8"}},
+   {id:"draft",type:"llm",mock:{tag:"案"}},
+   {id:"critic",type:"llm",mock:{scoreByIteration:[5,7,9]},
+    schema:{type:"object",required:["score"],properties:{score:{type:"integer",minimum:0,maximum:10}}}},
+   {id:"out",type:"output"}],
+  edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"}},
+   {from:{node:"lp",port:"out"},to:{node:"draft",port:"in"}},
+   {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"},
+   {from:{node:"draft",port:"out"},to:{node:"critic",port:"in"}},
+   {from:{node:"critic",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}}]}
 };
 function loadEx(k){setSpecObj(JSON.parse(JSON.stringify(EX[k])));
   document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.classList.toggle("on",b.dataset.ex===k));
@@ -2071,8 +2269,10 @@ const NODE_KINDS=[
   {type:"input",label:"入力",desc:"実行時の入力を流す"},
   {type:"llm",label:"LLM",desc:"プロバイダで推論する"},
   {type:"join",label:"Join",desc:"複数の入力をまとめる"},
+  {type:"loop",label:"ループ",desc:"条件が来るまで同じところを何回も回す"},
   {type:"output",label:"出力",desc:"最終結果を受け取る"}
 ];
+const TYPE_LABEL={input:"入力",llm:"LLM",join:"Join",loop:"ループ",output:"出力",tool:"ツール"};
 const nodeById=id=>(Ed.spec.nodes||[]).find(n=>n.id===id);
 const outEdges=id=>(Ed.spec.edges||[]).filter(e=>e.from.node===id);
 function layout(){const m=Ed.spec.metadata=Ed.spec.metadata||{};return m.layout=m.layout||{};}
@@ -2103,12 +2303,12 @@ function ensureLayout(){const L=layout();const miss=(Ed.spec.nodes||[]).some(n=>
   if(miss&&(Ed.spec.nodes||[]).length)autoLayout();}
 
 function setSpecObj(spec,opt){
-  Ed.spec=spec;ensureLayout();
+  Ed.spec=spec;normalizeInputOrder(Ed.spec);ensureLayout();
   if(!(opt&&opt.keepText))$("#spec").value=JSON.stringify(spec,null,2);
   edRender();showErrs();renderIO();if(typeof renderModels==="function")renderModels();
   showNow();
 }
-function syncFromCanvas(){$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();showNow();}
+function syncFromCanvas(){normalizeInputOrder(Ed.spec);$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();showNow();}
 /* いま図に載っているハーネスを、常に見える場所に書く（「反映されていない？」を作らない） */
 function showNow(){
   const el=$("#nowSpec");if(!el)return;
@@ -2236,7 +2436,9 @@ function edRender(){
     const d=document.createElement("div");
     d.className="nd t-"+(n.type||"llm")+(Ed.sel&&Ed.sel.kind==="node"&&Ed.sel.id===n.id?" sel":"");
     d.dataset.id=n.id;d.style.left=p.x+"px";d.style.top=p.y+"px";
-    d.innerHTML=`<div class="ndh">${esc(n.id)}</div><div class="ndb">${esc(nodeSub(n))}</div><div class="ndp" data-prev="${esc(n.id)}"></div>`
+    const m2=nodeModelText(n);d.title=nodeFullText(n);
+    d.innerHTML=`<div class="ndh">${esc(n.id)}</div><div class="ndb">${esc(nodeSub(n))}</div>`
+      +(m2?`<div class="ndm">${esc(m2)}</div>`:"")+`<div class="ndp" data-prev="${esc(n.id)}"></div>`
       +(n.type==="input"?"":`<div class="port pin" data-node="${esc(n.id)}" data-side="in"></div>`)
       +(n.type==="output"?"":`<div class="port pout" data-node="${esc(n.id)}" data-side="out"></div>`);
     nodesEl.appendChild(d);
@@ -2249,15 +2451,35 @@ function edRender(){
 function mk(tag,attrs,text){const el=document.createElementNS("http://www.w3.org/2000/svg",tag);
   for(const[k,v]of Object.entries(attrs))el.setAttribute(k,v);if(text!=null)el.textContent=text;return el;}
 const esc=t=>String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+/* 図に出す2行目。LLMなら使うモデル、ループなら回数（何で動くのかを開かずに分かるようにする） */
+function shortModel(m){return String(m||"").replace(/^.*\//,"").replace(/\.gguf$/i,"").replace(/-MLC$/,"").replace(/-Instruct/,"");}
+function nodeModelText(n){
+  if(n.type==="loop"){const c=n.loop||{};
+    return (c.max==null||c.max===""?"上限なし":`最大${c.max}回`)+(c.until?"・条件あり":"");}
+  if(n.type&&n.type!=="llm"&&n.type!=="tool")return "";
+  if(n.mock)return "mock（推論しない）";
+  const def=n.provider?(Ed.spec.providers||{})[n.provider]:null;
+  const m=n.model||(def&&def.model);
+  return m?shortModel(m):"";
+}
+function nodeFullText(n){
+  const def=n.provider?(Ed.spec.providers||{})[n.provider]:null;
+  const m=n.model||(def&&def.model);
+  return [n.id,TYPE_LABEL[n.type||"llm"]||n.type,m?("モデル: "+m+(n.model?"":"（providerの既定）")):"",
+    n.type==="loop"&&n.loop&&n.loop.until?("抜ける条件: "+n.loop.until):""].filter(Boolean).join(" / ");
+}
 function nodeSub(n){
   if(n.type==="input")return "入力";
   if(n.type==="output")return "出力";
+  if(n.type==="loop")return "ループ";
   if(n.type==="join")return "Join・"+(n.op||"(op未設定)");
   const pv=n.provider?n.provider:(n.mock?"mock":"(provider未設定)");
   const r=n.routing&&n.routing.mode?" / "+n.routing.mode:"";
   return pv+r;
 }
 function edgeLabel(e){
+  if(e.loop&&isLoopNode(nodeById(e.to.node)))return "戻る";
+  if(e.loopRole==="done")return "抜けたあと";
   if(e.loop)return `loop ${e.loop.id||""} ×${e.loop.max||"?"}`;
   if(e.else)return "else";
   if(e.if)return "if "+(e.if.length>16?e.if.slice(0,16)+"…":e.if);
@@ -2436,6 +2658,16 @@ function fanInTargets(){
   }
   return out;
 }
+/* a から b へ辿れるか（戻り線は辿らない）。ループの輪を閉じる線かどうかの判定に使う */
+function canReach(a,b){
+  const seen=new Set([a]);const q=[a];
+  while(q.length){const x=q.shift();
+    for(const e of Ed.spec.edges||[]){
+      if(e.loop||e.from.node!==x)continue;
+      if(e.to.node===b)return true;
+      if(!seen.has(e.to.node)){seen.add(e.to.node);q.push(e.to.node);}}}
+  return false;
+}
 function connect(from,to){
   if(from===to)return setHint("同じノードには繋げない");
   const tn=nodeById(to);const port=(tn&&tn.type==="join")?"items":"in";
@@ -2444,17 +2676,26 @@ function connect(from,to){
   const already=edgesInto(to,port).length;
   const edge={from:{node:from,port:"out"},to:{node:to,port}};
   if(port==="items"){edge.position=already;}
+  const src=nodeById(from);
   es.push(edge);
+  // 本体の先から ループノード へ戻る線は「戻り線」にする（回数と条件はループノードが持つ）
+  if(tn&&tn.type==="loop"&&canReach(to,from)){
+    edge.loop={id:loopIdOf(tn)};delete edge.position;
+    syncFromCanvas();setHint(`戻り線にした: ${from} → ${to}（${to} が回数と条件を見る）`);return;}
+  // ループノードから出る線は「繰り返す先」。2本目は「抜けたあと」にする
+  if(src&&src.type==="loop"){
+    const others=outEdges(from).filter(e=>e!==edge);
+    if(others.length&&!others.some(e=>e.loopRole==="done"))edge.loopRole="done";
+    syncFromCanvas();
+    setHint(`つないだ: ${from} → ${to}（${edge.loopRole==="done"?"抜けたあと":"繰り返す先"}。ループノードをタップで入れ替えられる）`);return;}
   // 入口が2本目になったら、そのまま受け取れる形にする（確認は出さない）。
   // どう1つの文にするかはノード編集の「複数の入力が来たときの受け取り方」で決まる（既定は改行でつなぐ）
   if(port!=="items"&&already>=1&&portCard(to,port)!=="many"){
-    makePortMany(to,port);
-    syncFromCanvas();
-    setHint(`${to} に2本目を繋いだ（まとめて受け取る。渡し方はノードをタップして変えられる）`);
+    syncFromCanvas();   // ここで「複数受け取る」宣言と、つないだ順の番号が入る
+    setHint(`${to} に2本目を繋いだ（まとめて受け取る。渡し方と順番はノードをタップして変えられる）`);
     return;
   }
   const outs=outEdges(from).filter(e=>!e.loop);
-  const src=nodeById(from);
   if(outs.length>1&&!(src.routing&&src.routing.mode)){
     askRouting(from,()=>{syncFromCanvas();setHint("つないだ: "+from+" → "+to);});
     syncFromCanvas();return;
@@ -2499,17 +2740,73 @@ function bindFields(obj,after){
     };
   });
 }
+const MERGE_OPTS=[
+  {v:"concat",t:"改行でつなぐ（既定）"},
+  {v:"numbered",t:"番号を振る（1. 2. …）"},
+  {v:"markdown",t:"見出しを付ける（## 名前）"},
+  {v:"csv",t:"カンマつなぎ（CSV）"},
+  {v:"json_array",t:"JSONの配列にする"}];
+/* 入口に2本以上入っているときの順番。上が先（まとめる順・position の順）。
+   線をつないだ順に自動で振ってあるので、ここは入れ替えるだけ。 */
+function inputOrderFields(n){
+  const groups={};
+  for(const e of Ed.spec.edges||[]){
+    if(e.loop||e.to.node!==n.id)continue;
+    const port=e.to.port||"in";(groups[port]=groups[port]||[]).push(e);}
+  const ports=Object.keys(groups).filter(x=>groups[x].length>1);
+  if(!ports.length)return "";
+  let h="";
+  for(const port of ports){
+    const es=groups[port].slice().sort((a,b)=>(a.position||0)-(b.position||0));
+    h+=`<div class="fld"><span>入力の順番${ports.length>1?"（"+esc(port)+"）":""}・上が先</span><div>`;
+    es.forEach((e,i)=>{
+      h+=`<div class="ordrow"><b>${i+1}</b><span class="nm">${esc(e.from.node)}</span>`
+        +`<button data-mv="up" data-port="${esc(port)}" data-i="${i}"${i===0?" disabled":""}>↑</button>`
+        +`<button data-mv="down" data-port="${esc(port)}" data-i="${i}"${i===es.length-1?" disabled":""}>↓</button></div>`;});
+    h+=`</div></div>`;
+  }
+  return h;
+}
+function moveInput(nodeId,port,i,dir){
+  const es=(Ed.spec.edges||[]).filter(e=>!e.loop&&e.to.node===nodeId&&(e.to.port||"in")===port)
+    .sort((a,b)=>(a.position||0)-(b.position||0));
+  const j=i+(dir==="up"?-1:1);if(j<0||j>=es.length)return;
+  const t=es[i];es[i]=es[j];es[j]=t;
+  es.forEach((e,k)=>{e.position=k;});
+  syncFromCanvas();openNodeSheet(nodeId);setHint("入力の順番を入れ替えた");
+}
+/* ループの打ち切り条件を、式を書かずに作れるようにする（式そのものも見せる） */
+const UNTIL_CMP=[{v:">=",t:"以上（>=）"},{v:"<=",t:"以下（<=）"},{v:">",t:"より大きい（>）"},
+  {v:"<",t:"より小さい（<）"},{v:"==",t:"等しい（==）"},{v:"!=",t:"等しくない（!=）"}];
+const RE_UNTIL_JSON=/^\s*([A-Za-z_$][A-Za-z0-9_$]*)\.out\.([A-Za-z0-9_$]+)\s*(>=|<=|==|!=|>|<)\s*(\S+)\s*$/;
+const RE_UNTIL_LEN=/^\s*([A-Za-z_$][A-Za-z0-9_$]*)\.meta\.len\s*(>=|<=|==|!=|>|<)\s*(\S+)\s*$/;
+function untilKind(u){if(!u)return "";if(RE_UNTIL_LEN.test(u))return "len";if(RE_UNTIL_JSON.test(u))return "json";return "free";}
+function untilParts(u){
+  const unq=v=>{const t=String(v||"");if(t[0]==='"'){try{return JSON.parse(t);}catch(_){}}return t;};
+  let m=RE_UNTIL_LEN.exec(u||"");if(m)return{node:m[1],field:"",op:m[2],val:unq(m[3])};
+  m=RE_UNTIL_JSON.exec(u||"");if(m)return{node:m[1],field:m[2],op:m[3],val:unq(m[4])};
+  return{node:"",field:"",op:">=",val:""};
+}
+const untilVal=v=>{const t=String(v==null?"":v).trim();
+  if(t==="")return "0";
+  if(/^-?\d+(\.\d+)?$/.test(t)||t==="true"||t==="false")return t;
+  return JSON.stringify(t);};
+function buildUntil(kind,q){
+  if(kind==="len")return q.node?`${q.node}.meta.len ${q.op||">="} ${untilVal(q.val)}`:"";
+  if(kind==="json")return (q.node&&q.field)?`${q.node}.out.${q.field} ${q.op||">="} ${untilVal(q.val)}`:"";
+  return "";
+}
+/* 条件で見るノードの候補（英数字の名前だけ。式では日本語の名前が使えない） */
+function untilNodeOpts(n){
+  return (Ed.spec.nodes||[]).filter(x=>x.id!==n.id&&(x.type==="llm"||x.type==="tool"||x.type===undefined||x.type==="join"))
+    .filter(x=>/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(x.id)).map(x=>({v:x.id,t:x.id}));
+}
 /* 複数の入力が来たときの受け取り方。いま1本でも、あとから線を足せるので常に出す */
 function mergeFields(n){
   const srcs=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop)
     .sort((a,b)=>(a.position||0)-(b.position||0)).map(e=>e.from.node);
   const mop=(n.merge&&n.merge.op)||"concat";
-  let h=fld("複数の入力が来たときの受け取り方",sel("__merge",mop,[
-    {v:"concat",t:"改行でつなぐ（既定）"},
-    {v:"numbered",t:"番号を振る（1. 2. …）"},
-    {v:"markdown",t:"見出しを付ける（## 名前）"},
-    {v:"csv",t:"カンマつなぎ（CSV）"},
-    {v:"json_array",t:"JSONの配列にする"}]));
+  let h=fld("複数の入力が来たときの受け取り方",sel("__merge",mop,MERGE_OPTS));
   h+=`<div class="mini">${srcs.length>1?`いま ${esc(srcs.join(" / "))} の ${srcs.length}本が入っている。`:"いまは1本だけ。線を足したときにこの決め方で渡る。"}</div>`;
   if(["numbered","markdown","csv"].includes(mop)){
     h+=fld("それぞれの名前（つないだ順・カンマ区切り）",
@@ -2537,7 +2834,50 @@ function openNodeSheet(id){
   const provAdapter=provDef&&provDef.adapter;
   let h=head("ノード: "+id);
   h+=fld("ID",txt("id",n.id));
-  h+=fld("種類",`<input type="text" value="${esc(n.type||"llm")}" disabled>`);
+  h+=fld("種類",`<input type="text" value="${esc((TYPE_LABEL[n.type||"llm"]||n.type)+"（"+(n.type||"llm")+"）")}" disabled>`);
+  if(n.type==="input"){
+    h+=fld("入力画面に出す文言（何を入れる場所か）",txt("label",n.label,"例: 直したい文章を貼る"));
+    h+=fld("最初から入れておく文",area("default",n.default,"空なら空欄で始まる"));
+    h+=`<div class="mini">ここに書いた文言が、上の「入出力」の入力欄の見出しになる。文言もハーネスと一緒に書き出される。</div>`;
+  }
+  if(n.type==="output")h+=mergeFields(n);
+  if(n.type==="loop"){
+    const cfg=n.loop=n.loop||{};
+    h+=fld("最大の回数（空にすると止まらない・無限ループ）",num("loop.max",cfg.max,"空＝無限"));
+    if(cfg.max==null||cfg.max==="")
+      h+=`<div class="mini" style="color:var(--warn)">いま<b>無限ループ</b>。打ち切り条件が真にならないと止まらない。止めるときは画面右下の<b>■ 緊急停止</b>。</div>`;
+    const kd=untilKind(cfg.until),q=untilParts(cfg.until),nopts=untilNodeOpts(n);
+    h+=fld("どうなったら抜ける？",sel("__ukind",kd,[
+      {v:"",t:"回数だけで抜ける（条件を見ない）"},
+      {v:"json",t:"JSONの値を見る（例: 点数が8以上）"},
+      {v:"len",t:"文の長さを見る（何文字以上か）"},
+      {v:"free",t:"自分で式を書く"}]));
+    if(kd==="json"||kd==="len"){
+      if(!nopts.length)h+=`<div class="mini" style="color:var(--warn)">条件で見られるノードが無い（式では英数字の名前のノードしか指せない）。</div>`;
+      h+=`<div class="fld2">${fld("どのノードの答えを見る",sel("__unode",q.node,nopts))}`
+        +(kd==="json"?fld("JSONのどの項目",txt("__ufield",q.field,"score")):fld("見るもの",`<input type="text" value="文字数" disabled>`))+`</div>`;
+      h+=`<div class="fld2">${fld("くらべ方",sel("__uop",q.op,UNTIL_CMP))}${fld("値",txt("__uval",q.val,kd==="len"?"200":"8"))}</div>`;
+      if(kd==="json")h+=`<div class="mini">見るノードには<b>出力の形</b>（点数・はい/いいえ など）が要る。文章のままだと項目が読めない。</div>`;
+    }
+    if(kd==="free")h+=fld("打ち切り条件（真になったら抜ける）",txt("loop.until",cfg.until,"critic.out.score >= 8"));
+    h+=`<div class="mini">いまの条件: <code id="uNow">${esc(cfg.until||"（なし）")}</code></div>`;
+    const outs=outEdges(n.id);
+    if(outs.length){
+      h+=`<div class="fld"><span>出口（どれが繰り返す先か）</span><div>`;
+      outs.forEach(e=>{const gi=(Ed.spec.edges||[]).indexOf(e);
+        h+=`<div class="ordrow"><span class="nm">→ ${esc(e.to.node)}</span><select data-role="${gi}">`
+          +[["body","繰り返す先（本体）"],["done","抜けたあと"]].map(([v,t])=>
+            `<option value="${v}"${(e.loopRole==="done"?"done":"body")===v?" selected":""}>${t}</option>`).join("")
+          +`</select></div>`;});
+      h+=`</div></div>`;
+    }else h+=`<div class="mini">まだ出口が無い。○ → ● でつないだ1本目が<b>繰り返す先</b>、2本目が<b>抜けたあと</b>になる。</div>`;
+    const backs=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&e.loop);
+    h+=`<div class="mini">${backs.length
+      ?`戻り線: ${backs.map(e=>esc(e.from.node)).join(" / ")} → ${esc(n.id)}`
+      :`<b>戻り線が無いので1回で終わる。</b>本体の最後のノードから ${esc(n.id)} へつなぐと、その線が自動で戻り線になる。`}</div>`;
+    h+=`<div class="mini">ループの中の値は毎周入れ替わる。外から入れた入力（入力ノードなど）は毎周そのまま使える。</div>`;
+    h+=mergeFields(n);
+  }
   if(n.type==="llm"||n.type===undefined){
     h+=fld("Provider",sel("__prov",provVal,provOpts));
     // モデルは一覧から選ぶ（providerの種類で中身が変わる）
@@ -2595,11 +2935,19 @@ function openNodeSheet(id){
     if(JOIN_TEXT_OPS.includes(n.op))
       h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prefix",n.prefix))}${fld("必ず後ろに付ける文",txt("suffix",n.suffix))}</div>`;
   }
+  h+=inputOrderFields(n);
+  if(n.type==="loop"){
+    const o2=outEdges(n.id);
+    if(o2.filter(e=>e.loopRole!=="done").length>1||o2.filter(e=>e.loopRole==="done").length>1)
+      h+=fld("同じ役割の出口が2本以上ある — 失敗したときの波及",sel("routing.failurePolicy",getP(n,"routing.failurePolicy"),
+        [{v:"fail_fast",t:"fail_fast（兄弟を止める）"},{v:"",t:"(未設定・エラーになる)"}]));
+  }else{
   h+=fld("出口の扱い（分岐するときだけ）",sel("routing.mode",getP(n,"routing.mode"),[{v:"",t:"(未設定・1本だけ出る)"},{v:"parallel",t:"parallel（全部に流す）"},{v:"first_match",t:"first_match（条件で1本選ぶ）"}]));
   if(getP(n,"routing.mode")==="parallel")
     h+=fld("失敗したときの波及",sel("routing.failurePolicy",getP(n,"routing.failurePolicy"),[{v:"fail_fast",t:"fail_fast（兄弟を止める）"},{v:"",t:"(未設定・エラーになる)"}]));
   if(getP(n,"routing.mode")==="first_match")
     h+=fld("どれにも当たらないとき",sel("routing.onNoMatch",getP(n,"routing.onNoMatch"),[{v:"error",t:"error（失敗にする）"},{v:"stop",t:"stop（止めてResume可能に）"}]));
+  }
   h+=`<div class="row"><button class="danger" id="nDel">このノードを削除</button></div>`;
   openSheet(h);bindClose();
   bindFields(n,el=>{
@@ -2609,11 +2957,45 @@ function openNodeSheet(id){
       else if(n.prompt)delete n.prompt.template;
     }
   });
+  $("#sheetBody").querySelectorAll("[data-mv]").forEach(b=>{
+    b.onclick=()=>moveInput(n.id,b.dataset.port,Number(b.dataset.i),b.dataset.mv);});
+  $("#sheetBody").querySelectorAll("[data-role]").forEach(sl=>{
+    sl.onchange=()=>{const e=(Ed.spec.edges||[])[Number(sl.dataset.role)];if(!e)return;
+      if(sl.value==="done")e.loopRole="done";else delete e.loopRole;
+      syncFromCanvas();openNodeSheet(n.id);};});
+  const uk=$("#sheetBody").querySelector('select[data-f="__ukind"]');
+  if(uk)uk.onchange=()=>{
+    const kd=uk.value;n.loop=n.loop||{};
+    if(kd===""||kd==="free"){if(kd==="")delete n.loop.until;}
+    else{const q=untilParts(n.loop.until);
+      if(!q.node)q.node=(untilNodeOpts(n)[0]||{}).v||"";
+      if(!q.op)q.op=">=";
+      if(!q.val)q.val=(kd==="len"?"200":"8");
+      if(kd==="json"&&!q.field)q.field="score";
+      const u=buildUntil(kd,q);if(u)n.loop.until=u;else delete n.loop.until;}
+    syncFromCanvas();openNodeSheet(n.id);};
+  ["__unode","__ufield","__uop","__uval"].forEach(f=>{
+    const el=$("#sheetBody").querySelector('[data-f="'+f+'"]');if(!el)return;
+    const upd=()=>{
+      const kk2=$("#sheetBody").querySelector('select[data-f="__ukind"]');if(!kk2)return;
+      const g=k=>{const x=$("#sheetBody").querySelector('[data-f="'+k+'"]');return x?x.value:"";};
+      const u=buildUntil(kk2.value,{node:g("__unode"),field:g("__ufield"),op:g("__uop"),val:g("__uval")});
+      n.loop=n.loop||{};if(u)n.loop.until=u;else delete n.loop.until;
+      const c=$("#sheetBody").querySelector("#uNow");if(c)c.textContent=n.loop.until||"（なし）";
+      syncFromCanvas();};
+    el.oninput=upd;el.onchange=upd;});
+  const lmx=$("#sheetBody").querySelector('[data-f="loop.max"]');
+  if(lmx)lmx.onchange=()=>{syncFromCanvas();openNodeSheet(n.id);};
   const idEl=$("#sheetBody").querySelector('[data-f="id"]');
   if(idEl)idEl.onchange=()=>{const nid=idEl.value.trim();
     if(!nid){idEl.value=n.id;return;}
     if(nid!==n.id&&(Ed.spec.nodes||[]).some(x=>x.id===nid)){setHint("その名前はもう使われている");idEl.value=n.id;return;}
-    renameNode(n.id,nid);syncFromCanvas();openNodeSheet(nid);};
+    const wasLoopId=n.type==="loop"&&(!n.loop||n.loop.id===n.id||n.loop.id==null);
+    const old=n.id;
+    renameNode(n.id,nid);
+    if(wasLoopId){n.loop=n.loop||{};n.loop.id=nid;
+      (Ed.spec.edges||[]).forEach(e=>{if(e.to.node===nid&&e.loop&&(e.loop.id===old||e.loop.id==null))e.loop={id:nid};});}
+    syncFromCanvas();openNodeSheet(nid);};
   const pv=$("#sheetBody").querySelector('[data-f="__prov"]');
   if(pv)pv.onchange=()=>{
     if(pv.value==="__mock"){delete n.provider;n.mock=n.mock||{text:"(mock)"};}
@@ -2743,13 +3125,21 @@ function renameNode(oldId,newId){
 /* 辺の編集 */
 function openEdgeSheet(i){
   const e=(Ed.spec.edges||[])[i];if(!e)return;
-  const kind=e.loop?"loop":e.else?"else":e.if?"if":"plain";
+  const toLoop=isLoopNode(nodeById(e.to.node)),fromLoop=isLoopNode(nodeById(e.from.node));
+  const kind=(e.loop&&toLoop)?"back":e.loop?"loop":e.else?"else":e.if?"if":"plain";
   let h=head(`つながり: ${e.from.node} → ${e.to.node}`);
-  h+=fld("種類",sel("__kind",kind,[{v:"plain",t:"そのまま流す"},{v:"if",t:"if（条件が真のとき）"},{v:"else",t:"else（どれにも当たらないとき）"},{v:"loop",t:"loop（戻して繰り返す）"}]));
+  const kinds=[{v:"plain",t:"そのまま流す"},{v:"if",t:"if（条件が真のとき）"},{v:"else",t:"else（どれにも当たらないとき）"}];
+  kinds.push(toLoop?{v:"back",t:"ループの戻り線（繰り返しに戻す）"}:{v:"loop",t:"loop（戻して繰り返す）"});
+  h+=fld("種類",sel("__kind",kind,kinds));
+  if(kind==="back")h+=`<div class="mini">これは <b>${esc(e.to.node)}</b> の繰り返しに戻す線。何回まわるか・いつ抜けるかは <b>${esc(e.to.node)}</b> をタップして決める。</div>`;
+  if(fromLoop)h+=fld("この出口の役割",sel("__lrole",e.loopRole==="done"?"done":"body",
+    [{v:"body",t:"繰り返す先（本体）"},{v:"done",t:"抜けたあと"}]));
   if(kind==="if"){h+=fld("条件式",txt("if",e.if,"critic.out.score >= 8"));h+=fld("優先順位（小さいほど先）",num("priority",e.priority));}
   if(kind==="loop"){h+=`<div class="fld2">${fld("loop ID",txt("loop.id",getP(e,"loop.id"),"revise"))}${fld("最大回数",num("loop.max",getP(e,"loop.max"),"3"))}</div>`;
     h+=fld("打ち切り条件（真になったら抜ける）",txt("loop.until",getP(e,"loop.until"),"critic.out.score >= 8"));}
-  if((e.to.port||"in")==="items")h+=fld("並び順 position",num("position",e.position));
+  {const sib=(Ed.spec.edges||[]).filter(x=>!x.loop&&x.to.node===e.to.node&&(x.to.port||"in")===(e.to.port||"in"));
+   if(sib.length>1&&!e.loop){h+=fld("何番目に渡すか（0が先）",num("position",e.position));
+     h+=`<div class="mini">順番はノード編集の「入力の順番」でも入れ替えられる。</div>`;}}
   h+=fld("値の変換",sel("transform",e.transform,[{v:"",t:"なし"},
     {v:"list_to_text",t:"配列 → 箇条書きの文（リストを次のLLMに渡すとき）"},
     {v:"json_stringify",t:"json_stringify（json→text）"},
@@ -2764,9 +3154,13 @@ function openEdgeSheet(i){
     delete e.if;delete e.else;delete e.loop;
     if(kk.value==="if")e.if="true==true";
     else if(kk.value==="else")e.else=true;
+    else if(kk.value==="back")e.loop={id:loopIdOf(nodeById(e.to.node))};
     else if(kk.value==="loop")e.loop={id:"loop"+i,max:3};
     syncFromCanvas();openEdgeSheet(i);
   };
+  const lr=$("#sheetBody").querySelector('[data-f="__lrole"]');
+  if(lr)lr.onchange=()=>{if(lr.value==="done")e.loopRole="done";else delete e.loopRole;
+    syncFromCanvas();openEdgeSheet(i);};
   $("#eDel").onclick=()=>{Ed.spec.edges.splice(i,1);Ed.sel=null;closeSheet();syncFromCanvas();setHint("つながりを削除した");};
 }
 /* 分岐のしかたを選ばせる（隠れた既定値を作らない） */
@@ -2793,7 +3187,7 @@ function openAddSheet(){
   $("#sheetBody").querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{addNode(b.dataset.add);});  // addNode が続けて中身の編集を開く
 }
 function addNode(type){
-  const base={input:"in",llm:"llm",join:"jn",output:"out"}[type]||"n";
+  const base={input:"in",llm:"llm",join:"jn",loop:"lp",output:"out"}[type]||"n";
   const id=newId(base);
   const n={id,type};
   if(type==="llm"){const provs=Object.keys(Ed.spec.providers||{});
@@ -2801,6 +3195,7 @@ function addNode(type){
     n.prompt={system:"",template:{syntax:"mustache",mode:"interpolation_only",value:"{{{in}}}"}};
     delete n.prompt.system;}
   if(type==="join"){n.op="markdown";n.inputs={items:{type:"any",cardinality:"many"}};}
+  if(type==="loop")n.loop={id,max:5};      // 既定は5回。空にすれば無限（止めるのは緊急停止）
   Ed.spec.nodes=Ed.spec.nodes||[];Ed.spec.nodes.push(n);
   const r=$("#cv").getBoundingClientRect();
   const c=toWorld(r.left+r.width/2,r.top+r.height/2);
@@ -3002,9 +3397,12 @@ const setState=t=>$("#stateline").textContent="state: "+t;
 function setRunUI(running){
   for(const id of ["#run","#runTop"]){const b=$(id);if(b)b.disabled=running;}
   for(const id of ["#cancel","#cancelTop"]){const b=$(id);if(b)b.disabled=!running;}
+  const es=$("#estop");if(es)es.classList.toggle("show",!!running);   // 無限ループでも押せる場所に出す
 }
 let cur=null,ctl=null;
-function parseSpec(){let spec;try{spec=JSON.parse($("#spec").value);}catch(e){log("err","JSON: "+e.message);return null;}const errs=validate(spec);if(errs.length){errs.forEach(e=>log("err","VALIDATE: "+e));return null;}return spec;}
+function parseSpec(){let spec;try{spec=JSON.parse($("#spec").value);}catch(e){log("err","JSON: "+e.message);return null;}
+  if(normalizeInputOrder(spec))log("dim","入口に2本以上入っている所に、つないだ順で番号を振った（順番はノード編集で変えられる）");
+  const errs=validate(spec);if(errs.length){errs.forEach(e=>log("err","VALIDATE: "+e));return null;}return spec;}
 function updateResume(){const cp=store.load();$("#resume").disabled=!(cp&&cp.status!=="success"&&cp.resumable);
   $("#retry").disabled=!(cur&&Object.values(cur.executions||{}).some(e=>e.status==="failed"));}
 function renderTotals(){
@@ -3042,18 +3440,23 @@ const runInput={};
 let ioSig="";
 function ioNodes(){const ns=(Ed.spec&&Ed.spec.nodes)||[];
   return{ins:ns.filter(n=>n.type==="input"),outs:ns.filter(n=>n.type==="output")};}
+const ioDefault={};       // 入力欄にいま入れてある「最初から入れておく文」
 function renderIO(){
   if(!Ed.spec)return;
   const{ins,outs}=ioNodes();
-  const sig=ins.map(n=>n.id).join(",")+"|"+outs.map(n=>n.id).join(",");
+  const sig=ins.map(n=>`${n.id}\u0001${n.label||""}\u0001${n.default||""}`).join(",")+"|"+outs.map(n=>n.id).join(",");
   if(sig!==ioSig){
     ioSig=sig;
     const wi=$("#ioIn");wi.innerHTML="";
     if(!ins.length)wi.innerHTML='<div class="mini">入力ノードがまだ無い</div>';
     for(const n of ins){
-      if(runInput[n.id]===undefined)runInput[n.id]=DEFAULT_INPUT;
+      // ノードに書いた「最初から入れておく文」を使う（まだ触っていない欄／前の既定のままの欄だけ入れ替える）
+      const def=n.default!=null?n.default:DEFAULT_INPUT;
+      if(runInput[n.id]===undefined||runInput[n.id]===ioDefault[n.id])runInput[n.id]=def;
+      ioDefault[n.id]=def;
       const l=document.createElement("label");l.className="fld";
-      l.innerHTML=`<span>入力 · ${esc(n.id)}</span><textarea data-in="${esc(n.id)}" style="min-height:54px"></textarea>`;
+      l.innerHTML=`<span>${esc(n.label||("入力 · "+n.id))}${n.label?` <small style="color:var(--sub)">· ${esc(n.id)}</small>`:""}</span>`
+        +`<textarea data-in="${esc(n.id)}" style="min-height:54px"></textarea>`;
       wi.appendChild(l);l.querySelector("textarea").value=runInput[n.id];
     }
     wi.querySelectorAll("[data-in]").forEach(t=>{t.oninput=()=>{runInput[t.dataset.in]=t.value;};});
@@ -3071,7 +3474,8 @@ function renderIO(){
   const st=$("#ioStatus");
   if(st){
     if(!cur)st.textContent="";
-    else if(cur.status==="running"||cur.status==="cancelling")st.textContent=`実行中… ${Object.values(cur.nodeRuns||{}).length}ノード目`;
+    else if(cur.status==="running"||cur.status==="cancelling")st.textContent=`実行中… ${Object.values(cur.nodeRuns||{}).length}ノード目`
+      +(cur.iterationTotal?`・ループ${cur.iterationTotal}周目`:"")+(cur.status==="cancelling"?"（止めています）":"");
     else if(cur.status==="success")st.textContent="実行できた";
     else{const e=(cur.errors||[])[0];
       st.textContent=`実行は ${cur.status}`+(e?` — ${e.node||""}: ${e.kind||""} ${errText(e).slice(0,90)}`:"");}
@@ -3097,7 +3501,7 @@ function renderIO(){
 }
 function inputForRun(){
   const{ins}=ioNodes();const o={};
-  for(const n of ins)o[n.id]=runInput[n.id]!==undefined?runInput[n.id]:DEFAULT_INPUT;
+  for(const n of ins)o[n.id]=runInput[n.id]!==undefined?runInput[n.id]:(n.default!=null?n.default:DEFAULT_INPUT);
   return o;
 }
 
@@ -3551,7 +3955,7 @@ async function doRetry(){const spec=parseSpec();if(!spec||!cur)return;
   try{await retryExecution(spec,cur,failed.execId,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}report();}
 $("#run").onclick=runAll;$("#runTop").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResume;$("#retry").onclick=doRetry;
 const doCancel=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
-$("#cancel").onclick=doCancel;$("#cancelTop").onclick=doCancel;
+$("#cancel").onclick=doCancel;$("#cancelTop").onclick=doCancel;$("#estop").onclick=doCancel;
 $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
 setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("webllm");loadEx("exW1");loadFromHash();fitView();renderTotals();renderIO();renderModels();renderGguf();updateStorageInfo();
@@ -3978,6 +4382,69 @@ export async function CreateMLCEngine(model,opt){
   ok("43 複数入力の受け取り方: 改行/番号/見出し/配列/区切り指定",
     a==="検証1\n箇所1"&&b==="1. 検証1\n2. 箇所1"&&c==="## 検証\n\n検証1\n\n## 箇所\n\n箇所1"
     &&d==='["検証1","箇所1"]'&&e2==="検証1 / 箇所1"&&okMerge&&oneIn&&badOp);}
+ // 45 ループノード: 条件で抜ける
+ {const sp=JSON.parse(JSON.stringify(EX.ex10));
+  const r=await fullRun(sp,{in:"なおして"});
+  const drafts=(r.nodeRuns.draft||[]).filter(h=>h.status==="success").length;
+  ok("45 ループノード: 打ち切り条件が真になったら抜ける（3周で点数9）",
+    r.status==="success"&&r.result&&r.result.value&&r.result.value.score===9&&drafts===3&&r.iterationTotal===3);}
+ // 46 無限ループ（max/until なし）でも緊急停止で止まる
+ {const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"lp",type:"loop",loop:{id:"lp"}},{id:"b",type:"llm",mock:{tag:"b"}},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"}},
+     {from:{node:"lp",port:"out"},to:{node:"b",port:"in"}},
+     {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"},
+     {from:{node:"b",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}}]};
+  const noErr=validate(sp).length===0;
+  const st2=memStore();const run=makeRun(sp,{});startRun(sp,run);
+  let steps=0,ctl2=null;
+  ctl2=makeController({onStep:()=>{if(++steps===40)requestCancel(run,st2,ctl2);}});
+  await runUntilIdle(sp,run,st2,null,ctl2);
+  ok("46 無限ループ: 止まらないが緊急停止で止まる（安全装置まで走らない）",
+    noErr&&run.status==="cancelled"&&steps<80&&run.iterationTotal>=5);}
+ // 47 ループの外から来た入力は毎周そのまま使える
+ {const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"lp",type:"loop",loop:{id:"lp",max:2}},
+    {id:"B",type:"llm",mock:{echoPrompt:true},inputs:{in:{type:"any",cardinality:"many"}}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"}},
+     {from:{node:"in",port:"out"},to:{node:"B",port:"in"},position:1},
+     {from:{node:"lp",port:"out"},to:{node:"B",port:"in"},position:0},
+     {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"},
+     {from:{node:"B",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}}]};
+  const r=await fullRun(sp,{in:"外からの入力"});
+  const hs=(r.nodeRuns.B||[]).filter(h=>h.status==="success");
+  ok("47 ループの中のノードは、外から来た入力を毎周そのまま受け取る",
+    r.status==="success"&&hs.length===2&&hs.every(h=>String(h.out.value).includes("外からの入力")));}
+ // 48 つないだ順に position を振る（未指定でも実行できる形にする）
+ {const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"A",type:"llm",mock:{tag:"a"}},{id:"B",type:"llm",mock:{tag:"b"}},
+    {id:"C",type:"llm",mock:{echoPrompt:true}},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"C",port:"in"}},{from:{node:"B",port:"out"},to:{node:"C",port:"in"}},
+     {from:{node:"C",port:"out"},to:{node:"out",port:"in"}}]};
+  const before=validate(sp).some(x=>/many以外への複数incoming/.test(x));
+  const changed=normalizeInputOrder(sp);
+  const pos=sp.edges.filter(e=>e.to.node==="C").map(e=>e.position).join(",");
+  const many=sp.nodes.find(n=>n.id==="C").inputs.in.cardinality==="many";
+  const r=await fullRun(sp,{});
+  ok("48 入口の順番: つないだ順に振り直して、そのまま実行できる",
+    before&&changed&&pos==="0,1"&&many&&validate(sp).length===0&&r.status==="success"&&/a1[\s\S]*b1/.test(String(r.result.value)));}
+ // 49 出力ノードも複数入力のまとめ方を決められる
+ {const mk=m=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"A",type:"llm",mock:{tag:"a"}},{id:"B",type:"llm",mock:{tag:"b"}},
+    {id:"out",type:"output",merge:m,inputs:{in:{type:"any",cardinality:"many"}}}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"out",port:"in"},position:0},
+     {from:{node:"B",port:"out"},to:{node:"out",port:"in"},position:1}]});
+  const r1=await fullRun(mk({op:"json_array"}),{});
+  const r2=await fullRun(mk({op:"numbered"}),{});
+  ok("49 出力ノード: 複数の入力をJSON配列／番号付きでまとめて受け取る",
+    r1.status==="success"&&JSON.stringify(r1.result.value)==='["a1","b1"]'
+    &&r2.status==="success"&&r2.result.value==="1. a1\n2. b1");}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

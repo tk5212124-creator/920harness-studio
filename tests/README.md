@@ -3,13 +3,14 @@
 `harness.html` は1枚のHTMLなので、テストは Playwright でページを開いて中の関数を直接叩く形にしてある。
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト28件（Runtime回帰15 + Provider契約13）
+node tests/harness-runtime.mjs      # 自己テスト49件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ/順番）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
 node tests/harness-share.mjs        # 書き出し・共有リンク・取り込み・診断を通しで操作
 node tests/harness-ai-loop.mjs      # 外部LLMとの往復（1枚を出す→返答を口に入れる→差分→適用）
 node tests/harness-io-models.mjs    # 入出力パネルの連動と、モデルの一覧・選択・ダウンロード
+node tests/harness-loop.mjs         # ループノード・緊急停止・入力ノードの文言・入力の順番
 ```
 
 必要なもの: Node 22 以上と Playwright（Chromium）。

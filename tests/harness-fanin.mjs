@@ -42,16 +42,19 @@ R['① 実行'] = (await p.textContent('#stateline')).slice(0, 90);
 R['① 出力欄'] = (await p.textContent('#ioOut [data-out="out"]')).replace(/\s+/g, ' ').slice(0, 70);
 ok.manyRun = R['① 実行'].includes('success') && R['① 出力欄'].includes('A1') && R['① 出力欄'].includes('B1');
 
-// ② すでに壊れているSpecを取り込むと、1タップで直せる
-const 壊れた = JSON.parse(JSON.stringify(合流前));
+// ② 順番の書いていないSpecを取り込んだら、その場でつないだ順に番号が振られる（押すものは無い）
+const 壊れた 
+  = JSON.parse(JSON.stringify(合流前));
 壊れた.edges.push({ from: { node: "B", port: "out" }, to: { node: "C", port: "in" } });
 await paste(壊れた);
-R['② 取り込み直後の検証'] = (await vErr()).slice(0, 60);
-const fixBtn = p.locator('#vFixFanIn');
-ok.fixOffered = (await fixBtn.count()) === 1 && (await fixBtn.textContent()).includes('C の入口');
-await fixBtn.tap(); await p.waitForTimeout(200);
-R['② 直した後の検証'] = (await vErr()).trim() || '（エラーなし）';
-ok.fixed = R['② 直した後の検証'] === '（エラーなし）' && !(await p.isVisible('#sheet.show'));
+const s2 = await spec();
+R['② 取り込み直後'] = { 検証: (await vErr()).trim() || '（エラーなし）',
+  'Cの入口': s2.nodes.find(n => n.id === 'C').inputs,
+  位置: s2.edges.filter(e => e.to.node === 'C').map(e => e.position) };
+ok.autoOrder = R['② 取り込み直後'].検証 === '（エラーなし）'
+  && s2.nodes.find(n => n.id === 'C').inputs.in.cardinality === 'many'
+  && JSON.stringify(R['② 取り込み直後'].位置) === '[0,1]'
+  && (await p.locator('#vFixFanIn').count()) === 0;
 await tap('#run');
 await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
 R['② 実行'] = (await p.textContent('#stateline')).slice(0, 40);
@@ -81,11 +84,13 @@ R['⑤ 上の実行ボタン'] = (await p.textContent('#stateline')).slice(0, 40
 ok.runTop = R['⑤ 上の実行ボタン'].includes('success');
 
 // ⑥ 直すところが残っているのに実行を押したら、押したそばに理由が出る（無反応にしない）
-await paste(壊れた);
+const 直らない = JSON.parse(JSON.stringify(合流前));
+直らない.nodes.find(n => n.id === 'A').provider = 'いないprovider';
+await paste(直らない);
 await tap('#runTop');
 R['⑥ 実行できないときの表示'] = (await p.textContent('#ioStatus')).replace(/\s+/g, ' ').slice(0, 80);
 ok.blockedShown = R['⑥ 実行できないときの表示'].includes('実行できない')
-  && R['⑥ 実行できないときの表示'].includes('複数incoming');
+  && R['⑥ 実行できないときの表示'].includes('provider未定義');
 
 // ⑦ 別々の分岐から来ている2本目も、そのまま繋げて実行できる（Joinを作らない）
 const 別分岐 = {
