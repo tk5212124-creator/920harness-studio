@@ -144,6 +144,24 @@ R['⑦ 実行'] = (await p.textContent('#stateline')).slice(0, 120);
 R['⑦ ログ末尾'] = (await p.textContent('#log')).trim().split('\n').slice(-3).join(' / ').slice(0, 200);
 ok.fixAllRun = R['⑦ 実行'].includes('success');
 
+// ⑧ まとめて受け取ったあと、受け取り方をノード編集で変えられる
+await paste(合流前);
+await tap('.nd[data-id="B"] .port.pout');
+await tap('.nd[data-id="C"] .port.pin');
+await tap('#miMany');
+await tap('.nd[data-id="C"]');
+R['⑧ 受け取り方の選択肢'] = await p.locator('[data-f="__merge"] option').allTextContents();
+ok.mergeUI = R['⑧ 受け取り方の選択肢'].length === 5 && R['⑧ 受け取り方の選択肢'][0].includes('改行');
+await p.selectOption('[data-f="__merge"]', 'markdown'); await p.waitForTimeout(250);
+await tap('#mgAuto');
+R['⑧ 選んだ受け取り方'] = (await spec()).nodes.find(n => n.id === 'C').merge;
+ok.mergeSet = R['⑧ 選んだ受け取り方'].op === 'markdown' && R['⑧ 選んだ受け取り方'].labels.join() === 'A,B';
+await tap('#shClose');
+await tap('#run');
+await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
+R['⑧ 実行'] = (await p.textContent('#stateline')).slice(0, 40);
+ok.mergeRun = R['⑧ 実行'].includes('success');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 出力の形を縛る v0.14.0</title>
+<title>Harness Studio — 落ちない工夫と入力のまとめ方 v0.15.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -93,7 +93,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.14.0 · 出力の形を縛る</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.15.0 · 落ちない工夫と入力のまとめ方</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -340,7 +340,7 @@ function specToHSL(spec){
   if(spec.providers&&Object.keys(spec.providers).length)L.push("");
   for(const[k,v]of Object.entries(spec.vars||{}))L.push(`var ${k} = ${jstr(v)}`);
   if(spec.vars&&Object.keys(spec.vars).length)L.push("");
-  const NODE_SKIP=new Set(["id","type","provider","model","prompt","generation","schema","routing","op","sep","template","inputs","mock","labels","prefix","suffix"]);
+  const NODE_SKIP=new Set(["id","type","provider","model","prompt","generation","schema","routing","op","sep","template","inputs","mock","labels","prefix","suffix","merge"]);
   for(const n of spec.nodes||[]){
     L.push(`node ${hslName(n.id)}: ${n.type||"llm"}${n.provider?" "+hslName(n.provider):""}`);
     if(n.model!=null)L.push(`  model ${jstr(n.model)}`);
@@ -360,6 +360,7 @@ function specToHSL(spec){
     if(n.op!=null)L.push(`  op ${n.op}`);
     if(n.sep!=null)L.push(`  sep ${jstr(n.sep)}`);
     if(n.labels!=null)L.push(`  labels ${jstr(n.labels)}`);
+    if(n.merge!=null)L.push(`  merge ${jstr(n.merge)}`);
     if(n.type==="join"&&n.prefix!=null)L.push(`  prefix ${jstr(n.prefix)}`);
     if(n.type==="join"&&n.suffix!=null)L.push(`  suffix ${jstr(n.suffix)}`);
     if(n.template)L.push(`  template ${jstr(n.template)}`);
@@ -411,6 +412,7 @@ function hslToSpec(text){
       else if(k==="prefix"){if(cur.type==="join")cur.prefix=one();else{cur.prompt=cur.prompt||{};cur.prompt.prefix=one();}}
       else if(k==="suffix"){if(cur.type==="join")cur.suffix=one();else{cur.prompt=cur.prompt||{};cur.prompt.suffix=one();}}
       else if(k==="labels")cur.labels=one();
+      else if(k==="merge")cur.merge=one();
       else if(k==="prompt_set"){cur.prompt=cur.prompt||{};cur.prompt[rest[0]]=hslValue(rest[1],ln);}
       else if(k==="gen")cur.generation=one();
       else if(k==="schema")cur.schema=one();
@@ -508,6 +510,9 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
     labels ["案A","案B"]   （join。つないだ順の名前。markdown の見出し・csv の見出し行・json_object のキーになる）
     prefix "…" / suffix "…"（join では文章になる op = concat/markdown/csv/template のときだけ使える）
     inputs {"items":{"type":"any","cardinality":"many"}}（join のとき必須）
+    merge {"op":"markdown","labels":["検証","改稿箇所"]}
+        1つの入口に複数の線が入る llm ノードで、それらをどう1つの文にするか。
+        op は concat（改行でつなぐ・既定）| numbered（1. 2. …）| markdown（見出し付き）| csv | json_array
     mock {"text":"…"}                     （adapter が mock のとき）
   <from> -> <to>[.<port>] [if "式"] [else] [loop <id> max <回数> until "式"] [position <番号>] [transform json_stringify|json_parse|list_to_text] [priority <番号>]
   layout <id> <x>,<y>                     図の位置（無くてもよい）
@@ -752,6 +757,9 @@ const ModelManager={
     onProgress&&onProgress(st);
     const p=(async()=>{
       try{
+        // 端末の中で動かすモデルは同時に1つだけ常駐させる。
+        // 2つ載せると小さい端末（iPhoneなど）は落ちる
+        if(adapter.singleton)await this.releaseOthers(adapter,k,onProgress);
         const handle=await adapter.ensureLoaded(def,pr=>{const s=this.states[k];if(s&&s.status==="loading"){s.progress=pr.progress!=null?pr.progress:s.progress;s.text=pr.text||s.text;onProgress&&onProgress(s);}},signal);
         this.states[k]={status:"ready",progress:1,text:"ready",handle,loadCount:st.loadCount};onProgress&&onProgress(this.states[k]);return handle;
       }catch(e){
@@ -760,6 +768,16 @@ const ModelManager={
       }
     })();
     st.promise=p;return p;
+  },
+  /* 同じadapterの、別のモデルを片付ける（メモリを空ける） */
+  async releaseOthers(adapter,keepKey,onProgress){
+    for(const[k,st]of Object.entries(this.states)){
+      if(k===keepKey||!st||st.status!=="ready"||!st.handle)continue;
+      if(!k.startsWith((adapter.id||"")+"|"))continue;
+      onProgress&&onProgress({progress:0.01,text:"別のモデルを片付けている（メモリを空ける）"});
+      try{if(adapter.release)await adapter.release(st.handle);}catch(_){}
+      delete this.states[k];
+    }
   }
 };
 
@@ -784,6 +802,9 @@ const MockProvider={
       return{output:{type:"text",value:partial},usage:{apiCalls:1,inputTokens:5,outputTokens:m.stream.length,cost:null}};
     }
     if(m.echoInput)return{output:{type:"json",value:{received:inputs.in!==undefined?inputs.in:null}},usage:{apiCalls:1,inputTokens:5,outputTokens:5,cost:null}};
+    // 組み上がったプロンプト本文をそのまま返す（入力のまとめ方を確かめるため）
+    if(m.echoPrompt){const ms=(req.input&&req.input.messages)||[];const last=ms[ms.length-1]||{};
+      return{output:{type:"text",value:String(last.content||"")},usage:{apiCalls:1,inputTokens:5,outputTokens:5,cost:null}};}
     if(m.scoreByIteration){const arr=m.scoreByIteration;const score=arr[Math.min(it-1,arr.length-1)];return{output:{type:"json",value:{text:`${node.id} v${it}`,score}},usage:{apiCalls:1,inputTokens:20,outputTokens:10,cost:null}};}
     if(m.tag)return{output:{type:"text",value:`${m.tag}${it}`},usage:{apiCalls:1,inputTokens:5,outputTokens:5,cost:null}};
     if(m.fixed!==undefined)return{output:{type:"json",value:m.fixed},usage:{apiCalls:1,inputTokens:5,outputTokens:5,cost:null}};
@@ -1005,6 +1026,12 @@ function mapWebLLMError(e,def){
 /* WebLLM に渡す設定。重みの取得先を差し替えるのはここだけにする。
    weightsUrl があれば、そのモデルの重みだけ自前の置き場（このサイトなど）から取る。
    wasm（model_lib）は WebLLM が元から持っているものをそのまま使う。 */
+/* 「読み込み中に画面が落ちた」を次に開いたときに分かるようにする目印 */
+const LOADING_KEY="harness_loading_v1";
+function markLoading(model,def){try{localStorage.setItem(LOADING_KEY,JSON.stringify({model,at:Date.now(),
+  ctx:(def&&def.overrides&&def.overrides.context_window_size)||null}));}catch(e){}}
+function clearLoading(){try{localStorage.removeItem(LOADING_KEY);}catch(e){}}
+function lastLoading(){try{const v=localStorage.getItem(LOADING_KEY);return v?JSON.parse(v):null;}catch(e){return null;}}
 const SITE_WEIGHTS={};   // model_id -> このページが配っている重みのURL（models_index.json から入る）
 function weightsUrlFor(def){if(def.noSite)return null;return def.weightsUrl||SITE_WEIGHTS[def.model]||null;}
 function buildAppConfig(m,def){
@@ -1016,6 +1043,11 @@ function buildAppConfig(m,def){
   return appConfig;
 }
 const WebLLMProvider={
+  singleton:true,   // 端末の中で同時に持てるのは1つだけ（2つ載せると落ちる端末がある）
+  async release(handle){
+    try{if(handle&&handle.engine&&handle.engine.unload)await handle.engine.unload();}catch(_){}
+    try{if(handle&&handle.worker)handle.worker.terminate();}catch(_){}
+  },
   id:"webllm",label:"WebLLM（アプリ内蔵・WebGPU）",models:WEBLLM_MODELS,
   async ensureLoaded(def,onProgress,signal){
     if(typeof navigator==="undefined"||!navigator.gpu)
@@ -1024,6 +1056,8 @@ const WebLLMProvider={
     const url=webllmModuleUrl(def);
     onProgress&&onProgress({progress:0.02,text:"WebLLM本体を読み込み中"});
     const wURL=weightsUrlFor(def);
+    // 画面ごと落ちる（端末のメモリ不足）と何も残らないので、読み込み中であることを端末に書いておく
+    markLoading(def.model,def);
     const m=await loadWebLLMModule(url);
     const appConfig=buildAppConfig(m,def);
     // 自分で置いたモデル（GitHub Pages・自前サーバなど）を一覧に足す
@@ -1066,6 +1100,7 @@ const WebLLMProvider={
     try{
       if(!useWorker){
         const engine=await Promise.race([m.CreateMLCEngine(def.model,opts),stall]);
+      clearLoading();
         clearInterval(stallIv);
         return{engine,mod:m,appConfig,worker:null,moduleUrl:url};
       }
@@ -1095,10 +1130,11 @@ const WebLLMProvider={
         if(signal)signal.addEventListener("abort",()=>rej(abortError()),{once:true});
       });
       const engine=await Promise.race([m.CreateWebWorkerMLCEngine(worker,def.model,opts),failed,stall]);
+      clearLoading();
       clearInterval(stallIv);
       return{engine,mod:m,appConfig,worker,moduleUrl:url};
     }catch(e){
-      clearInterval(stallIv);
+      clearInterval(stallIv);clearLoading();
       if(worker)try{worker.terminate();}catch(_){}
       if(isAbort(e))throw e;
       if(e&&e.code){
@@ -1189,12 +1225,27 @@ function resolveProvider(spec,node){
   throw{code:"REFERENCE_ERROR",retryable:false,message:"provider未指定: "+node.id};
 }
 const rvToText=rv=>rv==null?"":(rv.type==="text"?String(rv.value):JSON.stringify(rv.value));
+/* 1つの入口に複数の値が届いたとき、どう1つの文にするか。
+   何も書かなければ改行でつなぐ（今までどおり）。node.merge で変えられる。 */
+const MERGE_OPS=["concat","numbered","markdown","csv","json_array"];
+function mergeInputs(list,merge){
+  const m=merge||{};const labels=m.labels||[];
+  const vals=list.map(rvToText);
+  const lab=i=>labels[i]!=null?String(labels[i]):null;
+  switch(m.op||"concat"){
+    case "numbered":return vals.map((t,i)=>`${i+1}. ${lab(i)?lab(i)+": ":""}${t}`).join("\n");
+    case "markdown":return vals.map((t,i)=>lab(i)?`## ${lab(i)}\n\n${t}`:`- ${t}`).join("\n\n");
+    case "csv":return (labels.length?labels.map(csvCell).join(",")+"\n":"")+vals.map(csvCell).join(",");
+    case "json_array":return JSON.stringify(list.map(rv=>rv?rv.value:null));
+    default:return vals.join(m.sep||"\n");
+  }
+}
 function buildMessages(node,inputs,ex,run){
   const p=node.prompt||{};
   const first=Object.keys(inputs).map(k=>inputs[k]).find(v=>v!==undefined);
-  const inText=Array.isArray(first)?first.map(rvToText).join("\n"):rvToText(first);
+  const inText=Array.isArray(first)?mergeInputs(first,node.merge):rvToText(first);
   const scope={in:inText,inputs:{},iteration:(ex&&ex.iteration)||1,vars:run.vars||{},run_input:run.input};
-  for(const [k,v] of Object.entries(inputs))scope.inputs[k]=Array.isArray(v)?v.map(rvToText).join("\n"):rvToText(v);
+  for(const [k,v] of Object.entries(inputs))scope.inputs[k]=Array.isArray(v)?mergeInputs(v,node.merge):rvToText(v);
   let user;
   if(p.template){
     if(p.template.syntax!=="mustache"||p.template.mode!=="interpolation_only")throw{code:"TEMPLATE_NOT_ALLOWED",retryable:false,message:"prompt.templateは syntax=mustache / mode=interpolation_only 必須"};
@@ -1331,6 +1382,14 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
        if(t==="integer"||t==="number")continue;
        const key=`${m[1]}.out.${m[2]}`;if(seen2.has(key))continue;seen2.add(key);
        errs.push(`${where} が ${key} を数と比べているのに、${m[1]} の schema で "${m[2]}" の型が数になっていない（文字列で返ると比べられない）: ${m[1]}`);}}}
+  spec.nodes.forEach(n=>{if(!n.merge)return;
+    if(typeof n.merge!=="object")errs.push("merge はobjectにする: "+n.id);
+    else{
+      if(n.merge.op&&!MERGE_OPS.includes(n.merge.op))errs.push(`merge.op が不正（${MERGE_OPS.join(" / ")}）: ${n.id}`);
+      if(n.merge.labels!=null&&!Array.isArray(n.merge.labels))errs.push("merge.labels は配列にする: "+n.id);
+      const many=Object.values(n.inputs||{}).some(p=>p&&p.cardinality==="many");
+      if(!many)errs.push("merge は「まとめて受け取る」入口があるノードでだけ使える: "+n.id);
+    }});
   spec.nodes.forEach(n=>{if(n.type!=="join")return;
     const OPS=["json_array","concat","markdown","csv","json_object","template"];
     if(!n.op)errs.push("join に op（まとめ方）が無い: "+n.id);
@@ -2367,6 +2426,10 @@ function openNodeSheet(id){
       const opts=[{v:"",t:`（providerの既定: ${(provDef&&provDef.model)||"未設定"}）`}].concat(list);
       if(n.model&&!list.some(o=>o.v===n.model))opts.push({v:n.model,t:n.model+"（いま入っている値）"});
       h+=fld("このノードで使うモデル",sel("model",n.model||"",opts));
+      const ctxNow=(n.overrides&&n.overrides.context_window_size)||"";
+      h+=fld("文脈の長さ（短いほどメモリが少なくて済む）",sel("__ctx",String(ctxNow),
+        [{v:"",t:"モデルの既定"},{v:"1024",t:"1024（いちばん軽い）"},{v:"2048",t:"2048"},{v:"4096",t:"4096"}]));
+      h+=`<div class="mini">端末が落ちる／固まるときはここを短くする。長い文章は入らなくなる。</div>`;
     }else if(provAdapter)h+=fld("モデル（provider既定を上書き）",txt("model",n.model,"空ならprovider側の設定"));
     h+=fld("system",area("prompt.system",getP(n,"prompt.system"),"役割の指定"));
     h+=fld("本文テンプレ（{{{run_input.question}}} や {{{in}}} が使える）",
@@ -2380,6 +2443,25 @@ function openNodeSheet(id){
       h+=fld(pk==="custom"?"JSON schema（自分で書く）":"JSON schema（空で無効）",
         `<textarea data-json="schema" placeholder='{"type":"object","required":["score"]}'>${esc(n.schema?JSON.stringify(n.schema):"")}</textarea>`);
     else h+=`<div class="mini">いまの schema: <code>${esc(JSON.stringify(n.schema))}</code></div>`;
+    // 1つの入口に複数の線が入っているときは、その受け取り方も決められる
+    const manyPorts=Object.entries(n.inputs||{}).filter(([,d])=>d&&d.cardinality==="many").map(([k])=>k);
+    if(manyPorts.length){
+      const srcs=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&manyPorts.includes(e.to.port||"in")&&!e.loop)
+        .sort((a,b)=>(a.position||0)-(b.position||0)).map(e=>e.from.node);
+      const mop=(n.merge&&n.merge.op)||"concat";
+      h+=fld(`複数の入力（${srcs.join(" / ")||manyPorts.join(",")}）の受け取り方`,sel("__merge",mop,[
+        {v:"concat",t:"改行でつなぐ（既定）"},
+        {v:"numbered",t:"番号を振る（1. 2. …）"},
+        {v:"markdown",t:"見出しを付ける（## 名前）"},
+        {v:"csv",t:"カンマつなぎ（CSV）"},
+        {v:"json_array",t:"JSONの配列にする"}]));
+      if(["numbered","markdown","csv"].includes(mop)){
+        h+=fld("それぞれの名前（つないだ順・カンマ区切り）",
+          txt("__mlabels",((n.merge&&n.merge.labels)||[]).join(", "),srcs.join(", ")));
+        h+=`<div class="mini"><button id="mgAuto">つないだノード名を入れる</button>（空なら名前なし）</div>`;
+      }
+      if(mop==="concat")h+=fld("区切り",txt("__msep",(n.merge&&n.merge.sep)||"","\\n"));
+    }
   }
   if(n.type==="join"){
     h+=fld("まとめ方（どんな形で渡すか）",sel("op",n.op,[
@@ -2451,6 +2533,41 @@ function openNodeSheet(id){
   if(ja)ja.onclick=()=>{n.labels=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&(e.to.port||"in")==="items"&&!e.loop)
       .sort((a,b)=>(a.position||0)-(b.position||0)).map(e=>e.from.node);
     if(!n.labels.length)delete n.labels;syncFromCanvas();openNodeSheet(n.id);};
+  const mg=$("#sheetBody").querySelector('select[data-f="__merge"]');
+  if(mg)mg.onchange=()=>{
+    const op=mg.value;
+    if(op==="concat"&&!(n.merge&&(n.merge.labels||n.merge.sep)))delete n.merge;
+    else n.merge=Object.assign({},n.merge||{},{op});
+    if(n.merge&&op!=="concat")delete n.merge.sep;
+    if(n.merge&&!["numbered","markdown","csv"].includes(op))delete n.merge.labels;
+    syncFromCanvas();openNodeSheet(n.id);
+  };
+  const ml=$("#sheetBody").querySelector('[data-f="__mlabels"]');
+  if(ml)ml.oninput=()=>{const a=ml.value.split(",").map(x=>x.trim()).filter(Boolean);
+    n.merge=Object.assign({},n.merge||{},{op:(n.merge&&n.merge.op)||"concat"});
+    if(a.length)n.merge.labels=a;else delete n.merge.labels;syncFromCanvas();};
+  const ms=$("#sheetBody").querySelector('[data-f="__msep"]');
+  if(ms)ms.oninput=()=>{const v=ms.value;
+    n.merge=Object.assign({},n.merge||{},{op:(n.merge&&n.merge.op)||"concat"});
+    if(v)n.merge.sep=v;else delete n.merge.sep;
+    if(!n.merge.labels&&!n.merge.sep&&n.merge.op==="concat")delete n.merge;
+    syncFromCanvas();};
+  const mga=$("#sheetBody").querySelector('#mgAuto');
+  if(mga)mga.onclick=()=>{
+    const ports=Object.entries(n.inputs||{}).filter(([,d])=>d&&d.cardinality==="many").map(([k])=>k);
+    const srcs=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&ports.includes(e.to.port||"in")&&!e.loop)
+      .sort((a,b)=>(a.position||0)-(b.position||0)).map(e=>e.from.node);
+    n.merge=Object.assign({},n.merge||{},{op:(n.merge&&n.merge.op)||"markdown",labels:srcs});
+    if(!srcs.length)delete n.merge.labels;
+    syncFromCanvas();openNodeSheet(n.id);
+  };
+  const cx=$("#sheetBody").querySelector('select[data-f="__ctx"]');
+  if(cx)cx.onchange=()=>{
+    const v=cx.value?Number(cx.value):null;
+    if(v){n.overrides=Object.assign({},n.overrides||{},{context_window_size:v});}
+    else if(n.overrides){delete n.overrides.context_window_size;if(!Object.keys(n.overrides).length)delete n.overrides;}
+    syncFromCanvas();
+  };
   const shp=$("#sheetBody").querySelector('select[data-f="__shape"]');
   if(shp)shp.onchange=()=>{
     const pr=SCHEMA_PRESETS.find(x=>x.v===shp.value);
@@ -2930,6 +3047,7 @@ function renderModels(){
     if(cached===false)tags.push('<span class="mtag">未取得</span>');
     if(siteModelOf(m.id))tags.push('<span class="mtag on">このサイトから取れる</span>');
     if(m.id===DEFAULT_MODEL_ID)tags.push('<span class="mtag on">最初から選ばれている</span>');
+    if(m.vram>=600&&/iPhone|iPad/.test(navigator.userAgent))tags.push('<span class="mtag">この端末には大きいかも</span>');
     if(st.status==="ready")tags.push('<span class="mtag on">起動済み</span>');
 
     const d=document.createElement("div");d.className="mrow";
@@ -3425,6 +3543,7 @@ export async function CreateMLCEngine(model,opt){
   globalThis.__wllmLastAppConfig=opt&&opt.appConfig;
   if(opt&&opt.initProgressCallback)opt.initProgressCallback({progress:0.5,text:"stub 50%"});
   return {interruptGenerate(){globalThis.__wllmInterrupt=(globalThis.__wllmInterrupt||0)+1;},
+    async unload(){globalThis.__wllmUnloaded=(globalThis.__wllmUnloaded||0)+1;},
     chat:{completions:{async create(o){
       globalThis.__wllmLastOpt=o;
       const toks=globalThis.__wllmTokens||["A","B","C"];const delay=globalThis.__wllmDelay||0;
@@ -3446,7 +3565,7 @@ export async function CreateMLCEngine(model,opt){
     const why=(typeof navigator!=="undefined"&&navigator.gpu)?"stubモジュールをimportできない環境":"navigator.gpu が無い環境";
     skip("27 webllm: streaming/usage",why);skip("28 webllm: decode中cancel→interruptGenerate",why);
     skip("36 webllm: response_format.schema",why);skip("37 webllm: schema無しでは付けない",why);
-    skip("39 webllm: 端末にある分を使う",why);
+    skip("39 webllm: 端末にある分を使う",why);skip("44 webllm: 同時に1つだけ",why);
   }else{
     globalThis.__wllmTokens=["ブ","ラ","ウ","ザ"];globalThis.__wllmDelay=0;globalThis.__wllmInterrupt=0;
     ModelManager.reset();
@@ -3492,6 +3611,16 @@ export async function CreateMLCEngine(model,opt){
      ok("39 webllm: 取得先が変わっても端末にある分を使う（無ければこのサイトから取る）",
        a===SITE&&b==="https://huggingface.co/x/stub-model"&&c===SITE&&st.cached===true&&st.from==="upstream");
      globalThis.__wllmCachedUrl=null;ModelManager.reset();}
+    // 44 端末の中のモデルは同時に1つだけ。別のを読むと前のを片付ける
+    {ModelManager.reset();globalThis.__wllmUnloaded=0;globalThis.__wllmCachedUrl=null;
+     const d1={adapter:"webllm",model:"stub-model",moduleUrl:url,useWorker:false};
+     const d2={adapter:"webllm",model:"stub-model-2",moduleUrl:url,useWorker:false};
+     await ModelManager.ensureLoaded(d1,PROVIDERS.webllm,undefined,null);
+     await ModelManager.ensureLoaded(d2,PROVIDERS.webllm,undefined,null);
+     const ready=Object.values(ModelManager.states).filter(x=>x.status==="ready").length;
+     ok("44 webllm: 別のモデルを読むと前のモデルを片付ける（同時に1つだけ）",
+       globalThis.__wllmUnloaded>=1&&ready===1);
+     ModelManager.reset();}
   }}
  // 29 HSL: 全ての例で 書き出し→読み込み が往復する
  {const bad=[];
@@ -3620,6 +3749,24 @@ export async function CreateMLCEngine(model,opt){
   ok("42 出力の形: リストは配列で返り、箇条書きに変換して次へ渡せる",
     r.status==="success"&&txt==="- A\n- B\n- C"
     &&r2.status==="failed"&&/list_to_text は配列/.test((r2.errors[0]||{}).message||""));}
+ // 43 複数の入力の受け取り方（何も書かなければ改行・選べば番号/見出し/CSV/配列）
+ {const mk=merge=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+   nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+     {id:"A",type:"llm",provider:"m",mock:{tag:"検証"}},{id:"B",type:"llm",provider:"m",mock:{tag:"箇所"}},
+     Object.assign({id:"C",type:"llm",provider:"m",mock:{echoPrompt:true},inputs:{in:{type:"any",cardinality:"many"}}},merge?{merge}:{}),
+     {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"C",port:"in"},position:0},
+     {from:{node:"B",port:"out"},to:{node:"C",port:"in"},position:1},
+     {from:{node:"C",port:"out"},to:{node:"out",port:"in"}}]});
+  const got=async mg=>{const r=await fullRun(mk(mg),{});return r.status==="success"?r.nodeRuns.C[0].out.value:"(失敗)";};
+  const a=await got(null),b=await got({op:"numbered"}),c=await got({op:"markdown",labels:["検証","箇所"]}),
+        d=await got({op:"json_array"}),e2=await got({op:"concat",sep:" / "});
+  const badMerge=validate(mk({op:"markdown"})).length===0;   // many があるので通る
+  const noMany=(()=>{const sp=mk({op:"markdown"});delete sp.nodes[3].inputs;return validate(sp).some(x=>/merge は/.test(x));})();
+  ok("43 複数入力の受け取り方: 改行/番号/見出し/配列/区切り指定",
+    a==="検証1\n箇所1"&&b==="1. 検証1\n2. 箇所1"&&c==="## 検証\n\n検証1\n\n## 箇所\n\n箇所1"
+    &&d==='["検証1","箇所1"]'&&e2==="検証1 / 箇所1"&&badMerge&&noMany);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
@@ -3651,6 +3798,34 @@ function openCheckpoint(cp){
   const f=$("#cpFresh");if(f)f.onclick=startFresh;
   setHint("前回の続きを開いた");
 }
+/* すべての内蔵LLM providerと、モデルを選んでいるノードに「文脈の長さ」を入れる（メモリ節約） */
+function setContextWindow(n){
+  const sp=Ed.spec;let touched=0;
+  for(const[pid,def]of Object.entries(sp.providers||{})){
+    if((def||{}).adapter!=="webllm")continue;
+    def.overrides=Object.assign({},def.overrides||{},{context_window_size:n});touched++;
+  }
+  for(const nd of sp.nodes||[]){
+    if(nd.model){nd.overrides=Object.assign({},nd.overrides||{},{context_window_size:n});touched++;}
+  }
+  syncFromCanvas();
+  setHint(`文脈の長さを ${n} にした（メモリが減る。長い文は入らなくなる）`);
+  return touched;
+}
+(function crashNotice(){
+  const L=lastLoading();if(!L)return;
+  clearLoading();
+  const box=$("#vErr");     // いちばん見える場所に出す
+  const d=document.createElement("div");d.className="row";
+  const msg=document.createElement("div");msg.className="mini";
+  msg.innerHTML=`前回 <b>${esc(L.model||"モデル")}</b> の読み込み中に画面が落ちた（この端末のメモリが足りなかった可能性が高い）。`
+    +`小さいモデルにするか、<b>文脈を短く</b>すると通ることがある。`;
+  const b1=document.createElement("button");b1.id="memSave";b1.className="primary";b1.textContent="省メモリで試す（文脈1024）";
+  b1.onclick=()=>{setContextWindow(1024);msg.innerHTML="文脈を1024にした。もう一度ためしてみる。";b1.remove();};
+  const b2=document.createElement("button");b2.id="memDismiss";b2.textContent="閉じる";
+  b2.onclick=()=>{d.remove();msg.remove();};
+  if(box&&box.parentNode){box.parentNode.insertBefore(msg,box);d.appendChild(b1);d.appendChild(b2);box.parentNode.insertBefore(d,box);}
+})();
 (function onload(){
   const cp=store.load();if(!cp)return;
   // 例はそのまま実行できる状態で置いておき、前回の続きは「開く」を押したときだけ載せる
