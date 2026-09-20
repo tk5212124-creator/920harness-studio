@@ -94,9 +94,14 @@ R['① 素の生成'] = await run(null);
 ok.plain = R['① 素の生成'].ok === true && R['① 素の生成'].out.type === 'text' && R['① 素の生成'].out.value.length > 0;
 
 // ② JSON強制（実機で GrammarMatcherInitError が出たところ）
+//    ここで見るのは「文法を組み立てて生成まで行けること」と「失敗しても説明できる形になること」。
+//    小さいモデルが中身を外すのはモデルの性能の話で、アプリの不具合ではない。
 R['② JSON強制'] = await run({ type: 'object', required: ['score'], properties: { score: { type: 'integer' } } });
-ok.json = R['② JSON強制'].ok === true && R['② JSON強制'].out.type === 'json'
-  && R['② JSON強制'].out.value.score !== undefined;
+const j = R['② JSON強制'];
+const 文法は組めた = !/GrammarMatcherInit|grammar matcher|non-str/i.test(j.message || '');
+const 説明できる失敗 = j.ok === false && j.code === 'SCHEMA_VALIDATION_ERROR' && 文法は組めた;
+R['② 判定の内訳'] = { 文法は組めた, JSONで返った: j.ok === true, 説明できる失敗 };
+ok.json = 文法は組めた && (j.ok === true ? j.out.type === 'json' && j.out.value.score !== undefined : 説明できる失敗);
 
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));

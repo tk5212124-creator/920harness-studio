@@ -759,7 +759,7 @@ Claude Code の実行環境からは HuggingFace に届かないので、ここ�
 | モデル取得（SmolLM2-360M） | ✔ 198MB（q4f16）/ q4f32 はCI用 |
 | WebGPU（GPUの無い機械） | `--enable-unsafe-webgpu --use-angle=swiftshader --enable-features=Vulkan` で adapter が取れる（`shader-f16` は無いので **CIは q4f32 版**） |
 | 素の生成 | ✔ 成功（load 1.9秒 / 生成は CPU実装のため 806秒） |
-| JSON強制（schema付き） | ✔ **GrammarMatcherInitError は出ない**（v0.13.0の修正が効いている）。<br>ただし `maxTokens 40` では長い小数で切れた → 「途中で切れた」と言うようにし、schema に型を付けるようにした |
+| JSON強制（schema付き） | ✔ **GrammarMatcherInitError は出ない**（v0.13.0の修正が効いている）。文法を組み立てて生成まで進む。<br>ただし **SmolLM2-360M は中身を外す**: `{"score": 5.0000000000…}`（型なし）→ 型を `integer` にすると `{"score": 5000000000000…}` と0を出し続け、`maxTokens` で切れた。<br>→ **「途中で切れた（maxTokens N に達した）」**と言うようにした。中身の質はモデルの性能の話なので、CIは「文法が組めて、失敗しても説明できる形になる」ことまでを見る |
 | 重みが Git に入っていないこと | ✔ |
 
 GPUのある実機（iPhoneなど）での速度・OOM・実decode中cancelは、**ここでは分からない**。

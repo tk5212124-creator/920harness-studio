@@ -1871,7 +1871,9 @@ function addSchemaFor(id){
   };
   n.schema={type:"object",required:f,properties:Object.fromEntries(f.map(k=>[k,typeOf(k)]))};
   // 何を返すかをLLMにも伝える（schema だけだと小さいモデルは従いにくい）
-  const ask=`必ず JSON だけで答える。形式: {${f.map(k=>`"${k}": …`).join(", ")}}`;
+  const jp=k=>{const t=(n.schema.properties[k]||{}).type;
+    return t==="integer"?"整数":t==="number"?"数":t==="string"?"文字列":t==="boolean"?"true か false":"…";};
+  const ask=`必ず JSON だけで答える。余計な文は書かない。形式: {${f.map(k=>`"${k}": ${jp(k)}`).join(", ")}}`;
   n.prompt=n.prompt||{};
   if(!n.prompt.suffix)n.prompt.suffix=ask;
   syncFromCanvas();setHint(`${id} に schema（${f.join(", ")}）を付けた`);
