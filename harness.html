@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — モジュールとくらべる v0.26.0</title>
+<title>Harness Studio — 1件ずつ（Map）と集計 v0.27.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -117,7 +117,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.26.0 · モジュールとくらべる</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.27.0 · 1件ずつ（Map）</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -2388,10 +2388,24 @@ async function runQuorum(spec,run,ex,node,inputs){
       :Math.floor(total/2)+1);
   const agree=results.filter(r=>r.pass).length;
   const against=results.length-agree;
-  const remaining=Math.max(0,total-results.length);
+  /* 「まだ来ていない」と「もう来ない」を分ける。
+     入力元が onError:"skip" などで止まっていたら、その票はもう届かないので
+     待たずに確定できる（届く可能性のある数だけを pending に数える）。 */
+  const conf=isConfluenceNode(spec,node.id);
+  const arrivedFrom=new Set(run.deliveries.filter(d=>d.toNodeId===node.id&&deliveryMatchesExec(d,ex,conf))
+    .map(d=>d.fromNodeId));
+  const srcs=[...new Set((spec.edges||[]).filter(e=>e.to.node===node.id&&!e.loop&&!e.map)
+    .map(e=>e.from.node))];
+  const terminalList=srcs.filter(id=>{
+    if(arrivedFrom.has(id))return false;
+    const h=run.nodeRuns[id]||[];const last=h[h.length-1];
+    return !!last&&(last.status==="stopped"||last.status==="cancelled");});
+  const terminal=terminalList.length;
+  const pending=Math.max(0,total-results.length-terminal);
   const pass=agree>=required;
-  return rvOf({pass,decided:pass||(agree+remaining<required),
-    agree,against,arrived:results.length,total,required,results});
+  return rvOf({pass,decided:pass||(agree+pending<required),
+    agree,against,arrived:results.length,terminal,terminalFrom:terminalList,pending,
+    total,required,results});
 }
 /* 点検（assert）。Run そのものの成否とは分けて数える（テスト用）。 */
 const ASSERT_SEVERITY=["fail","warn","info"];
@@ -4658,7 +4672,9 @@ function openNodeSheet(id){
       +`${fld("または割合（0.67 など）",num("requiredRatio",n.requiredRatio,"空でよい"))}</div>`;
     h+=fld("全部で何人か（空なら入ってきた線の数）",num("total",n.total,String(cnt||"")));
     h+=`<div class="mini">いま線は <b>${cnt}</b> 本。結果は `
-      +`<code>{"pass":true,"decided":true,"agree":2,"against":1,"arrived":3,"total":3,"required":2,"results":[…]}</code>。`
+      +`<code>{"pass":true,"decided":true,"agree":2,"against":1,"arrived":3,"terminal":0,"pending":0,"total":3,"required":2,"results":[…]}</code>。`
+      +`<br>入力元が <b>onError:"skip"</b> などで止まっていたら、その票は<b>もう来ない</b>ものとして数える`
+      +`（<code>terminal</code>）。待ち続けずに <code>decided</code> が決まる。`
       +`<br><b>早く決めたいとき</b>は、上の「このノードが動き出す条件」を<b>どれか来たら</b>にする。`
       +`届くたびに数え直し、<code>decided</code> が true になった時点でもう結果は変わらない`
       +`（条件分岐ノードで <code>decided == true</code> を見て先へ進める）。</div>`;
@@ -5562,6 +5578,67 @@ function expInputs(text,spec){
     if(/^[{[]/.test(l)){try{const o=JSON.parse(l);if(o&&typeof o==="object"&&!Array.isArray(o))return o;}catch(_){}}
     const o={};o[key]=l;return o;});
 }
+/* 集計。生の1行1行は消さずに、そのうえで 変種 × 入力 ごとにまとめる。
+   平均だけ見て個々の失敗が消えないように、成功率・失敗数・エラー率も必ず並べる。 */
+const EXP_METRICS=[
+  {k:"apiCalls",t:"calls"},{k:"inputTokens",t:"in tok"},{k:"outputTokens",t:"out tok"},
+  {k:"totalTokens",t:"tok合計"},{k:"ms",t:"ms"},{k:"iterationTotal",t:"周回"}];
+function statsOf(nums){
+  const a=nums.filter(x=>typeof x==="number"&&isFinite(x)).slice().sort((x,y)=>x-y);
+  if(!a.length)return null;
+  const n=a.length,sum=a.reduce((x,y)=>x+y,0),mean=sum/n;
+  const median=n%2?a[(n-1)/2]:(a[n/2-1]+a[n/2])/2;
+  const varc=a.reduce((x,y)=>x+(y-mean)*(y-mean),0)/n;      // 母集団のばらつき（この回だけを見る）
+  return{n,mean,median,min:a[0],max:a[n-1],stddev:Math.sqrt(varc),sum};
+}
+function expStats(rows){
+  const groups=new Map();
+  for(const r of rows){
+    const key=r.variant+"\u0000"+JSON.stringify(r.input);
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(r);
+  }
+  const picks=[...new Set(rows.flatMap(r=>Object.keys(r.picked||{})))];
+  return[...groups.entries()].map(([key,rs])=>{
+    const[variant,inputJSON]=key.split("\u0000");
+    const ok=rs.filter(r=>r.status==="success").length;
+    const asr=rs.reduce((a,r)=>({t:a.t+((r.assertions||{}).total||0),p:a.p+((r.assertions||{}).passed||0)}),{t:0,p:0});
+    const metrics={};
+    for(const m of EXP_METRICS){
+      const st=statsOf(rs.map(r=>m.k==="totalTokens"?((r.inputTokens||0)+(r.outputTokens||0)):r[m.k]));
+      if(st)metrics[m.k]=st;}
+    for(const q of picks){
+      const st=statsOf(rs.map(r=>{const v=(r.picked||{})[q];return typeof v==="number"?v:Number(v);}));
+      if(st)metrics["result."+q]=st;}
+    return{variant,input:JSON.parse(inputJSON),runs:rs.length,
+      success:ok,failure:rs.length-ok,successRate:ok/rs.length,
+      assertTotal:asr.t,assertPassed:asr.p,assertPassRate:asr.t?asr.p/asr.t:null,
+      errorRuns:rs.filter(r=>r.errors>0).length,errorRate:rs.filter(r=>r.errors>0).length/rs.length,
+      errorsTotal:rs.reduce((a,r)=>a+(r.errors||0),0),
+      retryRuns:rs.filter(r=>r.retries>0).length,retryRate:rs.filter(r=>r.retries>0).length/rs.length,
+      retriesTotal:rs.reduce((a,r)=>a+(r.retries||0),0),
+      statuses:rs.reduce((a,r)=>{a[r.status]=(a[r.status]||0)+1;return a;},{}),
+      metrics};
+  });
+}
+const fx=(v,d)=>v==null?"":(Math.round(v*Math.pow(10,d==null?2:d))/Math.pow(10,d==null?2:d));
+const pct=v=>v==null?"":Math.round(v*1000)/10+"%";
+function expStatsTable(){
+  const gs=expStats(EXP.rows);
+  if(!gs.length)return "";
+  const mkeys=[...new Set(gs.flatMap(g=>Object.keys(g.metrics)))];
+  const head=["変種","入力","runs","成功","失敗","成功率","点検","エラー率","再試行率"]
+    .concat(mkeys.flatMap(k=>[k+" 平均",k+" 中央",k+" 最小",k+" 最大",k+" ばらつき"]));
+  const row=g=>[esc(g.variant),esc(capStr(JSON.stringify(g.input),24)),g.runs,g.success,g.failure,
+    pct(g.successRate),g.assertTotal?`${g.assertPassed}/${g.assertTotal}（${pct(g.assertPassRate)}）`:"",
+    pct(g.errorRate),pct(g.retryRate)]
+    .concat(mkeys.flatMap(k=>{const m=g.metrics[k];
+      return m?[fx(m.mean),fx(m.median),fx(m.min),fx(m.max),fx(m.stddev)]:["","","","",""];}));
+  return `<div class="mini" style="margin-top:10px"><b>集計（変種 × 入力ごと）</b>`
+    +`　平均だけ見ないこと。失敗した回は下の生の表に全部残っている。</div>`
+    +`<div class="tblwrap expstats"><table><thead><tr>`+head.map(h=>`<th>${esc(h)}</th>`).join("")+`</tr></thead><tbody>`
+    +gs.map(g=>`<tr>`+row(g).map(c=>`<td>${c}</td>`).join("")+`</tr>`).join("")+`</tbody></table></div>`;
+}
 function expTable(){
   const rows=EXP.rows;
   if(!rows.length)return `<div class="mini">まだ結果が無い。</div>`;
@@ -5575,13 +5652,16 @@ function expTable(){
     r.retries,r.assertions&&r.assertions.total?`${r.assertions.passed}/${r.assertions.total}`:"",
   ].concat(extra.map(k=>{const v=(r.picked||{})[k];return v==null?"":esc(capStr(JSON.stringify(v),14));}))
    .concat([esc(capStr(JSON.stringify(r.result),40))]);
-  return `<div class="tblwrap"><table><thead><tr>`+head.map(h=>`<th>${esc(h)}</th>`).join("")+`</tr></thead><tbody>`
+  return `<div class="tblwrap exprows"><table><thead><tr>`+head.map(h=>`<th>${esc(h)}</th>`).join("")+`</tr></thead><tbody>`
     +rows.map(r=>`<tr>`+cell(r).map(c=>`<td>${c}</td>`).join("")+`</tr>`).join("")
     +`</tbody></table></div>`;
 }
 function expRender(){
   const el=$("#expOut");if(!el)return;
-  el.innerHTML=(EXP.note?`<div class="mini">${esc(EXP.note)}</div>`:"")+expTable();
+  el.innerHTML=(EXP.note?`<div class="mini">${esc(EXP.note)}</div>`:"")
+    +expStatsTable()
+    +`<div class="mini" style="margin-top:10px"><b>1回ずつの記録（生データ）</b></div>`
+    +expTable();
 }
 function openExpSheet(){
   expLoad();
@@ -5622,9 +5702,10 @@ function openExpSheet(){
         json:JSON.stringify(got.spec)});openExpSheet();}
     catch(e){setHint("読めない: "+errText(e));}};
   $("#expClear").onclick=()=>{EXP.rows=[];EXP.note="";expSave();expRender();};
-  const outJSON=()=>JSON.stringify({format:"harness-experiment/1",at:new Date().toISOString(),
+  const outJSON=()=>JSON.stringify({format:"harness-experiment/2",at:new Date().toISOString(),
     variants:EXP.variants.map(v=>({name:v.name,harness:(JSON.parse(v.json).metadata||{}).name||null,
-      version:(JSON.parse(v.json).metadata||{}).version||null})),rows:EXP.rows},null,1);
+      version:(JSON.parse(v.json).metadata||{}).version||null})),
+    stats:expStats(EXP.rows),rows:EXP.rows},null,1);
   $("#expCopy").onclick=()=>copyOut(outJSON(),"実験の結果");
   $("#expSave").onclick=()=>saveOut(outJSON(),"harness-experiment-"+stamp()+".json");
   $("#expCsv").onclick=()=>{
@@ -5636,6 +5717,18 @@ function openExpSheet(){
     EXP.rows.forEach(r=>lines.push(cols.map(c=>q(r[c])).concat(
       extra.map(k=>q(JSON.stringify((r.picked||{})[k])))).concat(
       [q(JSON.stringify(r.input)),q(JSON.stringify(r.result))]).join(",")));
+    // 集計も同じ CSV の下に付ける（表計算にそのまま貼れる）
+    const gs=expStats(EXP.rows);
+    if(gs.length){
+      const mkeys=[...new Set(gs.flatMap(g=>Object.keys(g.metrics)))];
+      lines.push("");
+      lines.push(["variant","input","runs","success","failure","successRate","assertPassed","assertTotal",
+        "assertPassRate","errorRate","retryRate"]
+        .concat(mkeys.flatMap(k=>[k+".mean",k+".median",k+".min",k+".max",k+".stddev"])).map(q).join(","));
+      gs.forEach(g=>lines.push([g.variant,JSON.stringify(g.input),g.runs,g.success,g.failure,g.successRate,
+        g.assertPassed,g.assertTotal,g.assertPassRate,g.errorRate,g.retryRate]
+        .concat(mkeys.flatMap(k=>{const m=g.metrics[k];
+          return m?[m.mean,m.median,m.min,m.max,m.stddev]:["","","","",""];})).map(q).join(",")));}
     copyOut(lines.join("\n"),"実験の結果（CSV）");};
   $("#expStop").onclick=()=>{EXP.cancel=true;EXP.note="止めるところ…";expRender();};
   $("#expRun").onclick=async()=>{
@@ -6775,7 +6868,7 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 {
   "id":"bundle","type":"join","op":"markdown",
   "labels":["案A","案B"],
-  "keys":["a","b"],
+  "keys":[{"key":"a","position":0},{"key":"b","position":1}],
   "sep":"\\n",
   "prefix":"以下は下書き。","suffix":"ここまで。",
   "template":{"syntax":"mustache","mode":"interpolation_only","value":"A: {{{items.0}}}\\nB: {{{items.1}}}"},
@@ -6784,7 +6877,10 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 ~~~
 - \`op\` … \`concat\`（文章のままつなぐ）/ \`markdown\`（## 名前 付き）/ \`csv\`（カンマつなぎ1行）/ \`json_array\`（配列）/ \`json_object\`（キー付き）/ \`template\`（差し込む）。
 - \`inputs.items\` は必須。join に入る線は \`"to":{"node":"bundle","port":"items"}\` と書く。
-- \`json_object\` は \`keys\` か \`labels\` のどちらかが要る。
+- \`json_object\` は \`keys\` か \`labels\` のどちらかが要る。書き方が違うので注意する。
+  - \`labels\` … 文字の並び。つないだ順にそのままキー名になる（かんたんな書き方）。
+  - \`keys\` … \`[{"key":"a","position":0}, …]\` の形。どの位置の値をどのキーに入れるかを明示する。
+  - 両方書いたときは \`keys\` が使われる。
 - \`prefix\` / \`suffix\` は文章になる op（concat / markdown / csv / template）のときだけ効く。
 
 ## loop（繰り返す）
@@ -6868,6 +6964,31 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 - \`onFail\` … \`"continue"\`（既定・Run は続く）/ \`"error"\`（このノードをエラーにする）
 - 返る形: \`{"total":3,"passed":2,"failed":1,"warned":0,"info":0,"tests":[…]}\`
 - 合否は \`run.assertions\` にもまとまるので、**Run の成否とは別**に数えられる。
+
+## map（配列の1件ずつに同じところを通す）
+~~~
+{"id":"各件","type":"map","map":{"id":"各件"},
+ "order":"input","onItemError":"null","onItemErrorValue":null,
+ "inputs":{"in":{"type":"any","cardinality":"many"}}}
+~~~
+線はループと同じ形。
+~~~
+{"from":{"node":"各件","port":"out"},"to":{"node":"検証","port":"in"},"mapRole":"body"}
+{"from":{"node":"検証","port":"out"},"to":{"node":"各件","port":"in"},"map":{"id":"各件"},"position":1}
+{"from":{"node":"各件","port":"out"},"to":{"node":"まとめ","port":"in"},"mapRole":"done"}
+~~~
+- 入ってくる値は**配列**。配列でないとエラーになる（\`onError\` の方が効く）。
+- 1件ずつに本体を通し、**全部終わってから**入力と同じ順番の配列にして \`mapRole:"done"\` へ流す。
+- \`map.id\` は戻り線の \`map.id\` と合わせる（書かなければノードの id）。
+- \`order\` は \`"input"\` のみ（入力順。終わった順は未対応）。
+- \`onItemError\` … **1件だけ**が失敗したときの扱い。
+  \`"error"\`（既定・実行を止める）/ \`"skip"\`（その件を結果から外す）/ \`"null"\` / \`"value"\`（\`onItemErrorValue\`）。
+  ノードごとの \`onError\` が先に効き、それで直らなかったときにこちらへ来る。
+- 1件の中では \`value\`（その件の値）と \`index\`（何件目か・0から）が使える。
+- 本体は1ノードでなくてよい。モジュール・ループ・並列＋Join・さらに map も入れられる。
+  入れ子になっても件どうし・周どうしは混ざらない。
+- **Runtime は待ち行列を1件ずつ処理する**ので、同時ではなく交互に進む（速さは変わらない）。
+- 途中で止めて続きから再開したとき、**終わった件は二度実行しない**。
 
 ## module（部分ハーネスの再利用）
 ~~~
@@ -8187,6 +8308,27 @@ export async function CreateMLCEngine(model,opt){
     &&midF>0&&midDone>=1&&midDone<4        // 1件は終わっていて、まだ残っている所で止めた
     &&r2.status==="success"&&JSON.stringify(r2.result.value)==='["a!","b!","c!","d!"]'
       &&(r2.nodeRuns.f||[]).length===4);}
+ // 73 多数決: 入力元が onError:"skip" で止まったら「もう来ない票」として数え、待たずに決まる
+ {const mk=(cPol)=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"A",type:"llm",mock:{fixed:{score:90}},routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"B",type:"llm",mock:{fixed:{score:10}},routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    Object.assign({id:"C",type:"llm",mock:{fail:"oom"}},cPol?{onError:cPol}:{}),
+    {id:"vote",type:"quorum",lang:"expr",condition:"score >= 80",required:2,
+     start:{mode:"any"},inputs:{in:{type:"any",cardinality:"many"}}},
+    {id:"out",type:"output"}],
+   edges:[...["A","B","C"].map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"}})),
+     ...["A","B","C"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"vote",port:"in"},position:i})),
+     {from:{node:"vote",port:"out"},to:{node:"out",port:"in"}}]});
+  const r=await fullRun(mk("skip"),{});
+  const last=(r.nodeRuns.vote||[]).slice(-1)[0]||{};
+  const q=last.out?last.out.value:{};
+  // C は止まっているので「もう来ない」1票。A=賛成 / B=反対 で、必要2票には届かないと確定する
+  ok("73 多数決: 止まった入力元は「もう来ない票」として数え、待たずに決まる",
+    r.status==="success"&&q.arrived===2&&q.terminal===1&&q.pending===0
+    &&q.agree===1&&q.against===1&&q.total===3&&q.required===2
+    &&q.pass===false&&q.decided===true
+    &&JSON.stringify(q.terminalFrom)==='["C"]');}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

@@ -89,17 +89,23 @@ await p.fill('[data-f="__expN"]', '2');
 await p.fill('[data-f="__expPick"]', 'score');
 await tap('#expRun');
 await p.waitForFunction(() => /終わり/.test((document.querySelector('#expOut') || {}).textContent || ''), null, { timeout: 40000 });
-R['⑤ 見出し'] = await p.locator('#expOut thead th').allTextContents();
-R['⑤ 行数'] = await p.locator('#expOut tbody tr').count();
-R['⑤ 1行目'] = await p.locator('#expOut tbody tr').first().locator('td').allTextContents();
+R['⑤ 見出し'] = await p.locator('#expOut .exprows thead th').allTextContents();
+R['⑤ 行数'] = await p.locator('#expOut .exprows tbody tr').count();
+R['⑤ 1行目'] = await p.locator('#expOut .exprows tbody tr').first().locator('td').allTextContents();
+R['⑤ 集計'] = { 見出し: await p.locator('#expOut .expstats thead th').allTextContents(),
+  行: await p.locator('#expOut .expstats tbody tr').first().locator('td').allTextContents() };
 ok.experiment = R['⑤ 行数'] === 4 && R['⑤ 見出し'].includes('score') && R['⑤ 見出し'].includes('呼出')
   && R['⑤ 1行目'][2] === 'success' && R['⑤ 1行目'][3] === '1';
+// 集計は 変種 × 入力 ごと（2入力 × 2回 = 2行）で、成功率と result.score の平均が出る
+ok.expStats = R['⑤ 集計'].見出し.includes('成功率') && R['⑤ 集計'].見出し.includes('result.score 平均')
+  && (await p.locator('#expOut .expstats tbody tr').count()) === 2
+  && R['⑤ 集計'].行[2] === '2' && R['⑤ 集計'].行[5] === '100%';
 // 途中結果は残る（開き直しても消えない）
 await tap('#shClose'); await tap('#btnExp'); await p.waitForTimeout(300);
-R['⑤ 開き直し'] = await p.locator('#expOut tbody tr').count();
+R['⑤ 開き直し'] = await p.locator('#expOut .exprows tbody tr').count();
 ok.expKeep = R['⑤ 開き直し'] === 4;
 await tap('#expClear'); await p.waitForTimeout(200);
-ok.expClear = (await p.locator('#expOut tbody tr').count()) === 0;
+ok.expClear = (await p.locator('#expOut .exprows tbody tr').count()) === 0;
 await tap('#shClose');
 
 R['pageerror'] = errs;
