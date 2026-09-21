@@ -53,15 +53,18 @@ ok.twoFields = a2.schema.required.join() === 'score,items'
   && a2.schema.properties.items.items.type === 'string'
   && /"items":\["ひとつめ","ふたつめ"\]/.test(R['② 2つの項目'].指示);
 
-// ③ リストの渡し方を「分ける」にすると、図の出口が増える
+// ③ 「出口を分けて、項目ごとに渡す」にすると、項目ごとの出口が図に増える
 await p.selectOption('[data-f="__split"]', 'split'); await p.waitForTimeout(300);
 const a3 = await nodeOf('A');
 R['③ 出口'] = { ports: a3.ports, 図の出口: await p.locator('.nd[data-id="A"] .port.pout').count(),
   ラベル: await p.locator('.nd[data-id="A"] .plab').allTextContents(),
-  つなぎ替えた線: (await spec()).edges.filter(e => e.from.node === 'A').map(e => e.from.port) };
-ok.split = a3.ports.length === 2 && a3.ports[0].pick === 'items.0' && a3.ports[1].pick === 'items.1..'
-  && R['③ 出口'].図の出口 === 2 && R['③ 出口'].ラベル.join() === '1つ目,2つ目から'
-  && R['③ 出口'].つなぎ替えた線.join() === 'p1' && (await vErr()) === '';
+  つなぎ替えた線: (await spec()).edges.filter(e => e.from.node === 'A').map(e => e.from.port),
+  選択肢: await p.locator('[data-pf="key"][data-i="0"] option').allTextContents() };
+ok.split = a3.ports.length === 2 && a3.ports[0].pick === 'score' && a3.ports[1].pick === 'items'
+  && R['③ 出口'].図の出口 === 2 && R['③ 出口'].ラベル.join() === 'score,items'
+  && R['③ 出口'].つなぎ替えた線.join() === 'p1' && (await vErr()) === ''
+  && R['③ 出口'].選択肢.join() === '値ぜんぶ,score,items'
+  && (await p.locator('[data-pf="take"]').count()) === 0;   // リストの何番目、は選ばせない
 
 // ④ 2つ目の出口から線を引く（出口ごとにちがう値が流れる）
 await tap('#shClose');
@@ -77,7 +80,7 @@ R['④ つなぎ元の表示'] = (await p.textContent('#hint')).replace(/\s+/g, 
 await tap(`.nd[data-id="${newId}"] .port.pin`);
 const e4 = (await spec()).edges.filter(e => e.from.node === 'A');
 R['④ できた線'] = e4.map(e => `${e.from.port}→${e.to.node}`);
-ok.portEdge = R['④ つなぎ元の表示'].includes('2つ目から') && e4.some(e => e.from.port === 'p2' && e.to.node === newId);
+ok.portEdge = R['④ つなぎ元の表示'].includes('items') && e4.some(e => e.from.port === 'p2' && e.to.node === newId);
 
 // ⑤ 実行すると、出口ごとにちがう値が届く
 await tap('#runTop');
@@ -87,8 +90,8 @@ R['⑤ 届いた値'] = await p.evaluate(id => {
   return { B: g('B') && g('B').value.received, 新: g(id) && g(id).value.received };
 }, newId);
 ok.splitRun = R['⑤ 実行'].includes('success')
-  && JSON.stringify(R['⑤ 届いた値'].B) === '{"type":"text","value":"い"}'
-  && JSON.stringify(R['⑤ 届いた値'].新) === '{"type":"json","value":["ろ","は"]}';
+  && JSON.stringify(R['⑤ 届いた値'].B) === '{"type":"json","value":7}'
+  && JSON.stringify(R['⑤ 届いた値'].新) === '{"type":"json","value":["い","ろ","は"]}';
 
 // ⑥ 受け取る側でも「どの項目を使うか」を選べる
 await paste(Object.assign({}, base, {

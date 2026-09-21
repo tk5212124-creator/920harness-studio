@@ -3285,45 +3285,43 @@ function outFieldRows(n){
   return h;
 }
 /* リストを出すとき、まとめて渡すか・出口を分けるか。分けると図に出口が増える。 */
+/* 出口は「出した値のどれを渡すか」だけを選ぶ。
+   リストの何番目まではここでは選ばない（細かく取りたいときは pick を手で書ける）。 */
 function splitFields(n){
   const ps=(n.ports||[]);
   const keys=schemaKeys(n);
-  const listKeys=(outputsFromSchema(n.schema)||[]).filter(o=>o.type==="list"||o.type==="list_number").map(o=>o.key);
-  let h=fld("リストの渡し方",sel("__split",ps.length?"split":"whole",[
+  let h=fld("出力の渡し方",sel("__split",ps.length?"split":"whole",[
     {v:"whole",t:"まとめて1つの出口から渡す（既定）"},
-    {v:"split",t:"出口を分けて、リストの一部だけを渡す"}]));
+    {v:"split",t:"出口を分けて、項目ごとに渡す"}]));
   if(!ps.length){
-    h+=`<div class="mini">${listKeys.length?`リストの項目: ${esc(listKeys.join(" / "))}`:"リストを出す設定なら、ここで出口を分けられる"}。分けると図のノードに出口が増え、線ごとにちがう値が流れる。</div>`;
+    h+=`<div class="mini">`
+      +(keys.length?`いまの項目: ${esc(keys.join(" / "))}。分けると図のノードに出口が増え、線ごとにちがう項目が流れる。`
+                   :`先に「出力の形 → 項目を決める」で項目を作ると、項目ごとに出口を分けられる。`)
+      +`</div>`;
     return h;
   }
   h+=`<div class="fld"><span>出口（上から順に図に並ぶ）</span><div>`;
   ps.forEach((q,i)=>{
     const pr=parsePickSafe(q.pick);
+    const extra=(pr.key&&!keys.includes(pr.key))?`<option value="${esc(pr.key)}" selected>${esc(pr.key)}</option>`:"";
     h+=`<div class="ordrow"><b>${i+1}</b>`
-      +`<input type="text" data-pf="label" data-i="${i}" value="${esc(q.label||"")}" placeholder="名前（図に出る）" style="flex:1;min-width:60px">`
-      +`<button data-pfdel="${i}">削除</button></div>`
-      +`<div class="ordrow"><b></b>`
-      +`<select data-pf="key" data-i="${i}"><option value=""${pr.key?"":" selected"}>値ぜんぶ</option>`
-        +keys.map(k=>`<option value="${esc(k)}"${pr.key===k?" selected":""}>${esc(k)}</option>`).join("")+`</select>`
-      +`<select data-pf="take" data-i="${i}">`+PICK_TAKES.map(t=>`<option value="${t.v}"${t.v===pr.take?" selected":""}>${esc(t.t)}</option>`).join("")+`</select></div>`;
+      +`<input type="text" data-pf="label" data-i="${i}" value="${esc(q.label||"")}" placeholder="${i+1}" style="flex:0 1 90px;min-width:50px">`
+      +`<select data-pf="key" data-i="${i}" style="flex:1"><option value=""${pr.key?"":" selected"}>値ぜんぶ</option>`
+        +keys.map(k=>`<option value="${esc(k)}"${pr.key===k?" selected":""}>${esc(k)}</option>`).join("")+extra+`</select>`
+      +`<button data-pfdel="${i}">削除</button></div>`;
+    if(pr.take!=="all")
+      h+=`<div class="ordrow"><b></b><span class="mini">手で書いた取り出し方: <code>${esc(q.pick)}</code>（上で選び直すと消える）</span></div>`;
   });
   h+=`</div></div><div class="mini"><button id="pfAdd">＋ 出口を足す</button>`
-    +` いまの取り出し方: <code>${esc(ps.map(q=>(q.label||q.id)+"="+(q.pick||"ぜんぶ")).join(" / "))}</code></div>`;
+    +` いまの出口: <code>${esc(ps.map((q,i)=>(q.label||String(i+1))+"="+(q.pick||"ぜんぶ")).join(" / "))}</code></div>`;
   return h;
 }
-/* リストの何番目を取るか（pick の後半） */
-const PICK_TAKES=[
-  {v:"all",t:"ぜんぶ（リストのまま）"},
-  {v:"0",t:"1つ目だけ"},{v:"1",t:"2つ目だけ"},{v:"2",t:"3つ目だけ"},{v:"3",t:"4つ目だけ"},{v:"4",t:"5つ目だけ"},
-  {v:"1..",t:"2つ目から最後まで"},{v:"2..",t:"3つ目から最後まで"},
-  {v:"0..1",t:"1〜2つ目"},{v:"0..2",t:"1〜3つ目"}];
 function parsePickSafe(pick){
   let q=null;try{q=parsePick(pick);}catch(_){}
   if(!q)return{key:"",take:"all"};
   const take=q.from==null?"all":(q.range?(q.to==null?q.from+"..":q.from+".."+q.to):String(q.from));
   return{key:q.key||"",take};
 }
-const buildPick=(key,take)=>(key||"")+(take==="all"?"":((key?".":"")+take));
 /* 入ってくる値の項目名（上流のノードが宣言しているもの） */
 function incomingKeys(n){
   const out=[];
@@ -3800,9 +3798,9 @@ function openNodeSheet(id){
    if(sp)sp.onchange=()=>{
      if(sp.value==="split"){
        if(!n.ports||!n.ports.length){
-         const lk=(outputsFromSchema(n.schema)||[]).find(o=>o.type==="list"||o.type==="list_number");
-         const k=lk?lk.key:"";
-         n.ports=[{id:"p1",label:"1つ目",pick:buildPick(k,"0")},{id:"p2",label:"2つ目から",pick:buildPick(k,"1..")}];
+         const keys=schemaKeys(n);
+         n.ports=keys.length?keys.map((k,i)=>({id:"p"+(i+1),label:k,pick:k}))
+                            :[{id:"p1",label:"1"}];
          (Ed.spec.edges||[]).forEach(e=>{if(e.from.node===n.id&&(e.from.port||"out")==="out")e.from.port="p1";});
        }
      }else{delete n.ports;(Ed.spec.edges||[]).forEach(e=>{if(e.from.node===n.id)e.from.port="out";});}
@@ -3811,9 +3809,11 @@ function openNodeSheet(id){
     const upd=()=>{
       const i=+el.dataset.i;const q=(n.ports||[])[i];if(!q)return;
       if(el.dataset.pf==="label"){if(el.value)q.label=el.value;else delete q.label;syncFromCanvas();return;}
-      const g=f=>{const x=$("#sheetBody").querySelector(`[data-pf="${f}"][data-i="${i}"]`);return x?x.value:"";};
-      const pk=buildPick(g("key"),g("take"));
-      if(pk)q.pick=pk;else delete q.pick;
+      const was=parsePickSafe(q.pick).key;
+      const k=el.value;
+      if(k)q.pick=k;else delete q.pick;
+      // 名前を触っていない（前の項目名のまま）なら、名前も新しい項目名に合わせる
+      if(!q.label||q.label===was)q.label=k||String(i+1);
       syncFromCanvas();openNodeSheet(n.id);};
     if(el.tagName==="SELECT")el.onchange=upd;else el.oninput=upd;});
   $("#sheetBody").querySelectorAll("[data-pfdel]").forEach(b=>{b.onclick=()=>{
@@ -3826,8 +3826,9 @@ function openNodeSheet(id){
   {const ad=$("#pfAdd");if(ad)ad.onclick=()=>{
     n.ports=n.ports||[];
     let i=n.ports.length+1;while(n.ports.some(q=>q.id==="p"+i))i++;
-    const lk=(outputsFromSchema(n.schema)||[]).find(o=>o.type==="list"||o.type==="list_number");
-    n.ports.push({id:"p"+i,label:i+"つ目",pick:buildPick(lk?lk.key:"",String(i-1))});
+    const used=n.ports.map(q=>parsePickSafe(q.pick).key).filter(Boolean);
+    const free=schemaKeys(n).find(k=>!used.includes(k));
+    n.ports.push(free?{id:"p"+i,label:free,pick:free}:{id:"p"+i,label:String(n.ports.length+1)});
     syncFromCanvas();openNodeSheet(n.id);};}
   // 計算に使う値の名前
   $("#sheetBody").querySelectorAll("[data-as]").forEach(el=>{el.oninput=()=>{
@@ -4842,10 +4843,12 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 内蔵LLMでは schema が**文法として強制**される。プロンプトに「JSONで出して」と書くだけでは縛りにならない。
 条件式から読むときは **ノード名.out.キー名**。
 
-## 5. 1つの値を複数の線に分ける（出口を増やす）
-ノードをタップ →「リストの渡し方」→ **出口を分けて、リストの一部だけを渡す**。
-出口ごとに「どの項目の・リストの何番目を渡すか」を決められる（1つ目だけ／2つ目から最後まで／1〜3つ目…）。
-図のノードに出口が増え、線ごとにちがう値が流れる。受け取る側のノードでも「入ってきた値のどれを使うか」を選べる。
+## 5. 項目ごとに別の線へ渡す（出口を増やす）
+ノードをタップ →「出力の渡し方」→ **出口を分けて、項目ごとに渡す**。
+**出口ごとに「どの項目を渡すか」だけ**を選ぶ（出力1・出力2… で作った項目が並ぶ）。
+図のノードに出口が増え、線ごとにちがう項目が流れる。受け取る側のノードでも「入ってきた値のどれを使うか」を選べる。
+（リストの何番目、のような細かい取り出しは画面では選ばない。必要なら JSON/HSL で線や出口に
+ \`pick\` を手で書ける: \`"items.0"\` / \`"items.1..3"\` / \`"items.1.."\`。）
 
 ## 6. 入口に2本以上入るとき
 - 順番は**線をつないだ順**に自動で振られる。入れ替えはノードをタップ →「入力の順番」（↑↓）。
