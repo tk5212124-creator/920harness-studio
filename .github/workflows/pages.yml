@@ -24,6 +24,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 1枚のHTMLの中の script が本当に読めるかを、配る前に確かめる
+      # （テンプレート文字列の中に ` を裸で書くと、この行までページ全体が止まる）
+      - name: Check the page script parses
+        run: |
+          python3 - <<'PYEOF'
+          import re, io
+          s = io.open("harness.html", encoding="utf-8").read()
+          parts = re.findall(r"<script>(.*?)</script>", s, re.S)
+          assert len(parts) == 1, "script タグが1つではない: %d" % len(parts)
+          io.open("/tmp/page.js", "w", encoding="utf-8").write(parts[0])
+          PYEOF
+          node --check /tmp/page.js
+
       - name: Build site (harness.html as index.html)
         run: |
           mkdir -p _site

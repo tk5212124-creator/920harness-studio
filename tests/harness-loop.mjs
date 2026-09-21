@@ -36,10 +36,10 @@ ok.inputSaved = s1.nodes[0].label === '直したい文章を貼る' && s1.nodes[
 await paste(素);
 await tap('#addNode'); await tap('[data-add="loop"]'); await tap('#shClose');
 await tap('.nd[data-id="in"] .port.pout');  await tap('.nd[data-id="lp"] .port.pin');
-await tap('.nd[data-id="lp"] .port.pout');  await tap('.nd[data-id="A"] .port.pin');
+await tap('.nd[data-id="lp"] .port.pout[data-role="body"]');  await tap('.nd[data-id="A"] .port.pin');
 await tap('.nd[data-id="A"] .port.pout');   await tap('.nd[data-id="lp"] .port.pin');
 R['② 戻り線を繋いだお知らせ'] = (await p.textContent('#hint')).replace(/\s+/g, ' ').slice(0, 40);
-await tap('.nd[data-id="lp"] .port.pout');  await tap('.nd[data-id="out"] .port.pin');
+await tap('.nd[data-id="lp"] .port.pout[data-role="done"]');  await tap('.nd[data-id="out"] .port.pin');
 R['② 抜けたあとのお知らせ'] = (await p.textContent('#hint')).replace(/\s+/g, ' ').slice(0, 40);
 const s2 = await spec();
 const e2 = s2.edges.map(e => `${e.from.node}->${e.to.node}${e.loop ? '(戻)' : ''}${e.loopRole === 'done' ? '(抜)' : ''}`);
@@ -151,6 +151,8 @@ R['⑧ 戻した'] = { w: Math.round((await box('.nd[data-id="A"]')).width), も
   sizes: (await spec()).metadata.sizes === undefined ? '（書かれていない）' : (await spec()).metadata.sizes };
 ok.resizeReset = R['⑧ 戻した'].w === Math.round(b0.width) && R['⑧ 戻した'].sizes === '（書かれていない）';
 
+await tap('#shClose');        // ⑧ で開いたシートを閉じてから図を触る
+
 // ⑨ ループノードだけ入口と出口が上下逆（戻ってくる線が上から入る）
 await paste(mk(
   [{ id: "in", type: "input" }, { id: "lp", type: "loop", loop: { id: "lp", max: 2 } },
@@ -159,11 +161,77 @@ await paste(mk(
    { from: { node: "lp", port: "out" }, to: { node: "A", port: "in" } },
    { from: { node: "lp", port: "out" }, to: { node: "out", port: "in" }, loopRole: "done" },
    { from: { node: "A", port: "out" }, to: { node: "lp", port: "in" }, loop: { id: "lp" } }]));
-const geo = async id => { const n = await box(`.nd[data-id="${id}"]`), i = await box(`.nd[data-id="${id}"] .port.pin`), o = await box(`.nd[data-id="${id}"] .port.pout`);
-  return { in: Math.round(i.y + i.height / 2 - n.y), out: Math.round(o.y + o.height / 2 - n.y), h: Math.round(n.height) }; };
-R['⑨ ポートの位置'] = { ループ: await geo('lp'), ふつう: await geo('A') };
-ok.loopPortsFlipped = R['⑨ ポートの位置'].ループ.in > R['⑨ ポートの位置'].ループ.out
-  && R['⑨ ポートの位置'].ふつう.in < R['⑨ ポートの位置'].ふつう.out;
+const mid = async sel => { if (!(await p.locator(sel).count())) return null;
+  const b = await box(sel); return b ? { x: b.x + b.width / 2, y: b.y + b.height / 2 } : null; };
+const geo = async id => { const n = await box(`.nd[data-id="${id}"]`);
+  const rel = async sel => { const m = await mid(sel); return m ? { x: Math.round(m.x - n.x), y: Math.round(m.y - n.y) } : null; };
+  return { in: await rel(`.nd[data-id="${id}"] .port.pin`),
+    entry: await rel(`.nd[data-id="${id}"] .port.pin[data-role="entry"]`),
+    back: await rel(`.nd[data-id="${id}"] .port.pin[data-role="back"]`),
+    body: await rel(`.nd[data-id="${id}"] .port.pout[data-role="body"]`),
+    done: await rel(`.nd[data-id="${id}"] .port.pout[data-role="done"]`),
+    out: await rel(`.nd[data-id="${id}"] .port.pout`), h: Math.round(n.height) }; };
+const gl = await geo('lp'), gn = await geo('A');
+R['⑨ ポートの位置'] = { ループ: gl, ふつう: gn };
+// ループ: 本体は上・抜けたあとは下・入口も下（入口と重ならない）。ふつうのノードは入口が上・出口が下
+// 上: 入口(●)と本体(○) / 下: 戻り(●)と抜けたあと(○)。重ならないこと
+ok.loopPortsFlipped = gl.entry.y < gl.h / 2 && gl.body.y < gl.h / 2 && Math.abs(gl.entry.x - gl.body.x) > 20
+  && gl.back.y > gl.h / 2 && gl.done.y > gl.h / 2 && Math.abs(gl.back.x - gl.done.x) > 20
+  && gn.in.y < gn.out.y;
+R['⑨ 図のラベル'] = await p.locator('.nd[data-id="lp"] .plab').allTextContents();
+ok.loopLabels = R['⑨ 図のラベル'].join() === '本体,抜けたあと';
+
+// ⑩ 報告された使い方: 評価ノードに項目を作り、ループは「入ってきた値の点数」で抜ける
+await paste({ metadata: { name: "評価ループ", version: "1" }, providers: { m: { adapter: "mock" } },
+  nodes: [{ id: "in", type: "input" },
+    { id: "write", type: "llm", provider: "m", mock: { tag: "案" } },
+    { id: "lp", type: "loop", loop: { id: "lp", max: 5, until: "write.out.score >= 8" },
+      ports: [{ id: "p1", label: "1つ目", pick: "0" }, { id: "p2", label: "2つ目", pick: "1" }] },
+    { id: "回答評価", type: "llm", provider: "m", mock: { fixed: { 評価基準: "根拠", 点数: 9 } } },
+    { id: "out", type: "output" }],
+  edges: [{ from: { node: "in", port: "out" }, to: { node: "lp", port: "in" } },
+    { from: { node: "lp", port: "p1" }, to: { node: "write", port: "in" } },
+    { from: { node: "write", port: "out" }, to: { node: "回答評価", port: "in" } },
+    { from: { node: "回答評価", port: "out" }, to: { node: "lp", port: "in" }, loop: { id: "lp" } },
+    { from: { node: "lp", port: "p2" }, to: { node: "out", port: "in" }, loopRole: "done" }] });
+// 評価ノードに項目（評価基準＝文章 / 点数＝数値）を作る
+await tap('.nd[data-id="回答評価"]');
+await p.selectOption('[data-f="__shape"]', 'fields'); await p.waitForTimeout(250);
+await tap('#ofAdd');
+await p.fill('[data-of="key"][data-i="0"]', ''); await p.waitForTimeout(120);
+await p.fill('[data-of="key"][data-i="0"]', '評価基準'); await p.waitForTimeout(150);
+await p.fill('[data-of="key"][data-i="1"]', '点数'); await p.waitForTimeout(150);
+await p.selectOption('[data-of="type"][data-i="1"]', 'integer'); await p.waitForTimeout(250);
+await tap('#shClose');
+await tap('.nd[data-id="回答評価"]');
+R['⑩ 開き直した出力の形'] = { 形: await p.locator('[data-f="__shape"]').inputValue(),
+  項目: await p.locator('[data-of="key"]').evaluateAll(es => es.map(e => e.value)),
+  schema: (await spec()).nodes.find(n => n.id === '回答評価').schema };
+ok.keepShape = R['⑩ 開き直した出力の形'].形 === 'fields'
+  && R['⑩ 開き直した出力の形'].項目.join() === '評価基準,点数'
+  && R['⑩ 開き直した出力の形'].schema.properties.点数.type === 'integer';
+await tap('#shClose');
+// ループ: 残っていた取り出し設定をやめて、入ってきた値の「点数」で抜ける
+await tap('.nd[data-id="lp"]');
+await p.locator('#lpPortsOff').dispatchEvent('click'); await p.waitForTimeout(250);   // シート下端なので直接押す
+R['⑩ 見る先の選択肢'] = await p.locator('[data-f="__unode"] option').allTextContents();
+await p.selectOption('[data-f="__unode"]', ''); await p.waitForTimeout(250);   // ここに入ってきた値
+R['⑩ 項目の選択肢'] = await p.locator('[data-f="__ufield"] option').allTextContents();
+await p.selectOption('[data-f="__ufield"]', '点数'); await p.waitForTimeout(200);
+await p.fill('[data-f="__uval"]', '8'); await p.waitForTimeout(250);
+const s10 = await spec();
+R['⑩ できた条件'] = s10.nodes.find(n => n.id === 'lp').loop.until;
+R['⑩ 検証'] = (await vErr()) || '（エラーなし）';
+ok.condFromIncoming = R['⑩ 見る先の選択肢'][0].includes('ここに入ってきた値')
+  && R['⑩ 項目の選択肢'].join() === '評価基準,点数'
+  && R['⑩ できた条件'] === '点数 >= 8' && R['⑩ 検証'] === '（エラーなし）'
+  && !s10.nodes.find(n => n.id === 'lp').ports;
+await tap('#shClose');
+await tap('#runTop');
+R['⑩ 実行'] = await state();
+R['⑩ 出力'] = (await p.textContent('#ioOut [data-out="out"]')).replace(/\s+/g, ' ').slice(0, 60);
+ok.condRun2 = R['⑩ 実行'].includes('success') && R['⑩ 実行'].includes('iterTotal=1')
+  && R['⑩ 出力'].includes('点数');
 
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
