@@ -121,6 +121,23 @@ R['⑦ HSL往復'] = await p.evaluate(() => {
 });
 ok.hslPorts = R['⑦ HSL往復'].diff === null && R['⑦ HSL往復'].hsl.some(l => /from_port "p1"/.test(l) && /pick "score"/.test(l));
 
+// ⑧ 途中で切れたとき／形に合わないときの扱いを、ノードごとに選べる
+await paste(base);
+await tap('.nd[data-id="A"]');
+R['⑧ 切れたときの選択肢'] = await p.locator('[data-f="onTruncate"] option').allTextContents();
+R['⑧ 形が違うときの選択肢'] = await p.locator('[data-f="onBadOutput"] option').allTextContents();
+await p.selectOption('[data-f="onTruncate"]', 'retry'); await p.waitForTimeout(200);
+await p.selectOption('[data-f="onBadOutput"]', 'retry'); await p.waitForTimeout(250);
+const a8 = await nodeOf('A');
+R['⑧ 入った値'] = { onTruncate: a8.onTruncate, onBadOutput: a8.onBadOutput, 検証: await vErr() || '（エラーなし）' };
+R['⑧ 会話の説明'] = (await p.textContent('#sheetBody')).includes('毎回まっさらな会話');
+ok.truncUI = R['⑧ 切れたときの選択肢'].length === 3 && R['⑧ 形が違うときの選択肢'].length === 2
+  && a8.onTruncate === 'retry' && a8.onBadOutput === 'retry'
+  && R['⑧ 入った値'].検証 === '（エラーなし）' && R['⑧ 会話の説明'];
+await p.selectOption('[data-f="onTruncate"]', ''); await p.waitForTimeout(250);
+ok.truncDefault = (await nodeOf('A')).onTruncate === undefined;
+await tap('#shClose');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

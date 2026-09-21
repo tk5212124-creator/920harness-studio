@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 動き出す条件を決める v0.22.0</title>
+<title>Harness Studio — 途中で切れたときの扱い v0.23.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -112,7 +112,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.22.0 · 動き出す条件を決める</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.23.0 · 途中で切れたときの扱い</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -626,6 +626,8 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
         1つの入口に複数の線が入る llm ノードで、それらをどう1つの文にするか。
         op は concat（改行でつなぐ・既定）| numbered（1. 2. …）| markdown（見出し付き）| csv | json_array
     mock {"text":"…"}                     （adapter が mock のとき）
+    set onTruncate "retry"                （maxTokens で切れたとき。error=止める（既定）/ use=切れた分を使う / retry=倍にしてやり直す）
+    set onBadOutput "retry"               （答えが schema に合わないとき。error=止める（既定）/ retry=もう一度聞く）
     set start {"mode":"any"}              （入口が2本以上あるノード。all=全部そろったら（既定）/ any=どれか来たら
                                            / custom は {"mode":"custom","op":"or","groups":[{"op":"and","from":["in","点検"]}]}）
     set label "直したい文章を貼る"        （input。実行画面の入力欄に出す文言）
@@ -973,6 +975,17 @@ const MockProvider={
       }
       return{output:{type:"text",value:partial},usage:{apiCalls:1,inputTokens:5,outputTokens:m.stream.length,cost:null}};
     }
+    // 生の文字列をそのまま返す（JSONの読み取りと schema の確認を本番と同じ道で通す）
+    if(m.raw!=null)return OpenAILocalProvider.finish(String(m.raw),{prompt_tokens:3,completion_tokens:7},req,null,"stop");
+    if(Array.isArray(m.rawByIteration)){const a=m.rawByIteration;
+      return OpenAILocalProvider.finish(String(a[Math.min(it-1,a.length-1)]),{prompt_tokens:3,completion_tokens:7},req,null,"stop");}
+    // maxTokens に届いて途中で切れる様子を再現する（needs 以上を渡せば最後まで書く）
+    if(m.cut){
+      const need=m.cut.needs||96,full=m.cut.full||'{"item":"あいうえお"}';
+      const mt=(req.generation&&req.generation.maxTokens)||256;
+      if(mt>=need)return OpenAILocalProvider.finish(full,{prompt_tokens:3,completion_tokens:need},req,null,"stop");
+      return OpenAILocalProvider.finish(String(full).slice(0,m.cut.at||12),{prompt_tokens:3,completion_tokens:mt},req,null,"length");
+    }
     if(m.echoInput)return{output:{type:"json",value:{received:inputs.in!==undefined?inputs.in:null}},usage:{apiCalls:1,inputTokens:5,outputTokens:5,cost:null}};
     // 組み上がったプロンプト本文をそのまま返す（入力のまとめ方を確かめるため）
     if(m.echoPrompt){const ms=(req.input&&req.input.messages)||[];const last=ms[ms.length-1]||{};
@@ -1070,15 +1083,19 @@ const OpenAILocalProvider={
   finish(text,usage,req,raw,finishReason){
     const u={apiCalls:1,inputTokens:usage&&usage.prompt_tokens!=null?usage.prompt_tokens:null,
       outputTokens:usage&&usage.completion_tokens!=null?usage.completion_tokens:null,cost:null};
+    // 失敗しても「1回呼んで何トークン使ったか」は分かっているので、必ず持たせて投げる
+    const fail=(message,extra)=>{throw Object.assign({code:"SCHEMA_VALIDATION_ERROR",retryable:false,message,usage:u},extra||{});};
     if(req.schema){
       // maxTokens で切れていると JSON は必ず閉じない。原因が違うので別の文にする
-      if(finishReason==="length")throw{code:"SCHEMA_VALIDATION_ERROR",retryable:false,
-        message:`途中で切れた（maxTokens ${req.generation&&req.generation.maxTokens!=null?req.generation.maxTokens:256} に達した）ので JSON が閉じていない。`
-          +`maxTokens を増やすか、schema を小さくする。ここまで: ${String(text).slice(0,80)}`};
-      let v;try{v=JSON.parse(stripFence(text));}catch(e){throw{code:"SCHEMA_VALIDATION_ERROR",retryable:false,
-        message:`JSONとして読めない（モデルはこう返した: ${String(text).slice(0,120)}）。`
-          +"小さいモデルは形を外しやすい: prompt の suffix に「JSONだけを出す」と書く / schema を簡単にする / 大きめのモデルにする"};}
-      checkSchema(v,req.schema);return{output:{type:"json",value:v},usage:u,raw:raw||text};
+      if(finishReason==="length")fail(
+        `途中で切れた（maxTokens ${req.generation&&req.generation.maxTokens!=null?req.generation.maxTokens:256} に達した）ので JSON が閉じていない。`
+          +`maxTokens を増やすか、schema を小さくする。ここまで: ${String(text).slice(0,80)}`,
+        {truncated:true,partialText:String(text)});
+      let v;try{v=JSON.parse(stripFence(text));}catch(e){fail(
+        `JSONとして読めない（モデルはこう返した: ${String(text).slice(0,120)}）。`
+          +"小さいモデルは形を外しやすい: prompt の suffix に「JSONだけを出す」と書く / schema を簡単にする / 大きめのモデルにする");}
+      try{checkSchema(v,req.schema);}catch(e){throw Object.assign({},e,{usage:u});}
+      return{output:{type:"json",value:v},usage:u,raw:raw||text};
     }
     return{output:{type:"text",value:text},usage:u,raw:raw||text};
   }
@@ -1581,11 +1598,53 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
       +(adapter.id==="webllm"&&typeof SITE_WEIGHTS!=="undefined"&&SITE_WEIGHTS[model]?"（重みはこのサイトから）":""));
     handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:adapter.id,model}),adapter,signal,ctl&&ctl.onProgress);
   }
-  const res=await adapter.invoke({
-    input:{messages:buildMessages(node,inputs,ex,run)},
-    model,generation,schema,signal,handle,providerDef:def,node,inputs,ex,
-    onToken:t=>{attempt.partialOutput=(attempt.partialOutput||"")+t;ctl&&ctl.onToken&&ctl.onToken(node.id,t);}
-  });
+  /* maxTokens に届いて途中で切れたときの扱い（node.onTruncate）
+       error（既定）… そこで止める
+       use          … 切れたところまでを使う（JSONは閉じ直す。形が違えばその理由で落ちる）
+       retry        … maxTokens を倍にしてやり直す（最大2回）
+     出力の形（schema）を付けているときだけ意味がある（文章は切れてもそのまま届く）。 */
+  const pol=node.onTruncate||"error";
+  const badPol=node.onBadOutput||"error";
+  const msgs={messages:buildMessages(node,inputs,ex,run)};
+  let gen=generation,tries=0,badTries=0,res=null;
+  for(;;){
+    try{
+      res=await adapter.invoke({
+        input:msgs,model,generation:gen,schema,signal,handle,providerDef:def,node,inputs,ex,
+        onToken:t=>{attempt.partialOutput=(attempt.partialOutput||"")+t;ctl&&ctl.onToken&&ctl.onToken(node.id,t);}
+      });
+    }catch(err){
+      if(err&&err.truncated&&pol==="retry"&&tries<2){
+        countUsage(run,err.usage);                 // やり直す前の分も数える
+        tries++;
+        const mt=(gen.maxTokens||256)*2;
+        gen=Object.assign({},gen,{maxTokens:mt});
+        attempt.partialOutput="";
+        log&&log("prov",`↻ ${node.id}: 途中で切れたので maxTokens を ${mt} にしてやり直す（${tries}/2）`);
+        continue;
+      }
+      // 形に合わなかった（切れたのではない）とき、もう一度聞く
+      if(err&&err.code==="SCHEMA_VALIDATION_ERROR"&&!err.truncated&&badPol==="retry"&&badTries<2){
+        countUsage(run,err.usage);
+        badTries++;attempt.partialOutput="";
+        log&&log("prov",`↻ ${node.id}: 答えが形に合わなかったのでもう一度聞く（${badTries}/2）`);
+        continue;
+      }
+      if(err&&err.truncated&&pol==="use"){
+        const t=String(err.partialText==null?"":err.partialText);
+        if(!schema)return{output:{type:"text",value:t},usage:err.usage,raw:t};
+        let v=null;try{v=JSON.parse(closeJSON(stripFence(t)));}catch(_){v=null;}
+        if(v!==null){
+          try{checkSchema(v,schema);}catch(e){throw Object.assign({},e,{usage:err.usage});}
+          log&&log("prov",`✂ ${node.id}: 途中で切れた分を閉じ直して使った`);
+          return{output:{type:"json",value:v},usage:err.usage,raw:t};
+        }
+        throw Object.assign({},err,{message:err.message+"（閉じ直しても JSON にならなかった）"});
+      }
+      throw err;
+    }
+    break;
+  }
   if(res&&res.cancelled){attempt.partialOutput=res.partial!=null?res.partial:attempt.partialOutput;return res;}
   if(!res||!res.output)throw{code:"PROVIDER_ERROR",retryable:false,message:"Providerがoutputを返さない"};
   return res;
@@ -1683,6 +1742,8 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
       if(n.prompt.template.mode!=="interpolation_only")errs.push("prompt.template.mode=interpolation_only必須: "+n.id);
       try{mustacheRender(n.prompt.template.value||"",{},{escape:false});}catch(e){errs.push("prompt.template不正: "+n.id+" "+errText(e));}
     }
+    if(n.onTruncate&&!["error","use","retry"].includes(n.onTruncate))errs.push("途中で切れたときの扱いが不正: "+n.id);
+    if(n.onBadOutput&&!["error","retry"].includes(n.onBadOutput))errs.push("形に合わなかったときの扱いが不正: "+n.id);
     if(n.schema&&typeof n.schema!=="object")errs.push("schemaはobject必須: "+n.id);
     if(n.schema&&n.schema.type==="object"&&n.schema.properties&&!Object.keys(n.schema.properties).length)
       errs.push(`出力の項目が空: ${n.id}（項目を足すか、出力の形を「縛らない」にする）`);
@@ -2003,6 +2064,30 @@ function execInputsReady(run,spec,ex){const node=spec.nodes.find(n=>n.id===ex.no
   return true;}
 
 /* ---- exec/delivery生成 ---- */
+/* 使った分（呼び出し回数とトークン）を数える。失敗した呼び出しも数える（実際に使っているため）。 */
+function countUsage(run,u){
+  if(!u)return;
+  run.totals.apiCalls+=u.apiCalls||0;
+  run.totals.inputTokens+=u.inputTokens||0;
+  run.totals.outputTokens+=u.outputTokens||0;
+  if((u.apiCalls||0)>0&&u.inputTokens==null&&u.outputTokens==null)run.totals.unreportedUsageCalls++;
+}
+/* 途中で切れた JSON を閉じ直す（開いている文字列と括弧を閉じるだけ。中身は足さない） */
+function closeJSON(t){
+  let s2=String(t).trim();
+  let inStr=false,esc=false;const stack=[];
+  for(const ch of s2){
+    if(inStr){if(esc)esc=false;else if(ch==="\\")esc=true;else if(ch==='"')inStr=false;continue;}
+    if(ch==='"')inStr=true;
+    else if(ch==="{")stack.push("}");
+    else if(ch==="[")stack.push("]");
+    else if(ch==="}"||ch==="]")stack.pop();
+  }
+  if(esc)s2=s2.slice(0,-1);
+  if(inStr)s2+='"';
+  while(stack.length)s2+=stack.pop();
+  return s2;
+}
 function makeDelivery(run,spec,edge,rv,fromExecId,ctx){
   const fromNode=(spec.nodes||[]).find(n=>n.id===edge.from.node);
   const sent=portRV(fromNode,rv,edge.from.port);      // 出口を増やしていれば、その出口の分だけ渡る
@@ -2147,7 +2232,8 @@ function failRun(run,nodeId,err,store,recordNodeFailure){run.status="failed";run
 function handleExecutionFailure(run,spec,ex,err,store,log){
   ex.status="failed";ex.errorKind=err.code||"ERROR";
   if(ex.attempts&&ex.attempts.length){const at=ex.attempts[ex.attempts.length-1];at.status="failed";at.error={code:err.code||"ERROR",stage:err.stage};at.endedAt=Date.now();}
-  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:null,raw:null,usage:null,meta:{len:null,tokens:null,bytes:null},status:"error",errorKind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable});
+  countUsage(run,err&&err.usage);      // 失敗した呼び出しも回数とトークンに数える
+  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:null,raw:null,usage:(err&&err.usage)||null,meta:{len:null,tokens:(err&&err.usage&&err.usage.outputTokens)||null,bytes:null},status:"error",errorKind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable});
   run.errors.push({node:ex.nodeId,execId:ex.execId,kind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable,message:errText(err)});
   log&&log("err",`✗ ${ex.nodeId}: ${err.code||"ERROR"}${err.stage?"("+err.stage+")":""} ${err.message||""}`);
   const gid=findBranchGroupId(run,ex);
@@ -2155,7 +2241,8 @@ function handleExecutionFailure(run,spec,ex,err,store,log){
     if(!g.primaryFailure)g.primaryFailure={execId:ex.execId,nodeId:ex.nodeId,code:err.code||"ERROR"};
     if(g.branches[ex.execId])g.branches[ex.execId].status="failed";
     applyBranchFailurePolicy(run,spec,g,ex,err,store,log);}
-  run.status="failed";run.resumable=true;run.workQueue.shift();
+  run.status="failed";run.resumable=true;
+  run.workQueue=run.workQueue.filter(w=>w.execId!==ex.execId);
   if(store)store.save(run);}
 
 // in-flight cancel: failed ではなく cancelled。部分出力は data-flow に載せない
@@ -2293,9 +2380,7 @@ async function processOneWorkItem(spec,run,store,log,ctl){
       handleExecutionFailure(run,spec,ex,err,store,log);return{kind:"failed"};}
     const useUsage=(node.type==="llm"||node.type==="tool")?usage:null;
     (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rv,raw:JSON.stringify(rv.value),usage,meta:metaOf(rv,useUsage),status:"success"});
-    if(node.type==="llm"||node.type==="tool"){run.totals.apiCalls+=usage.apiCalls||0;
-      if(usage.inputTokens==null&&usage.outputTokens==null)run.totals.unreportedUsageCalls++;}
-    run.totals.inputTokens+=usage.inputTokens||0;run.totals.outputTokens+=usage.outputTokens||0;ex._rv=rv;
+    countUsage(run,usage);ex._rv=rv;
     {const at=ex.attempts[ex.attempts.length-1];at.status="completed";at.endedAt=Date.now();}
     run.workQueue[at]={execId:ex.execId,phase:"route"};if(store)store.save(run);return{kind:"executed"};
   }
@@ -3729,6 +3814,16 @@ function openNodeSheet(id){
       area("prompt.template.value",getP(n,"prompt.template.value"),"空なら前のノードの出力をそのまま渡す"));
     h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prompt.prefix",getP(n,"prompt.prefix")))}${fld("必ず後ろに付ける文",txt("prompt.suffix",getP(n,"prompt.suffix")))}</div>`;
     h+=`<div class="fld2">${fld("maxTokens",num("generation.maxTokens",getP(n,"generation.maxTokens")))}${fld("temperature",num("generation.temperature",getP(n,"generation.temperature")))}</div>`;
+    h+=fld("maxTokens に届いて途中で切れたとき",sel("onTruncate",n.onTruncate||"",[
+      {v:"",t:"エラーにして止める（既定）"},
+      {v:"use",t:"切れたところまでを使う（JSONは閉じ直す）"},
+      {v:"retry",t:"maxTokens を倍にしてやり直す（最大2回）"}]));
+    h+=fld("答えが出力の形に合わなかったとき",sel("onBadOutput",n.onBadOutput||"",[
+      {v:"",t:"エラーにして止める（既定）"},
+      {v:"retry",t:"もう一度聞く（最大2回）"}]));
+    h+=`<div class="mini">出力の形（schema）を付けているときだけ効く。文章のままなら切れてもそのまま届く。<br>`
+      +`この道具は<b>毎回まっさらな会話</b>でモデルを呼ぶ（前のやり取りは持ち越さない）ので、`
+      +`「会話を続ける／新しくする」という設定は無い。</div>`;
     const pk=schemaPresetOf(n.schema);
     h+=fld("出力の形（内蔵LLMなら文法で強制する）",sel("__shape",pk,SCHEMA_PRESETS.map(x=>({v:x.v,t:x.t}))));
     if(SHAPE_NOTE[pk])h+=`<div class="mini">${SHAPE_NOTE[pk]}</div>`;
@@ -5045,6 +5140,13 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
   数値は **最小・最大の範囲** と **整数だけ** を指定できる（小数もマイナスも使える）。
 - **自分で JSON schema を書く**: 上で表せない形のとき。
 内蔵LLMでは schema が**文法として強制**される。プロンプトに「JSONで出して」と書くだけでは縛りにならない。
+
+**答えが出力の形に合わなかったとき / maxTokens で途中で切れたとき**は、ノードごとに決められる（maxTokens のすぐ下）。
+- 切れたとき: **エラーにして止める（既定）** / **切れたところまでを使う**（JSONは閉じ直す）/ **maxTokens を倍にしてやり直す**（最大2回）
+- 形に合わないとき: **エラーにして止める（既定）** / **もう一度聞く**（最大2回）
+この道具は**毎回まっさらな会話**でモデルを呼ぶ（前のやり取りは持ち越さない）ので、「会話を続ける／新しくする」という設定は無い。
+小さいモデルは長さの指定（minLength / maxLength）を守りにくい。**長さの判定は schema ではなく計算ノードでして、
+ループでやり直す**方が通りやすい（schema は「項目があること」だけにする）。
 条件式から読むときは **ノード名.out.キー名**。
 
 ## 5. 項目ごとに別の線へ渡す（出口を増やす）
@@ -5112,6 +5214,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - **条件が手前のノードを見てしまっている**ときは「条件の見る先を ○○.out.△△ に変える」が出る。点数を出すノードを見るように1タップで直せる。
 - 「診断する」で、機械で確実に分かることだけを一覧にする（LLMの意見ではない）。
 - 「実行ログ」→ **まとめてコピー**（Spec・ログ・失敗の理由・端末の対応状況が1つに入る）。そのまま相談先に貼れる。
+- 使用量は**失敗した呼び出しも数える**（実際にモデルを動かしているため）。calls と トークン数に入る。
 - 版が古いと画面の上にお知らせが出る。リロードすると新しくなる。
 
 ## 13. 書き出す・渡す・戻す
@@ -5856,6 +5959,68 @@ export async function CreateMLCEngine(model,opt){
     &&tryStart(or_(gAB,gC),["A","B"])===true&&tryStart(or_(gAB,gC),["C"])===true
     &&tryStart(and_(gAorB,gC),["A"])===false&&tryStart(and_(gAorB,gC),["A","C"])===true
     &&tryStart({mode:"any"},["B"])===true&&tryStart({mode:"all"},["B"])===null);}
+ // 60 途中で切れたとき: 止める / 切れた分を使う / maxTokensを増やしてやり直す。失敗した呼び出しも数える
+ {const mk=onTruncate=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    Object.assign({id:"a",type:"llm",mock:{cut:{full:'{"item":"あいうえお"}',at:12,needs:96}},
+      generation:{maxTokens:48},schema:{type:"object",required:["item"],properties:{item:{type:"string"}}}},
+      onTruncate?{onTruncate}:{}),
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"a",port:"in"}},{from:{node:"a",port:"out"},to:{node:"out",port:"in"}}]});
+  const r1=await fullRun(mk(null),{});            // 既定: 止める
+  const r2=await fullRun(mk("use"),{});           // 切れたところまでを使う
+  const r3=await fullRun(mk("retry"),{});         // maxTokens を倍にしてやり直す
+  ok("60 途中で切れたとき: 止める/使う/やり直す を選べる。失敗した呼び出しも回数とトークンに数える",
+    r1.status==="failed"&&/途中で切れた/.test(errText((r1.errors||[])[0]))
+      &&r1.totals.apiCalls===1&&r1.totals.outputTokens===48
+      &&(r1.nodeRuns.a||[]).slice(-1)[0].usage.outputTokens===48
+    &&r2.status==="success"&&r2.result.value.item==="あいう"&&r2.totals.apiCalls===1
+    &&r3.status==="success"&&r3.result.value.item==="あいうえお"
+      &&r3.totals.apiCalls===2&&r3.totals.outputTokens===48+96);}
+ // 61 答えが形に合わないとき、もう一度聞く（最大2回）。それでもダメなら止める
+ {let n=0;
+  const mk=onBadOutput=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    Object.assign({id:"a",type:"llm",mock:{raw:'{"item":"みじかい"}'},
+      schema:{type:"object",required:["item"],properties:{item:{type:"string",minLength:8}}}},
+      onBadOutput?{onBadOutput}:{}),
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"a",port:"in"}},{from:{node:"a",port:"out"},to:{node:"out",port:"in"}}]});
+  const r1=await fullRun(mk(null),{});
+  const r2=await fullRun(mk("retry"),{});
+  ok("61 形に合わないとき: もう一度聞く（最大2回）。数えた回数も増える",
+    r1.status==="failed"&&r1.totals.apiCalls===1&&/minLength/.test(errText((r1.errors||[])[0]))
+    &&r2.status==="failed"&&r2.totals.apiCalls===3);}
+ // 62 品質ゲートのループ: 形は schema、良し悪しは計算ノード、合格するまでループ
+ {const long='{"item":"雨の日に家でできることを3つ挙げて。1つ目の行動：雨に着目して、屋外へ出る。2つ"}';
+  const good=['{"item":"本を読む"}','{"item":"料理を作る"}','{"item":"音楽を聴く"}'];
+  const node=(id,i)=>({id,type:"llm",mock:{rawByIteration:[long,good[i]]},start:{mode:"any"},
+    schema:{type:"object",required:["item"],properties:{item:{type:"string"}}},
+    inputs:{in:{type:"any",cardinality:"many"}}});
+  const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"lp",type:"loop",loop:{id:"lp",max:3,lang:"js",until:"return ok === true;"},routing:{failurePolicy:"fail_fast"}},
+    node("fun",0),node("make",1),node("rest",2),
+    {id:"bundle",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}},
+    {id:"validate",type:"calc",lang:"js",code:"const items=(Array.isArray(inputs[0])?inputs[0]:[]).map(x=>String(x||'').trim());"
+      +"const ok=items.length===3&&items.every(x=>x.length>=4&&x.length<=40)&&new Set(items).size===3;return {items,ok};"},
+    {id:"check",type:"cond",lang:"js",routing:{onNoMatch:"error"},
+     ports:[{id:"pass",label:"通過",expr:"return ok === true;",pick:"items"},{id:"fail",label:"不合格",else:true}]},
+    {id:"out",type:"output"},{id:"failed",type:"output"}],
+   edges:[...["fun","make","rest"].map(id=>({from:{node:"lp",port:"out"},to:{node:id,port:"in"},loopRole:"body",position:0})),
+    ...["fun","make","rest"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"bundle",port:"items"},pick:"item",position:i})),
+    {from:{node:"bundle",port:"out"},to:{node:"validate",port:"in"}},
+    {from:{node:"validate",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}},
+    {from:{node:"lp",port:"out"},to:{node:"check",port:"in"},loopRole:"done"},
+    {from:{node:"check",port:"pass"},to:{node:"out",port:"in"}},
+    {from:{node:"check",port:"fail"},to:{node:"failed",port:"in"}},
+    ...["fun","make","rest"].map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"},position:1}))]};
+  const r=await fullRun(sp,{in:"Q"});
+  ok("62 品質ゲート: 長さは計算ノードで見てループでやり直す（1周目は不合格・2周目で通る）",
+    validate(sp).length===0&&r.status==="success"&&r.iterationTotal===2
+    &&(r.nodeRuns.out||[]).length===1&&!((r.nodeRuns.failed||[]).length)
+    &&JSON.stringify(r.result.value)===JSON.stringify(["本を読む","料理を作る","音楽を聴く"])
+    &&r.totals.apiCalls===9);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
