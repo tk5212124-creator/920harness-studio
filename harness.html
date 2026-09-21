@@ -52,6 +52,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .nd.t-input{border-color:#8fb4d8}.nd.t-output{border-color:#8fc8a8}.nd.t-join{border-color:#d8c08f}.nd.t-llm{border-color:#b8a6d8}
 .nd.t-loop{border-color:#e0a06c}.nd.t-cond{border-color:#c9a227}.nd.t-calc{border-color:#6fb3a8}
 .nd.t-reduce{border-color:#6fa3b3}.nd.t-quorum{border-color:#b38f6f}.nd.t-assert{border-color:#9ab36f}
+.nd.t-module{border-color:#8f8fd8;border-width:2px}.nd.t-pass{border-color:#c0c6cf}
 .nd .ndm{font-size:9px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;font-family:ui-monospace,monospace}
 .nd.st-running{border-color:var(--accent);animation:pulse 1s infinite alternate}
 .nd.st-success{border-color:var(--ok);background:#f2fbf6}
@@ -450,6 +451,8 @@ function specToHSL(spec){
     L.push(parts.join(" "));
   }
   if(spec.providers&&Object.keys(spec.providers).length)L.push("");
+  for(const[k,v]of Object.entries(spec.modules||{}))L.push(`module ${hslName(k)} = ${jstr(v)}`);
+  if(spec.modules&&Object.keys(spec.modules).length)L.push("");
   for(const[k,v]of Object.entries(spec.vars||{}))L.push(`var ${k} = ${jstr(v)}`);
   if(spec.vars&&Object.keys(spec.vars).length)L.push("");
   const NODE_SKIP=new Set(["id","type","provider","model","prompt","generation","schema","routing","op","sep","template","inputs","mock","labels","prefix","suffix","merge"]);
@@ -555,6 +558,8 @@ function hslToSpec(text){
       spec.providers=spec.providers||{};spec.providers[hslValue(t[1],ln)]=def;}
     else if(k==="var"){if(t[2]!=="=")err(ln,"var <名前> = <値> の形にする");
       spec.vars=spec.vars||{};spec.vars[hslValue(t[1],ln)]=hslValue(t[3],ln);}
+    else if(k==="module"){if(t[2]!=="=")err(ln,"module <名前> = <中身のJSON> の形にする");
+      spec.modules=spec.modules||{};spec.modules[hslValue(t[1],ln)]=hslValue(t[3],ln);}
     else if(k==="node"){
       // node <id>: <種類> [provider]  … <id> は "日本語の名前" のように囲んでもよい
       const idRaw=t[1]||"";
@@ -633,6 +638,7 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
     mock {"text":"…"}                     （adapter が mock のとき）
     set onTruncate "retry"                （maxTokens で切れたとき。error=止める（既定）/ use=切れた分を使う / retry=倍にしてやり直す）
     set onBadOutput "retry"               （答えが schema に合わないとき。error=止める（既定）/ retry=もう一度聞く）
+    set module "IterativeWriter"          （type=module のとき。modules に入れた部分ハーネスを呼ぶ）
     set onError "skip"                    （このノードでエラーが起きたとき。error=止める（既定）
                                            / value=決めた値を出して先へ進む（onErrorValue が要る）
                                            / null=null を出して先へ進む
@@ -1776,6 +1782,20 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(n.onTruncate&&!["error","use","retry"].includes(n.onTruncate))errs.push("途中で切れたときの扱いが不正: "+n.id);
     if(n.onBadOutput&&!["error","retry"].includes(n.onBadOutput))errs.push("形に合わなかったときの扱いが不正: "+n.id);
     if(n.onError&&!ERROR_POLICIES.includes(n.onError))errs.push("エラーのときの扱いが不正（error / value / null / skip）: "+n.id);
+    if(n.type==="module"){
+      const def=(spec.modules||{})[n.module];
+      if(!String(n.module||"").trim())errs.push("どのモジュールを使うかが決まっていない: "+n.id);
+      else if(!def||!def.spec)errs.push(`モジュール "${n.module}" が modules に無い: `+n.id);
+      else{const ps=modulePorts(def);
+        if(!ps.in.length)errs.push(`モジュール "${n.module}" に入口（input ノード）が無い: `+n.id);
+        if(!ps.out.length)errs.push(`モジュール "${n.module}" に出口（output ノード）が無い: `+n.id);
+        (spec.edges||[]).forEach(e=>{
+          if(e.to.node===n.id){const q=e.to.port||"in";
+            if(!(ps.in.length===1&&(q==="in"||q===ps.in[0]))&&!ps.in.includes(q))
+              errs.push(`モジュール "${n.module}" に入口 "${q}" が無い（あるのは ${ps.in.join(", ")}）: `+n.id);}
+          if(e.from.node===n.id){const q=e.from.port||"out";
+            if(!(ps.out.length===1&&(q==="out"||q===ps.out[0]))&&!ps.out.includes(q))
+              errs.push(`モジュール "${n.module}" に出口 "${q}" が無い（あるのは ${ps.out.join(", ")}）: `+n.id);}});}}
     if(n.type==="reduce"){
       if(!REDUCE_OP_SET.has(n.op||"sum"))errs.push(`まとめ方(op)が不正: ${n.id} — ${n.op}（${[...REDUCE_OP_SET].join(" / ")}）`);
       if(n.path!=null&&typeof n.path!=="string")errs.push("見る場所(path)は文字で書く: "+n.id);}
@@ -1931,6 +1951,12 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(!body.length)errs.push("ループの繰り返す先が無い（ループノードから線を1本出す）: "+n.id);
     const fp=n.routing&&n.routing.failurePolicy;
     if((body.length>1||fin.length>1)&&!fp)errs.push("ループの出口が同じ役割で2本以上あるのに failurePolicy が無い: "+n.id);});
+  {const cyc=moduleCycle(spec);
+   if(cyc)errs.push(`モジュールが自分を呼んでいる（再帰は使えない）: ${cyc.join(" → ")}`);
+   for(const[k,def]of Object.entries(spec.modules||{})){
+     if(!def||!def.spec||!Array.isArray(def.spec.nodes))errs.push(`モジュール "${k}" の中身（spec.nodes）が無い`);
+     else{const ids=new Set();for(const n of def.spec.nodes)
+       {if(ids.has(n.id))errs.push(`モジュール "${k}" の中で id重複: ${n.id}`);ids.add(n.id);}}}}
   spec.nodes.forEach(n=>{if(n.type==="join"&&n.op==="template"){
     if(!n.template||n.template.syntax!=="mustache")errs.push("template.syntax=mustache必須: "+n.id);
     if(!n.template||n.template.mode!=="interpolation_only")errs.push("template.mode=interpolation_only必須: "+n.id);}});
@@ -2641,6 +2667,11 @@ async function processOneWorkItem(spec,run,store,log,ctl){
         const k=Object.keys(inputs)[0];const v=k!==undefined?inputs[k]:undefined;
         rv=Array.isArray(v)?mergeToRV(v,node.merge):(v!==undefined&&v!==null?v:{type:"text",value:""});
         usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};}
+      else if(node.type==="pass"){
+        const kp=Object.keys(inputs)[0];const vp=kp!==undefined?inputs[kp]:undefined;
+        rv=Array.isArray(vp)?mergeToRV(vp,node.merge):(vp!==undefined&&vp!==null?vp:{type:"text",value:""});
+        usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};
+        log&&log("node",`→ ${node.id}（そのまま通す） ${shortVal(rv.value)}`);}
       else if(node.type==="join"){rv=runJoin(node,inputs);usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};log&&log("node",`⋈ JOIN(${node.id}) → ${JSON.stringify(rv.value)}`);}
       else if(node.type==="reduce"){
         rv=runReduce(node,inputs);
@@ -2793,6 +2824,135 @@ async function routeExec(spec,run,ex,byId,loopEntries,log){
   if(outEdges.length>1)log&&log("route",`↳ fan-out(${act},${run.branchGroups[act].failurePolicy}): ${outEdges.map(e=>e.to.node).join(", ")}`);
   return{kind:"completed"};}
 
+/* ノードの名前を変えるとき／モジュールを展開するときに、
+   その名前が書かれている場所を1つ残らず書き換える。
+   ここが漏れると「条件式が知らないノードを見ている」が後から出る。 */
+function remapNodeIds(spec,map){
+  const to=id=>Object.prototype.hasOwnProperty.call(map,id)?map[id]:id;
+  const reOf=id=>new RegExp(`(^|${NOTID})${id.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}(?![A-Za-z0-9_$\u0080-\uFFFF])`,"g");
+  const pairs=Object.keys(map).filter(k=>k!==map[k]).map(k=>({re:reOf(k),to:map[k]}));
+  /* 式の中の「ノードの名前」だけを書き換える。
+     直前が "." のものは項目名（例: 評価.out.score の out）なので触らない。 */
+  const fixExpr=t=>{
+    if(t==null||!pairs.length)return t;
+    let x=String(t);
+    for(const q of pairs){q.re.lastIndex=0;
+      x=x.replace(q.re,(m,p1,off,whole)=>{
+        let i=off+p1.length-1;
+        while(i>=0&&/\s/.test(whole[i]))i--;
+        return (i>=0&&whole[i]===".")?m:p1+q.to;});}
+    return x;};
+  for(const n of spec.nodes||[]){
+    n.id=to(n.id);
+    if(n.start&&Array.isArray(n.start.groups))
+      n.start.groups.forEach(g=>{if(Array.isArray(g.from))g.from=g.from.map(to);});
+    if(n.loop){if(n.loop.until)n.loop.until=fixExpr(n.loop.until);}
+    if(Array.isArray(n.ports))n.ports.forEach(c=>{if(c.expr)c.expr=fixExpr(c.expr);});
+    if(n.type==="calc"&&n.lang!=="js"&&n.code)n.code=fixExpr(n.code);
+    if(n.type==="quorum"&&n.lang!=="js"&&n.condition)n.condition=fixExpr(n.condition);
+    if(n.type==="assert"&&Array.isArray(n.asserts))
+      n.asserts.forEach(a=>{if(a&&a.expr&&(a.lang||n.lang)!=="js")a.expr=fixExpr(a.expr);});
+    if(n.prompt){const P=n.prompt;
+      const fixTpl=t=>t==null?t:String(t).replace(/\{\{\{\s*run_input\s*\.\s*([^\s{}]+?)\s*\}\}\}/g,
+        (m,id)=>`{{{run_input.${to(id)}}}}`);
+      if(P.system)P.system=fixTpl(P.system);
+      if(P.prefix)P.prefix=fixTpl(P.prefix);
+      if(P.suffix)P.suffix=fixTpl(P.suffix);
+      if(P.template&&P.template.value)P.template.value=fixTpl(P.template.value);}
+  }
+  for(const e of spec.edges||[]){
+    e.from.node=to(e.from.node);e.to.node=to(e.to.node);
+    if(e.if)e.if=fixExpr(e.if);
+    if(e.loop&&e.loop.until)e.loop.until=fixExpr(e.loop.until);
+  }
+  return spec;
+}
+/* ループIDの付け替え（ループノードと、そこへ戻る線の両方） */
+function remapLoopIds(spec,map){
+  const to=id=>Object.prototype.hasOwnProperty.call(map,id)?map[id]:id;
+  for(const n of spec.nodes||[])if(n.loop&&n.loop.id)n.loop.id=to(n.loop.id);
+  for(const e of spec.edges||[])if(e.loop&&e.loop.id)e.loop.id=to(e.loop.id);
+  return spec;
+}
+/* ---- モジュール（部分ハーネスの再利用） ----
+   modules に「ふつうのHarnessSpec」を入れておき、module ノードから呼ぶ。
+   実行する直前に、そのノードを中身のノード群へ置き換える（展開）。
+   Runtime はモジュールを知らないままでよく、usage / エラー / 記録 / Checkpoint は
+   ふつうのノードとまったく同じに効く。展開後の名前は <ノード名>__<中の名前>。
+   ・入口 = モジュールの中の input ノード、出口 = output ノード（そのまま名前が出口名になる）
+   ・展開すると input / output は「そのまま通す」ノードになる
+   ・再帰（自分自身を含むモジュール）は禁止。検証で落とす。
+   ・版はモジュールごとの version に書く。ハーネスが自分の中にモジュールを持つので、
+     あとから勝手に中身が変わることはない（取り込み直したときだけ変わる）。 */
+const MOD_SEP="__";
+const modulePorts=def=>{
+  const ns=((def&&def.spec&&def.spec.nodes)||[]);
+  return{in:ns.filter(n=>n.type==="input").map(n=>n.id),out:ns.filter(n=>n.type==="output").map(n=>n.id)};
+};
+function moduleCycle(spec){
+  const mods=spec.modules||{};
+  const deps=k=>(((mods[k]||{}).spec||{}).nodes||[]).filter(n=>n.type==="module").map(n=>n.module);
+  const state={};
+  const walk=(k,path)=>{
+    if(state[k]==="done")return null;
+    if(state[k]==="open")return path.concat([k]);
+    state[k]="open";
+    for(const d of deps(k)){if(!mods[d])continue;const c=walk(d,path.concat([k]));if(c)return c;}
+    state[k]="done";return null;};
+  for(const k of Object.keys(mods)){const c=walk(k,[]);if(c)return c;}
+  return null;
+}
+function expandModules(spec){
+  if(!spec||!(spec.nodes||[]).some(n=>n.type==="module"))return spec;
+  const out=JSON.parse(JSON.stringify(spec));
+  const mods=out.modules||{};
+  const cyc=moduleCycle(out);
+  if(cyc)throw{code:"MODULE_RECURSION",message:`モジュールが自分を呼んでいる（再帰は使えない）: ${cyc.join(" → ")}`};
+  let guard=0;
+  while((out.nodes||[]).some(n=>n.type==="module")){
+    if(guard++>200)throw{code:"MODULE_TOO_DEEP",message:"モジュールの入れ子が深すぎる（200段）"};
+    const idx=out.nodes.findIndex(n=>n.type==="module");
+    const M=out.nodes[idx];
+    const def=mods[M.module];
+    if(!def||!def.spec)throw{code:"MODULE_NOT_FOUND",message:`モジュール "${M.module}" が modules に無い: ${M.id}`};
+    const sub=JSON.parse(JSON.stringify(def.spec));
+    const ports=modulePorts(def);
+    const taken=new Set(out.nodes.map(n=>n.id));
+    const map={};
+    for(const n of sub.nodes||[]){
+      let id=M.id+MOD_SEP+n.id,i=2;
+      while(taken.has(id))id=M.id+MOD_SEP+n.id+"_"+(i++);
+      taken.add(id);map[n.id]=id;}
+    const lmap={};
+    for(const n of sub.nodes||[])if(n.loop&&n.loop.id)lmap[n.loop.id]=M.id+MOD_SEP+n.loop.id;
+    for(const e of sub.edges||[])if(e.loop&&e.loop.id&&lmap[e.loop.id]===undefined)lmap[e.loop.id]=M.id+MOD_SEP+e.loop.id;
+    remapLoopIds(sub,lmap);remapNodeIds(sub,map);
+    // 出入口は「そのまま通す」ノードにする（名前と値をそのまま残すため）
+    for(const n of sub.nodes||[])if(n.type==="input"||n.type==="output"){
+      n.type="pass";delete n.label;delete n.default;}
+    const pick=(list,port,what)=>{
+      if(list.length===1&&(port==="in"||port==="out"||port===list[0]))return map[list[0]];
+      if(list.includes(port))return map[port];
+      throw{code:"MODULE_PORT",message:`${M.id}: モジュール "${M.module}" に${what} "${port}" が無い（あるのは ${list.join(", ")||"なし"}）`};};
+    for(const e of out.edges||[]){
+      if(e.to.node===M.id){e.to.node=pick(ports.in,e.to.port||"in","入口");e.to.port="in";}
+      if(e.from.node===M.id){e.from.node=pick(ports.out,e.from.port||"out","出口");e.from.port="out";}
+    }
+    // 図の位置は元のノードのまわりに置く（同時に届いたときの並び順にだけ効く）
+    const L=(out.metadata&&out.metadata.layout)||{};const base=L[M.id];
+    if(base){out.metadata.layout=L;
+      (sub.nodes||[]).forEach((n,i)=>{const src=((def.spec.metadata||{}).layout||{})[Object.keys(map).find(k=>map[k]===n.id)];
+        L[n.id]=src?{x:base.x+src.x,y:base.y+src.y}:{x:base.x+(i%4)*40,y:base.y+Math.floor(i/4)*40};});
+      delete L[M.id];}
+    out.nodes.splice(idx,1,...(sub.nodes||[]));
+    out.edges=(out.edges||[]).concat(sub.edges||[]);
+    if(sub.vars)out.vars=Object.assign({},sub.vars,out.vars||{});          // 外側が勝つ
+    if(sub.providers)out.providers=Object.assign({},sub.providers,out.providers||{});
+  }
+  normalizeInputOrder(out);
+  return out;
+}
+
 /* ---- 実行の記録（デバッグ用） ----
    ログは人が読む読み物。こちらは「あとから機械でも人でも追える」ための全部入り。
    ここに無い情報は Studio 側にも無い、という状態にしておく。 */
@@ -2858,7 +3018,9 @@ function traceReport(spec,run,opt){
   return{
     format:"harness-trace/1",
     harness:{name:(spec.metadata&&spec.metadata.name)||null,version:(spec.metadata&&spec.metadata.version)||null,
-      nodeCount:(spec.nodes||[]).length,edgeCount:(spec.edges||[]).length,specCanon:run.specCanon||null},
+      nodeCount:(spec.nodes||[]).length,edgeCount:(spec.edges||[]).length,specCanon:run.specCanon||null,
+      modules:Object.entries(spec.modules||{}).map(([k,d])=>({name:k,version:(d&&d.version)||null,
+        nodes:((d&&d.spec&&d.spec.nodes)||[]).length}))},
     run:{runId:run.runId,status:run.status,resumable:!!run.resumable,cancelRequested:!!run.cancelRequested,
       startedAt:run.startedAt,reportedAt:new Date().toISOString(),
       totals:run.totals,iterationTotal:run.iterationTotal,
@@ -2906,7 +3068,9 @@ async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
   return run;}
 function startRun(spec,run){const start=(spec.nodes.find(n=>n.type==="input")||spec.nodes[0]);const act=`act#${++run.actSeq}`;
   makeExec(run,start.id,{activationId:act,loopInstanceId:null,iteration:null});}
-async function fullRun(spec,input,store,ctl){store=store||memStore();const errs=validate(spec);if(errs.length){const run=makeRun(spec,input);run.status="failed";run.errors=errs.map(e=>({kind:"VALIDATION",message:e}));return run;}
+async function fullRun(spec,input,store,ctl){store=store||memStore();
+  try{spec=expandModules(spec);}catch(e){const run=makeRun(spec,input);run.status="failed";run.errors=[{kind:e.code||"MODULE_ERROR",message:errText(e)}];return run;}
+  const errs=validate(spec);if(errs.length){const run=makeRun(spec,input);run.status="failed";run.errors=errs.map(e=>({kind:"VALIDATION",message:e}));return run;}
   const run=makeRun(spec,input);startRun(spec,run);await runUntilIdle(spec,run,store,null,ctl);return run;}
 async function resumeRun(spec,cp,store,log,ctl){cp.status="running";await runUntilIdle(spec,cp,store,log,ctl);return cp;}
 async function retryExecution(spec,run,execId,store,log,ctl){
@@ -2927,7 +3091,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,whyNotRun,LOGOPT,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,whyNotRun,LOGOPT,expandModules,modulePorts,remapNodeIds,remapLoopIds,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -3183,13 +3347,15 @@ const NODE_KINDS=[
   {type:"loop",label:"ループ",desc:"条件が来るまで同じところを何回も回す"},
   {type:"cond",label:"条件分岐",desc:"条件で行き先を選ぶ（式・JavaScript）"},
   {type:"calc",label:"計算",desc:"入ってきた値を計算する（式・JavaScript）"},
+  {type:"module",label:"モジュール",desc:"別に作った部分ハーネスを1つのノードとして呼ぶ"},
+  {type:"pass",label:"そのまま通す",desc:"値を変えずに中継する（名前を付けて追いやすくする）"},
   {type:"reduce",label:"まとめる",desc:"並んだ値を合計・平均・いちばん良いもの…にする"},
   {type:"quorum",label:"多数決",desc:"何人が条件を満たしたら合格かを決める"},
   {type:"assert",label:"点検",desc:"条件が成り立っているかを調べる（テスト用）"},
   {type:"output",label:"出力",desc:"最終結果を受け取る"}
 ];
 const TYPE_LABEL={input:"入力",llm:"LLM",join:"Join",loop:"ループ",cond:"条件分岐",calc:"計算",
-  reduce:"まとめる",quorum:"多数決",assert:"点検",output:"出力",tool:"ツール"};
+  reduce:"まとめる",quorum:"多数決",assert:"点検",module:"モジュール",pass:"そのまま通す",output:"出力",tool:"ツール"};
 const LANGS=[{v:"expr",t:"かんたんな式（+ - * / と比較）"},{v:"js",t:"JavaScript（この端末で動く）"}];
 const LANG_LABEL={expr:"式",js:"JavaScript"};
 /* ブラウザの中で動かせる言語は JavaScript だけ。ここは正直に書く（選べるように見せない）。 */
@@ -4162,6 +4328,33 @@ function openNodeSheet(id){
       +(n.lang==="js"?`<br>別スレッドで動かすので画面は止まらない。3秒で終わらなければ打ち切る。`
                      :`<br>使える関数: len() has() regex() count() min() max() json_parse() json_stringify()。他のノードの値は <code>ノード名.out.項目</code> でも読める。`)+`</div>`;
   }
+  if(n.type==="module"){
+    const mods=Object.keys(Ed.spec.modules||{});
+    const def=(Ed.spec.modules||{})[n.module];
+    h+=fld("どのモジュールを呼ぶか",sel("module",n.module||"",
+      [{v:"",t:"(未設定)"}].concat(mods.map(k=>({v:k,
+        t:`${k}（v${((Ed.spec.modules[k]||{}).version)||"?"}・ノード${(((Ed.spec.modules[k]||{}).spec||{}).nodes||[]).length}）`})))));
+    if(!mods.length)
+      h+=`<div class="mini" style="color:var(--warn)">このハーネスにはモジュールがまだ無い。`
+        +`「書き出す」の<b>いまのハーネスをモジュールにする</b>で作るか、JSONの <code>modules</code> に書く。</div>`;
+    else if(def){
+      const ps=modulePorts(def);
+      h+=`<div class="mini">入口: <code>${esc(ps.in.join(" / ")||"なし")}</code>`
+        +` ／ 出口: <code>${esc(ps.out.join(" / ")||"なし")}</code><br>`
+        +`線の入口・出口の名前にこれを使う（1つだけなら <code>in</code> / <code>out</code> のままでよい）。`
+        +(def.note?`<br>${esc(def.note)}`:"")+`</div>`;
+      h+=`<div class="row"><button id="mdOpen">このモジュールだけを開く</button>`
+        +`<button id="mdInline">ここで中身に展開する</button></div>`;
+      h+=`<div class="mini">実行するときは自動で中身に置き換わる。中のノードは`
+        +` <code>${esc(n.id)}${MOD_SEP}〜</code> という名前でログと記録に出る。`
+        +`モジュールはこのハーネスの中に入っているので、あとから勝手に中身が変わることはない。</div>`;
+    }
+  }
+  if(n.type==="pass"){
+    h+=`<div class="mini">入ってきた値をそのまま次へ渡す（値は変えない）。`
+      +`名前を付けて追いやすくしたいときや、線をまとめたいときに使う。`
+      +`複数の線が入るときは下の「受け取り方」でまとまる。</div>`;
+  }
   if(n.type==="reduce"){
     const srcs=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop).map(e=>e.from.node);
     h+=fld("まとめ方",sel("op",n.op||"sum",REDUCE_OPS));
@@ -4701,6 +4894,19 @@ function openNodeSheet(id){
      else{try{n.onErrorValue=JSON.parse(v);ev.style.borderColor="";}
        catch(_){ev.style.borderColor="var(--err)";return;}}
      syncFromCanvas();};}
+  {const mo=$("#mdOpen");
+   if(mo)mo.onclick=()=>{
+     if(mo.dataset.armed!=="1"){mo.dataset.armed="1";
+       mo.textContent="もう一度押すと入れ替わる（いまの編集内容は消える）";return;}
+     const def=(Ed.spec.modules||{})[n.module];if(!def)return;
+     const sp=JSON.parse(JSON.stringify(def.spec));
+     sp.metadata=Object.assign({name:n.module,version:String(def.version||"1")},sp.metadata||{});
+     closeSheet();setSpecObj(sp);fitView();setHint(`モジュール「${n.module}」だけを開いた（そのまま実行できる）`);};}
+  {const mi=$("#mdInline");
+   if(mi)mi.onclick=()=>{
+     if(mi.dataset.armed!=="1"){mi.dataset.armed="1";mi.textContent="もう一度押すと展開する（元に戻せない）";return;}
+     let sp;try{sp=expandModules(Ed.spec);}catch(e){return setHint("展開できない: "+errText(e));}
+     closeSheet();setSpecObj(sp);fitView();setHint("モジュールを中身に展開した");};}
   {const sm=$("#sheetBody").querySelector('select[data-f="__skipMissing"]');
    if(sm)sm.onchange=()=>{if(sm.value)n.skipMissing=true;else delete n.skipMissing;syncFromCanvas();};}
   {const bi=$("#sheetBody").querySelector('select[data-f="__onBadItem"]');
@@ -4743,50 +4949,6 @@ function openNodeSheet(id){
     Ed.spec.edges=(Ed.spec.edges||[]).filter(e=>e.from.node!==id&&e.to.node!==id);
     delete layout()[id];setSize(id,null);Ed.sel=null;closeSheet();syncFromCanvas();setHint("削除: "+id);
   };
-}
-/* ノードの名前を変えるとき／モジュールを展開するときに、
-   その名前が書かれている場所を1つ残らず書き換える。
-   ここが漏れると「条件式が知らないノードを見ている」が後から出る。 */
-function remapNodeIds(spec,map){
-  const to=id=>Object.prototype.hasOwnProperty.call(map,id)?map[id]:id;
-  const reOf=id=>new RegExp(`(^|${NOTID})${id.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}(?![A-Za-z0-9_$\u0080-\uFFFF])`,"g");
-  const pairs=Object.keys(map).filter(k=>k!==map[k]).map(k=>({re:reOf(k),to:map[k]}));
-  const fixExpr=t=>{
-    if(t==null||!pairs.length)return t;
-    let x=String(t);
-    for(const q of pairs){q.re.lastIndex=0;x=x.replace(q.re,(m,p1)=>p1+q.to);}
-    return x;};
-  for(const n of spec.nodes||[]){
-    n.id=to(n.id);
-    if(n.start&&Array.isArray(n.start.groups))
-      n.start.groups.forEach(g=>{if(Array.isArray(g.from))g.from=g.from.map(to);});
-    if(n.loop){if(n.loop.until)n.loop.until=fixExpr(n.loop.until);}
-    if(Array.isArray(n.ports))n.ports.forEach(c=>{if(c.expr)c.expr=fixExpr(c.expr);});
-    if(n.type==="calc"&&n.lang!=="js"&&n.code)n.code=fixExpr(n.code);
-    if(n.type==="quorum"&&n.lang!=="js"&&n.condition)n.condition=fixExpr(n.condition);
-    if(n.type==="assert"&&Array.isArray(n.asserts))
-      n.asserts.forEach(a=>{if(a&&a.expr&&(a.lang||n.lang)!=="js")a.expr=fixExpr(a.expr);});
-    if(n.prompt){const P=n.prompt;
-      const fixTpl=t=>t==null?t:String(t).replace(/\{\{\{\s*run_input\s*\.\s*([^\s{}]+?)\s*\}\}\}/g,
-        (m,id)=>`{{{run_input.${to(id)}}}}`);
-      if(P.system)P.system=fixTpl(P.system);
-      if(P.prefix)P.prefix=fixTpl(P.prefix);
-      if(P.suffix)P.suffix=fixTpl(P.suffix);
-      if(P.template&&P.template.value)P.template.value=fixTpl(P.template.value);}
-  }
-  for(const e of spec.edges||[]){
-    e.from.node=to(e.from.node);e.to.node=to(e.to.node);
-    if(e.if)e.if=fixExpr(e.if);
-    if(e.loop&&e.loop.until)e.loop.until=fixExpr(e.loop.until);
-  }
-  return spec;
-}
-/* ループIDの付け替え（ループノードと、そこへ戻る線の両方） */
-function remapLoopIds(spec,map){
-  const to=id=>Object.prototype.hasOwnProperty.call(map,id)?map[id]:id;
-  for(const n of spec.nodes||[])if(n.loop&&n.loop.id)n.loop.id=to(n.loop.id);
-  for(const e of spec.edges||[])if(e.loop&&e.loop.id)e.loop.id=to(e.loop.id);
-  return spec;
 }
 function renameNode(oldId,newId){
   newId=String(newId||"").trim();if(!newId||newId===oldId)return;
@@ -4865,7 +5027,7 @@ function openAddSheet(){
 }
 function addNode(type){
   const base={input:"in",llm:"llm",join:"jn",loop:"lp",cond:"cd",calc:"cl",
-    reduce:"rd",quorum:"qm",assert:"chk",output:"out"}[type]||"n";
+    reduce:"rd",quorum:"qm",assert:"chk",module:"mod",pass:"ps",output:"out"}[type]||"n";
   const id=newId(base);
   const n={id,type};
   if(type==="llm"){const provs=Object.keys(Ed.spec.providers||{});
@@ -4880,6 +5042,7 @@ function addNode(type){
   if(type==="reduce"){n.op="best";n.path="score";n.inputs={in:{type:"any",cardinality:"many"}};}
   if(type==="quorum"){n.lang="expr";n.condition="value.score >= 80";n.required=2;
     n.inputs={in:{type:"any",cardinality:"many"}};n.start={mode:"all"};}
+  if(type==="module")n.module=Object.keys(Ed.spec.modules||{})[0]||"";
   if(type==="assert"){n.lang="expr";n.onFail="continue";
     n.asserts=[{name:"点数が8以上",expr:"value.score >= 8",severity:"fail"}];}
   Ed.spec.nodes=Ed.spec.nodes||[];Ed.spec.nodes.push(n);
@@ -4950,7 +5113,28 @@ function openExportSheet(){
   h+=`<div class="row"><button id="exLink">共有リンクを作る</button><span class="mini" id="exLinkInfo"></span></div>`;
   h+=`<label class="fld" id="exLinkWrap" style="display:none"><span>リンク（別の端末でも開ける）</span><textarea id="exLinkText" style="min-height:76px" readonly></textarea></label>`;
   h+=`<div class="row" id="exShareRow" style="display:none"><button id="exLinkCopy">リンクをコピー</button><button id="exShare">共有…</button></div>`;
+  h+=`<div class="fld" style="margin-top:14px"><span>モジュールにする（他のハーネスから1ノードとして呼べる形）</span><div>`
+    +`<div class="ordrow"><input type="text" id="exModName" placeholder="モジュールの名前（例: 書き直し）" style="flex:1;min-width:110px">`
+    +`<input type="text" id="exModVer" value="1" style="width:56px" placeholder="版"></div></div></div>`;
+  h+=`<div class="row"><button id="exModSave">いまのハーネスをモジュールにする</button></div>`;
+  h+=`<div class="mini" id="exModInfo">入力ノードが入口、出力ノードが出口になる。`
+    +`このハーネスの <code>modules</code> に入るので、「＋ ノード」→ <b>モジュール</b> ですぐ呼べる。`
+    +`いま入っているモジュール: <code>${esc(Object.keys(Ed.spec.modules||{}).join(" / ")||"なし")}</code></div>`;
   openSheet(h);bindClose();
+  $("#exModSave").onclick=()=>{
+    const nm=String(($("#exModName").value||"").trim());
+    if(!nm)return $("#exModInfo").textContent="モジュールの名前を入れる";
+    const body=JSON.parse(JSON.stringify(Ed.spec));
+    delete body.modules;                       // モジュールの中にモジュールを抱えない（再帰を作らない）
+    const ps=modulePorts({spec:body});
+    if(!ps.in.length||!ps.out.length)
+      return $("#exModInfo").textContent="入力ノードと出力ノードが1つずつ以上要る（それが入口と出口になる）";
+    Ed.spec.modules=Ed.spec.modules||{};
+    Ed.spec.modules[nm]={version:String(($("#exModVer").value||"1").trim()),spec:body};
+    syncFromCanvas();
+    $("#exModInfo").textContent=`モジュール「${nm}」にした（入口 ${ps.in.join(" / ")} ／ 出口 ${ps.out.join(" / ")}）。`
+      +`「＋ ノード」→ モジュール で呼べる。`;
+  };
   let mode="ai";
   const instEl=()=>$("#sheetBody").querySelector('[data-f="__inst"]');
   const textNow=()=>mode==="ai"?buildEditPrompt(Ed.spec,instEl()?instEl().value:"")
@@ -5091,6 +5275,13 @@ function setRunUI(running){
 let cur=null,ctl=null;
 function parseSpec(){let spec;try{spec=JSON.parse($("#spec").value);}catch(e){log("err","JSON: "+e.message);return null;}
   if(normalizeSpec(spec))log("dim","入口の順番と出口の流し方を決めてから実行する（順番はノード編集の「入力の順番」、流し方は「出口の扱い」で変えられる）");
+  const mods=(spec.nodes||[]).filter(n=>n.type==="module");
+  if(mods.length){
+    try{spec=expandModules(spec);}catch(e){log("err","MODULE: "+errText(e));return null;}
+    log("dim",`モジュール ${mods.map(n=>`${n.id}（${n.module}）`).join(" / ")} を中身に置き換えて実行する`
+      +`（中のノードは ${mods[0].id}${MOD_SEP}〜 という名前でログに出る）`);
+    normalizeSpec(spec);
+  }
   const errs=validate(spec);if(errs.length){errs.forEach(e=>log("err","VALIDATE: "+e));return null;}return spec;}
 function updateResume(){const cp=store.load();$("#resume").disabled=!(cp&&cp.status!=="success"&&cp.resumable);
   $("#retry").disabled=!(cur&&Object.values(cur.executions||{}).some(e=>e.status==="failed"));}
@@ -5727,7 +5918,8 @@ setHint("ノードをタップすると中身を編集。○ → ● の順に�
 window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
   nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;},
   // Runtime をそのまま呼べる口（自動テスト用。画面を触らずに走らせて中身を見る）
-  eng:{fullRun,validate,traceReport,traceText,whyNotRun,LOGOPT,specToHSL,hslToSpec,errText}};
+  eng:{fullRun,validate,traceReport,traceText,whyNotRun,LOGOPT,specToHSL,hslToSpec,errText,
+    expandModules,modulePorts,remapNodeIds,remapLoopIds,reviewSpec}};
 
 /* ---- 使い方（？ボタン） ---- */
 const HELP_TEXT=`# Harness Studio の使い方
@@ -7255,6 +7447,53 @@ export async function CreateMLCEngine(model,opt){
     &&JSON.stringify(ne.start.groups[0].from)==='["輪","質問"]'
     &&ne.prompt.template.value==="{{{run_input.質問}}} を見る"
     &&sp.edges[2].loop.id==="輪"&&validate(sp).length===0);}
+ // 69 モジュール: 部分ハーネスを1ノードとして2か所から呼ぶ／中のループも動く／再帰は落とす
+ {const inner={metadata:{name:"書き直し",version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"lp",type:"loop",loop:{id:"lp",max:3,until:"評価.out.score >= 8"},routing:{failurePolicy:"fail_fast"}},
+    {id:"書く",type:"llm",mock:{tag:"案"},start:{mode:"any"},inputs:{in:{type:"any",cardinality:"many"}},
+     routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"評価",type:"llm",mock:{scoreByIteration:[5,9]},
+     schema:{type:"object",required:["score"],properties:{score:{type:"integer"}}}},
+    {id:"まとめ",type:"calc",lang:"js",code:"return {answer:String(inputs[0]||''),score:(inputs[1]||{}).score??0};",
+     inputs:{in:{type:"any",cardinality:"many"}}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+     {from:{node:"lp",port:"out"},to:{node:"書く",port:"in"},loopRole:"body",position:1},
+     {from:{node:"書く",port:"out"},to:{node:"評価",port:"in"}},
+     {from:{node:"書く",port:"out"},to:{node:"まとめ",port:"in"},position:0},
+     {from:{node:"評価",port:"out"},to:{node:"まとめ",port:"in"},position:1},
+     {from:{node:"まとめ",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}},
+     {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}]};
+  const outer={metadata:{version:"1"},modules:{"書き直し":{version:"1",spec:inner}},
+   nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+     {id:"w1",type:"module",module:"書き直し"},
+     {id:"w2",type:"module",module:"書き直し"},
+     {id:"best",type:"reduce",op:"best",path:"score",inputs:{in:{type:"any",cardinality:"many"}}},
+     {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"w1",port:"in"}},
+     {from:{node:"in",port:"out"},to:{node:"w2",port:"in"}},
+     {from:{node:"w1",port:"out"},to:{node:"best",port:"in"},position:0},
+     {from:{node:"w2",port:"out"},to:{node:"best",port:"in"},position:1},
+     {from:{node:"best",port:"out"},to:{node:"out",port:"in"}}]};
+  const ex=expandModules(outer);
+  const ids=ex.nodes.map(n=>n.id);
+  const r=await fullRun(outer,{in:"お題"});
+  const T=traceReport(ex,r,{});
+  // 再帰は検証で落とす
+  const rec={metadata:{version:"1"},modules:{A:{version:"1",spec:{nodes:[{id:"i",type:"input"},{id:"m",type:"module",module:"A"},{id:"o",type:"output"}],edges:[]}}},
+    nodes:[{id:"in",type:"input"},{id:"m",type:"module",module:"A"},{id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"m",port:"in"}},{from:{node:"m",port:"out"},to:{node:"out",port:"in"}}]};
+  ok("69 モジュール: 1ノードとして2か所から呼べる／中のループも動く／再帰は検証で落ちる",
+    ids.includes("w1__書く")&&ids.includes("w2__評価")&&!ids.includes("w1")
+    &&ex.nodes.find(n=>n.id==="w1__in").type==="pass"
+    &&ex.nodes.find(n=>n.id==="w1__lp").loop.id==="w1__lp"
+    &&ex.nodes.find(n=>n.id==="w1__lp").loop.until==="w1__評価.out.score >= 8"
+    &&validate(ex).length===0
+    &&r.status==="success"&&r.result.value.score===9&&r.iterationTotal===4
+    &&(r.nodeRuns["w1__評価"]||[]).length===2&&(r.nodeRuns["w2__評価"]||[]).length===2
+    &&T.harness.modules.some(m=>m.name==="書き直し"&&m.version==="1")
+    &&validate(rec).some(e=>/再帰/.test(e)));}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
