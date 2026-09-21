@@ -53,6 +53,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .nd.t-loop{border-color:#e0a06c}.nd.t-cond{border-color:#c9a227}.nd.t-calc{border-color:#6fb3a8}
 .nd.t-reduce{border-color:#6fa3b3}.nd.t-quorum{border-color:#b38f6f}.nd.t-assert{border-color:#9ab36f}
 .nd.t-module{border-color:#8f8fd8;border-width:2px}.nd.t-pass{border-color:#c0c6cf}
+.nd.t-map{border-color:#d88fae;border-width:2px}
 .nd .ndm{font-size:9px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;font-family:ui-monospace,monospace}
 .nd.st-running{border-color:var(--accent);animation:pulse 1s infinite alternate}
 .nd.st-success{border-color:var(--ok);background:#f2fbf6}
@@ -1719,7 +1720,7 @@ function confluenceConflict(spec,nodeId,port){
    Runtime はこれをしない。ここはエディタと読み込みの仕事。順番はノード編集で入れ替えられる。 */
 function inPortGroups(spec){
   const g={};
-  for(const e of spec.edges||[]){if(e.loop)continue;
+  for(const e of spec.edges||[]){if(e.loop||e.map)continue;
     const key=e.to.node+"\u0000"+(e.to.port||"in");(g[key]=g[key]||[]).push(e);}
   return g;
 }
@@ -1732,7 +1733,7 @@ function normalizeOutRouting(spec){
   const bySrc={};
   for(const e of spec.edges||[])(bySrc[e.from.node]=bySrc[e.from.node]||[]).push(e);
   for(const[id,es]of Object.entries(bySrc)){
-    const n=byId[id];if(!n||n.type==="loop"||n.type==="cond")continue;      // 出口が役割/条件で分かれる
+    const n=byId[id];if(!n||n.type==="loop"||n.type==="cond"||n.type==="map")continue;      // 出口が役割/条件で分かれる
     if(es.some(e=>e.if||e.else))continue;
     if(es.filter(e=>!e.loop&&!e.if&&!e.else).length<2)continue;
     const r=n.routing||{};
@@ -1784,6 +1785,18 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(n.onTruncate&&!["error","use","retry"].includes(n.onTruncate))errs.push("途中で切れたときの扱いが不正: "+n.id);
     if(n.onBadOutput&&!["error","retry"].includes(n.onBadOutput))errs.push("形に合わなかったときの扱いが不正: "+n.id);
     if(n.onError&&!ERROR_POLICIES.includes(n.onError))errs.push("エラーのときの扱いが不正（error / value / null / skip）: "+n.id);
+    if(n.type==="map"){
+      const body=mapBodyEdges(spec,n.id),fin=mapDoneEdges(spec,n.id),back=mapBackEdges(spec,n);
+      if(!body.length)errs.push("Mapの1件ずつ流す先が無い（Mapノードから線を1本出す）: "+n.id);
+      if(!back.length)errs.push(`Mapの戻り線が無い（本体の終わりから ${n.id} へ "map":{"id":"${mapIdOf(n)}"} の線を戻す）: `+n.id);
+      if(!fin.length)errs.push('Mapの終わったあとの線が無い（mapRole:"done" を1本出す）: '+n.id);
+      if(n.order!=null&&n.order!=="input")errs.push('Mapの order は "input" だけ（終わった順は未対応）: '+n.id);
+      if(n.onItemError&&!MAP_ITEM_POLICIES.includes(n.onItemError))
+        errs.push("Mapの1件が失敗したときの扱いが不正（error / skip / null / value）: "+n.id);
+      if(n.onItemError==="value"&&n.onItemErrorValue===undefined)
+        errs.push("onItemError=value のときに出す値（onItemErrorValue）が無い: "+n.id);
+      const fp=n.routing&&n.routing.failurePolicy;
+      if((body.length>1||fin.length>1)&&!fp)errs.push("Mapの出口が同じ役割で2本以上あるのに failurePolicy が無い: "+n.id);}
     if(n.type==="module"){
       const def=(spec.modules||{})[n.module];
       if(!String(n.module||"").trim())errs.push("どのモジュールを使うかが決まっていない: "+n.id);
@@ -1843,14 +1856,20 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
       if(!(e.loop.max>=1))errs.push("loop.max>=1でない: "+e.loop.id);
       if(e.loop.until){try{compileExpr(e.loop.until);}catch(_){errs.push("loop.until parse不可: "+e.loop.until);}}}
     if(e.transform&&!["json_stringify","json_parse","list_to_text"].includes(e.transform))errs.push("transform不正値: "+e.transform);
-    if(e.routing&&e.routing.mode&&!["parallel","first_match"].includes(e.routing.mode))errs.push("routing.mode不正");});
+    if(e.routing&&e.routing.mode&&!["parallel","first_match"].includes(e.routing.mode))errs.push("routing.mode不正");
+    if(e.map){
+      if(!e.map.id)errs.push(`戻り線に map.id が無い: ${e.from.node} → ${e.to.node}`);
+      else{const t=(spec.nodes||[]).find(n=>n.id===e.to.node);
+        if(!t||!isMapNode(t))errs.push(`map の戻り線は Map ノードへ戻す: ${e.from.node} → ${e.to.node}`);
+        else if(mapIdOf(t)!==e.map.id)errs.push(`戻り線の map.id が合っていない（${e.map.id} → ${mapIdOf(t)} にする）: ${e.from.node} → ${e.to.node}`);}}
+    if(e.mapRole&&!["body","done"].includes(e.mapRole))errs.push(`mapRole は body か done: ${e.from.node} → ${e.to.node}`);});
   spec.nodes.forEach(n=>{if(n.routing&&n.routing.mode&&!["parallel","first_match"].includes(n.routing.mode))errs.push("routing.mode不正: "+n.id);});
   const bySrc={},byToPort={};
   (spec.edges||[]).forEach(e=>{(bySrc[e.from.node]=bySrc[e.from.node]||[]).push(e);const key=e.to.node+"."+(e.to.port||"in");(byToPort[key]=byToPort[key]||[]).push(e);});
   Object.entries(bySrc).forEach(([src,es])=>{const hasCond=es.some(e=>e.if||e.else),hasPlain=es.some(e=>!e.if&&!e.else&&!e.loop);
     if(hasCond&&hasPlain)errs.push("routing混在: "+src);es.forEach(e=>{if(e.if&&e.loop)errs.push("if+loop併記: "+src);if(e.if){try{compileExpr(e.if);}catch(_){errs.push("if parse不可: "+e.if);}}});
     if(es.filter(e=>e.else).length>1)errs.push("else複数: "+src);const pr=es.filter(e=>e.if).map(e=>e.priority||0);if(new Set(pr).size!==pr.length)errs.push("priority重複: "+src);});
-  Object.entries(byToPort).forEach(([key,es])=>{const [nid,port]=key.split(".");const node=spec.nodes.find(n=>n.id===nid);const nonLoop=es.filter(e=>!e.loop);
+  Object.entries(byToPort).forEach(([key,es])=>{const [nid,port]=key.split(".");const node=spec.nodes.find(n=>n.id===nid);const nonLoop=es.filter(e=>!e.loop&&!e.map);
     const card=node&&node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
     const allCond=nonLoop.every(e=>e.if||e.else);
     if(nonLoop.length>1&&card!=="many"&&!allCond)errs.push("many以外への複数incoming: "+key);
@@ -1963,7 +1982,7 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(!n.template||n.template.syntax!=="mustache")errs.push("template.syntax=mustache必須: "+n.id);
     if(!n.template||n.template.mode!=="interpolation_only")errs.push("template.mode=interpolation_only必須: "+n.id);}});
   Object.entries(bySrc).forEach(([src,es])=>{const node=spec.nodes.find(n=>n.id===src);const mode=node&&node.routing&&node.routing.mode;
-    if(node&&(node.type==="loop"||node.type==="cond"))return;   // 出口が役割/条件で分かれるノード
+    if(node&&(node.type==="loop"||node.type==="cond"||node.type==="map"))return;   // 出口が役割/条件で分かれるノード
     const hasCond=es.some(e=>e.if||e.else);const hasPlainFanout=es.filter(e=>!e.if&&!e.else&&!e.loop).length>0;
     if(mode==="parallel"&&hasCond)errs.push("routing.mode=parallelなのに条件Edge(if/else)がある: "+src);
     // 無条件の出口が2本以上あるのに、どう流すかが書かれていない
@@ -1980,8 +1999,8 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
 function edgeIdOf(spec,edge){const i=(spec.edges||[]).indexOf(edge);return i>=0?"e"+i:null;}
 function makeRun(spec,input){return{runId:"run_"+Date.now(),status:"running",resumable:true,
   nodeRuns:{},deliveries:[],executions:{},workQueue:[],branchGroups:{},cancelRequested:false,
-  loopInstances:{},loopSeq:0,execSeq:0,actSeq:0,delivSeq:0,routeSeq:0,assertions:[],
-  totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0,recoveredErrors:0,stoppedNodes:0,truncateRetries:0,badOutputRetries:0},iterationTotal:0,
+  loopInstances:{},loopSeq:0,mapInstances:{},mapSeq:0,log:[],logDropped:0,execSeq:0,actSeq:0,delivSeq:0,routeSeq:0,assertions:[],
+  totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0,recoveredErrors:0,stoppedNodes:0,truncateRetries:0,badOutputRetries:0,mapItems:0,mapItemErrors:0},iterationTotal:0,
   startedAt:new Date().toISOString(),errors:[],result:null,input:input||{},vars:spec.vars||{},
   harnessVersion:(spec.metadata&&spec.metadata.version)||"0",specCanon:canonSpec(spec),specSnapshot:spec};}
 function metaOf(rv,usage){const m={len:null,tokens:(usage&&usage.outputTokens!=null)?usage.outputTokens:null,bytes:null};
@@ -2008,15 +2027,25 @@ function buildCtx(run,spec,activeLoopInstance){
   for(const n of spec.nodes)root[n.id]=nodeView(run,n.id);return{root};}
 
 /* ---- EdgeDelivery matching ---- */
+/* 「いまどの場にいるか」は loopInstanceId 1本で表す。
+   入れ子（ループの中のループ / Map の中のループ / Map の中の Map）は
+   "外側|内側" と連ねた文字列にするので、場の深さは何段でも表せる。
+   外側の場から来た値は、内側の場でもそのまま使える（周ごとに待ち直さない）。
+   入れ子を使っていない Spec では "|" が出てこないので、前と同じに動く。 */
+const SCOPE_SEP="|";
+const scopeIsAncestor=(outerId,innerId)=>
+  outerId!=null&&innerId!=null&&String(innerId).indexOf(String(outerId)+SCOPE_SEP)===0;
 function deliveryMatchesExec(d,ex,ignoreActivation){
   if(!ignoreActivation&&NN(d.activationId)!==NN(ex.activationId))return false;
-  // ループの外から入ってきた値は、どの周回でもそのまま使える（周ごとに待ち直さない）。
-  // これが無いと「繰り返しの中のノードが、外からの入力も受けている」配線が必ず待ちで止まる。
-  if(NN(d.loopInstanceId)===null&&NN(ex.loopInstanceId)!==null)return true;
-  return NN(d.loopInstanceId)===NN(ex.loopInstanceId)&&NN(d.iteration)===NN(ex.iteration);}
+  const ds=NN(d.loopInstanceId),es=NN(ex.loopInstanceId);
+  if(ds===es)return NN(d.iteration)===NN(ex.iteration);
+  // いちばん外から来た値は、どの場でも使える
+  if(ds===null)return true;
+  // 外側の場から来た値も、その内側の場で使える
+  return scopeIsAncestor(ds,es);}
 /* ループノードが2周目以降に読むのは「戻ってきた値」だけ（最初の入力は混ぜない） */
 function deliveryPool(node,ex,ds){
-  if(isLoopNode(node)&&NN(ex.loopInstanceId)!==null){
+  if((isLoopNode(node)||isMapNode(node))&&NN(ex.loopInstanceId)!==null){
     const strict=ds.filter(d=>NN(d.loopInstanceId)===NN(ex.loopInstanceId));
     if(strict.length)return strict;}
   return ds;}
@@ -2063,6 +2092,15 @@ function applyEdgeAndValidate(rv,edge,toNode,toPort){
    ふつう: 何が動いて何秒かかって何が入ってきたか。
    詳しく: それに加えて、モデルへ送った文そのものと、切り詰めていない値。 */
 const LOGOPT={verbose:false};
+/* 実行の記録は「全部入り」なので、画面のログに出た行もそのまま持っておく。
+   記録だけ渡せば、ログを別に渡さなくても同じことが分かる状態にする。 */
+const LOG_KEEP=20000;                       // これを超えたら古い行から落とす（落とした数は記録に残す）
+function keepLog(run,cls,msg){
+  if(!run)return;
+  run.log=run.log||[];run.logDropped=run.logDropped||0;
+  run.log.push({at:new Date().toISOString(),kind:cls,text:String(msg)});
+  if(run.log.length>LOG_KEEP){run.log.shift();run.logDropped++;}
+}
 const clockOf=t=>{const d=new Date(t);const z=(v,n)=>String(v).padStart(n||2,"0");
   return `${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}.${z(d.getMilliseconds(),3)}`;};
 const capStr=(t,n)=>{t=String(t==null?"":t);const a=[...t];return a.length<=n?t:a.slice(0,n).join("")+`…（全${a.length}字）`;};
@@ -2083,8 +2121,8 @@ function usedTag(ex){
 function resolveInputsForExec(run,spec,ex){const node=spec.nodes.find(n=>n.id===ex.nodeId);
   const used=ex._used=[];
   const conf=isConfluenceNode(spec,ex.nodeId);
-  const inE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&!e.loop);const byPort={};for(const e of inE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
-  const loopInE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&e.loop);for(const e of loopInE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
+  const inE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&!e.loop&&!e.map);const byPort={};for(const e of inE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
+  const loopInE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&(e.loop||e.map));for(const e of loopInE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
   const inputs={};
   for(const[port,es]of Object.entries(byPort)){es.sort((a,b)=>(a.position||0)-(b.position||0));const card=node&&node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
     const ds=deliveryPool(node,ex,run.deliveries.filter(d=>d.toNodeId===ex.nodeId&&d.toPort===port&&deliveryMatchesExec(d,ex,conf)));
@@ -2213,16 +2251,21 @@ function resolveTargetContext(run,spec,fromExec,edge,loopEntries){
     return{activationId:fromExec.activationId,loopInstanceId:inst,iteration:li.iteration};}
   if(entry){
     const act=NN(fromExec.activationId);
-    let iid=Object.keys(run.loopInstances).find(k=>{const x=run.loopInstances[k];return x.loopId===entry.loopId&&NN(x.activationId)===act&&x.active;});
-    if(!iid){iid=entry.loopId+"#"+(++run.loopSeq);run.loopInstances[iid]={loopId:entry.loopId,activationId:act,iteration:1,active:true};run.iterationTotal++;}
+    const par=NN(fromExec.loopInstanceId);
+    let iid=Object.keys(run.loopInstances).find(k=>{const x=run.loopInstances[k];
+      return x.loopId===entry.loopId&&NN(x.activationId)===act&&x.active&&NN(x.parent)===par;});
+    if(!iid){iid=(par?par+SCOPE_SEP:"")+entry.loopId+"#"+(++run.loopSeq);
+      run.loopInstances[iid]={loopId:entry.loopId,activationId:act,iteration:1,active:true,
+        parent:par,parentIteration:NN(fromExec.iteration)};run.iterationTotal++;}
     return{activationId:fromExec.activationId,loopInstanceId:iid,iteration:run.loopInstances[iid].iteration};}
   return{activationId:fromExec.activationId,loopInstanceId:fromExec.loopInstanceId,iteration:fromExec.iteration};}
 /* ループの本体に入っているノード（そのループノードから辿れて、ループノードには戻らない範囲） */
 function loopBodySets(spec){
   const m={};
   for(const n of spec.nodes||[]){
-    if(n.type!=="loop")continue;
-    const set=new Set();const q=loopBodyEdges(spec,n.id).map(e=>e.to.node);
+    if(n.type!=="loop"&&n.type!=="map")continue;
+    const set=new Set();
+    const q=(n.type==="map"?mapBodyEdges(spec,n.id):loopBodyEdges(spec,n.id)).map(e=>e.to.node);
     while(q.length){const x=q.shift();if(x===n.id||set.has(x))continue;set.add(x);
       for(const e of spec.edges||[])if(e.from.node===x&&e.to.node!==n.id&&!set.has(e.to.node))q.push(e.to.node);}
     m[n.id]=set;}
@@ -2356,7 +2399,7 @@ async function runAssert(spec,run,ex,node,inRV){
   const list=Array.isArray(node.asserts)?node.asserts:[];
   if(!list.length)throw{code:"ASSERT_EMPTY",retryable:false,message:`${node.id}: 点検する条件が1つも書かれていない`};
   const ctx=buildCtx(run,spec,ex.loopInstanceId);
-  const locals=localsOf(inRV,ex);
+  const locals=Object.assign(localsOf(inRV,ex),mapLocals(run,ex));
   const tests=[];
   for(let i=0;i<list.length;i++){
     const a=list[i]||{};
@@ -2651,12 +2694,17 @@ async function processOneWorkItem(spec,run,store,log,ctl){
         const v=has?run.input[node.id]:run.input;
         rv=(typeof v==="string")?{type:"text",value:v}:{type:"json",value:v};
         usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};log&&log("node",`◇ INPUT(${node.id})`);}
-      else if(node.type==="loop"){
+      else if(node.type==="loop"||node.type==="map"){
         const k=Object.keys(inputs)[0];const v=k!==undefined?inputs[k]:undefined;
         rv=Array.isArray(v)?mergeToRV(v,node.merge):(v!==undefined&&v!==null?v:{type:"text",value:""});
         usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};}
       else if(node.type==="calc"){
         const scope=calcScope(run,spec,ex,node);
+        {const mi=mapItemOf(run,ex);                 // Map の1件の中だけ value / index が増える
+         if(mi){const k0=Object.keys(inputs)[0];const v0=k0!==undefined?inputs[k0]:undefined;
+           const rv0=Array.isArray(v0)?mergeToRV(v0,node.merge):v0;
+           if(!("value" in scope))scope.value=rv0?rv0.value:null;
+           if(!("index" in scope))scope.index=mi.index;}}
         const where=`${node.id} の計算`;
         if(!String(node.code||"").trim())throw{code:"CODE_EMPTY",retryable:false,message:`${where}: 中身が書かれていない`};
         const v=(node.lang==="js")
@@ -2703,6 +2751,8 @@ async function processOneWorkItem(spec,run,store,log,ctl){
     }catch(err){
       const handled=applyNodeErrorPolicy(run,spec,ex,node,err,store,log,at);
       if(handled)return handled;
+      const mapped=mapItemFailure(run,spec,ex,err,store,log);
+      if(mapped)return mapped;
       handleExecutionFailure(run,spec,ex,err,store,log);return{kind:"failed"};}
     const useUsage=(node.type==="llm"||node.type==="tool")?usage:null;
     (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rv,raw:JSON.stringify(rv.value),usage,meta:metaOf(rv,useUsage),status:"success",used:(ex._used||[]).slice(),ms:null});
@@ -2731,24 +2781,160 @@ async function routeLoopNode(spec,run,ex,node,log){
   const cfg=node.loop||{};const lid=loopIdOf(node);
   let inst=ex.loopInstanceId;
   if(!inst||!run.loopInstances[inst]||run.loopInstances[inst].loopId!==lid){
-    inst=lid+"#"+(++run.loopSeq);
-    run.loopInstances[inst]={loopId:lid,activationId:NN(ex.activationId),iteration:0,active:true};}
+    const parent=NN(ex.loopInstanceId);                 // Map の1件やもっと外のループの中かもしれない
+    inst=(parent?parent+SCOPE_SEP:"")+lid+"#"+(++run.loopSeq);
+    run.loopInstances[inst]={loopId:lid,activationId:NN(ex.activationId),iteration:0,active:true,
+      parent,parentIteration:NN(ex.iteration)};}
   const st=run.loopInstances[inst];
   const done=st.iteration;                                  // ここまでに本体へ流した回数
   const max=(cfg.max==null||cfg.max==="")?null:Number(cfg.max);
   let untilTrue=false;
-  if(cfg.until&&done>=1)untilTrue=await evalCondition(cfg.until,cfg.lang,buildCtx(run,spec,inst),localsOf(ex._rv,ex),`${node.id} の打ち切り条件`);
+  if(cfg.until&&done>=1)untilTrue=await evalCondition(cfg.until,cfg.lang,buildCtx(run,spec,inst),
+    Object.assign(localsOf(ex._rv,ex),mapLocals(run,ex)),`${node.id} の打ち切り条件`);
   const hitMax=max!=null&&done>=max;
   log&&log("loop",`↻ ${node.id}[${lid}] ${done}回まわった${max!=null?"/"+max:"（上限なし）"} 打ち切り=${untilTrue}`);
   const body=loopBodyEdges(spec,node.id),fin=loopDoneEdges(spec,node.id);
   if(untilTrue||hitMax){
     st.active=false;
     if(!fin.length){log&&log("dim",`  ${node.id}: 抜けたあとの線が無いのでここで終わり`);return{kind:"completed"};}
-    return routeEdgeSet(spec,run,ex,node,fin,{activationId:ex.activationId,loopInstanceId:null,iteration:null},log,"抜ける");}
+    // 抜けたら「このループに入る前の場」へ戻す（Map の1件の中なら、その1件の場へ戻る）
+    return routeEdgeSet(spec,run,ex,node,fin,
+      {activationId:ex.activationId,loopInstanceId:st.parent||null,
+       iteration:st.parentIteration==null?null:st.parentIteration},log,"抜ける");}
   if(!body.length)throw{code:"LOOP_NO_BODY",message:`${node.id}: 繰り返す先が無い（ループノードから線を1本出す）`};
   st.iteration=done+1;run.iterationTotal++;
   return routeEdgeSet(spec,run,ex,node,body,{activationId:ex.activationId,loopInstanceId:inst,iteration:st.iteration},log,`${st.iteration}周目`);}
 /* 決めた行き先へ流す（2本以上なら分岐グループを作る＝失敗の波及の単位） */
+/* ---- Map（配列の1件ずつに同じところを通す） ----
+   ループと同じ形の配線で、違うのは「1周ずつ順に」ではなく「全件をいっぺんに配る」こと。
+   1件ごとの隔離は、ループと同じ (activationId, loopInstanceId, iteration) でやる。
+   loopInstanceId を「<Mapの回>/i<何件目>」にするので、
+   ・件どうしが混ざらない（別 loopInstanceId）
+   ・Map の中の Map / ループ / モジュールも、その中でまた別の instance を作るので混ざらない
+   ・入れ子の深さは instance id の連なりがそのまま表す（別に stack を持たなくてよい）
+   Runtime は単一の待ち行列を1件ずつ処理するので、「同時」ではなく「交互」に進む。 */
+const isMapNode=n=>!!n&&n.type==="map";
+const mapIdOf=n=>((n.map&&n.map.id)||n.id);
+const mapBodyEdges=(spec,id)=>(spec.edges||[]).filter(e=>e.from.node===id&&e.mapRole!=="done"&&!e.map);
+const mapDoneEdges=(spec,id)=>(spec.edges||[]).filter(e=>e.from.node===id&&e.mapRole==="done");
+const mapBackEdges=(spec,node)=>(spec.edges||[]).filter(e=>e.map&&e.map.id===mapIdOf(node)&&e.to.node===node.id);
+const MAP_ITEM_POLICIES=["error","skip","null","value"];
+function mapItemOf(run,ex){
+  const li=(ex&&ex.loopInstanceId)?(run.loopInstances||{})[ex.loopInstanceId]:null;
+  if(!li||!li.mapGroup)return null;
+  const G=(run.mapInstances||{})[li.mapGroup];
+  return G?{li,G,index:li.index}:null;
+}
+/* 出す配列。skip した件は詰める（null を出す設定なら null がそのまま並ぶ） */
+/* Map の1件の中だけで増える名前。外では何も足さない（今までの式の意味を変えない）。 */
+function mapLocals(run,ex){
+  const cur=mapItemOf(run,ex);
+  return cur?{index:cur.index}:{};
+}
+function mapCollected(G){
+  const out=[];
+  for(let i=0;i<G.total;i++){if(G.status[i]==="skipped")continue;out.push(G.results[i]);}
+  return out;
+}
+async function routeMapNode(spec,run,ex,node,log){
+  run.mapInstances=run.mapInstances||{};
+  const mid=mapIdOf(node);
+  const fin=mapDoneEdges(spec,node.id);
+  const finish=G=>{
+    G.active=false;
+    const arr=mapCollected(G);
+    const skipped=G.total-arr.length;
+    log&&log("loop",`⇶ ${node.id}[${mid}] ${G.total}件おわり → 結果${arr.length}件${skipped?`（飛ばした${skipped}件）`:""}`);
+    if(!fin.length){log&&log("dim",`  ${node.id}: 終わったあとの線が無いのでここで終わり`);return{kind:"completed"};}
+    const keep=ex._rv;ex._rv=rvOf(arr);
+    try{return routeEdgeSet(spec,run,ex,node,fin,
+      {activationId:G.parentActivationId,loopInstanceId:G.parentLoopInstanceId,iteration:G.parentIteration},
+      log,"ぜんぶ終わった");}
+    finally{ex._rv=keep;}
+  };
+  const cur=mapItemOf(run,ex);
+  if(cur&&cur.G.mapId===mid&&cur.G.nodeId===node.id){        // 1件が戻ってきた
+    const{G,index}=cur;
+    if(G.status[index]==="pending"){
+      G.status[index]="success";G.results[index]=ex._rv?ex._rv.value:null;G.done++;}
+    cur.li.active=false;
+    log&&log("loop",`⇢ ${node.id}[${mid}] ${index+1}件目おわり（${G.done}/${G.total}）`);
+    if(G.done<G.total)return{kind:"completed"};
+    return finish(G);
+  }
+  // ここが始まり: 配列を受け取って1件ずつ配る
+  const v=ex._rv?ex._rv.value:null;
+  if(!Array.isArray(v))throw{code:"MAP_NOT_ARRAY",retryable:false,
+    message:`${node.id}: Map に入れられるのは配列だけ（来たのは ${showVal(v)}）。手前で配列にしてから渡す`};
+  const body=mapBodyEdges(spec,node.id);
+  if(!body.length)throw{code:"MAP_NO_BODY",retryable:false,
+    message:`${node.id}: 1件ずつ流す先が無い（Mapノードから線を1本出す）`};
+  const gid=mid+"#"+(++run.mapSeq);
+  const G=run.mapInstances[gid]={groupId:gid,mapId:mid,nodeId:node.id,active:true,
+    parentActivationId:NN(ex.activationId),parentLoopInstanceId:NN(ex.loopInstanceId),parentIteration:NN(ex.iteration),
+    total:v.length,done:0,items:v.slice(),results:new Array(v.length).fill(null),
+    status:new Array(v.length).fill("pending"),errors:{},startedAt:new Date().toISOString()};
+  log&&log("loop",`⇶ ${node.id}[${mid}] ${v.length}件を1件ずつ流す`);
+  if(!v.length)return finish(G);
+  run.totals.mapItems=(run.totals.mapItems||0)+v.length;
+  const keep=ex._rv;
+  try{
+    for(let i=0;i<v.length;i++){
+      const inst=(G.parentLoopInstanceId?G.parentLoopInstanceId+SCOPE_SEP:"")+gid+"/i"+i;
+      run.loopInstances[inst]={loopId:mid,activationId:NN(ex.activationId),iteration:i+1,
+        active:true,mapGroup:gid,index:i,
+        parent:G.parentLoopInstanceId,parentIteration:G.parentIteration};
+      ex._rv=rvOf(v[i]);
+      routeEdgeSet(spec,run,ex,node,body,{activationId:ex.activationId,loopInstanceId:inst,iteration:i+1},
+        log,`${i+1}件目`);
+    }
+  }finally{ex._rv=keep;}
+  return{kind:"completed"};
+}
+/* Map の1件だけが失敗したとき（node.onItemError）。Map 全体のエラーとは分けて数える。
+   ノードごとの onError が先で、それで直らなかったときにここへ来る。 */
+function mapItemFailure(run,spec,ex,err,store,log){
+  const cur=mapItemOf(run,ex);
+  if(!cur)return null;
+  const{G,index}=cur;
+  if(!G.active||G.status[index]!=="pending")return null;
+  const node=(spec.nodes||[]).find(n=>n.id===G.nodeId);
+  const pol=(node&&node.onItemError)||"error";
+  if(pol==="error"||!MAP_ITEM_POLICIES.includes(pol))return null;
+  errRec(run,ex,err,"map:"+pol);
+  const how={skip:"この件は結果から外して先へ進む",null:"この件は null にして先へ進む",
+    value:"この件は決めた値にして先へ進む"}[pol];
+  log&&log("err",`✗ ${ex.nodeId}（${G.nodeId} の ${index+1}件目）: ${err.code||"ERROR"} ${err.message||""}`);
+  log&&log("err",`  → Map の設定（onItemError=${pol}）: ${how}`);
+  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push(Object.assign({execId:ex.execId,
+    loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:null,raw:null,usage:(err&&err.usage)||null,
+    meta:{len:null,tokens:(err&&err.usage&&err.usage.outputTokens)||null,bytes:null},
+    status:"stopped",errorKind:err.code||"ERROR",stage:err.stage,handledAs:"map:"+pol,
+    used:(ex._used||[]).slice()},attemptTimes(ex)));
+  ex.status="stopped";ex.errorKind=err.code||"ERROR";
+  G.status[index]=(pol==="skip")?"skipped":"recovered";
+  G.results[index]=(pol==="value")?(node.onItemErrorValue===undefined?null:node.onItemErrorValue):null;
+  G.errors[index]={node:ex.nodeId,kind:err.code||"ERROR",message:errText(err),handledAs:pol};
+  G.done++;
+  run.totals.mapItemErrors=(run.totals.mapItemErrors||0)+1;
+  // その件の残りの実行はもう要らない（他の件には触らない）
+  const inst=NN(ex.loopInstanceId);
+  for(const wi of run.workQueue.slice()){const e=run.executions[wi.execId];
+    if(e&&e.execId!==ex.execId&&NN(e.loopInstanceId)===inst&&e.status!=="completed"){
+      e.status="cancelled";e.cancelReason="map_item_failed";}}
+  run.workQueue=run.workQueue.filter(wi=>{const e=run.executions[wi.execId];
+    return !(e&&(e.execId===ex.execId||(NN(e.loopInstanceId)===inst&&e.status==="cancelled")));});
+  if(cur.li)cur.li.active=false;
+  // Map ノードへ「1件終わった」と伝える（ふつうの戻り線と同じ道を通す）
+  const backs=mapBackEdges(spec,node);
+  if(backs.length){
+    const tctx={activationId:ex.activationId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration};
+    makeDelivery(run,spec,backs[0],rvOf(G.results[index]),ex.execId,tctx);
+    enqueueTo(run,spec,backs[0],tctx);
+  }
+  if(store)store.save(run);
+  return{kind:"map_item_failed"};
+}
 function routeEdgeSet(spec,run,ex,node,es,ctx,log,label){
   const act=es.length>1?`fork#${++run.actSeq}`:ctx.activationId;
   if(es.length>1){
@@ -2767,7 +2953,7 @@ function routeEdgeSet(spec,run,ex,node,es,ctx,log,label){
 async function routeCondNode(spec,run,ex,node,log){
   const cases=outPortsOf(node);
   const ctx=buildCtx(run,spec,ex.loopInstanceId);
-  const locals=localsOf(ex._rv,ex);
+  const locals=Object.assign(localsOf(ex._rv,ex),mapLocals(run,ex));
   let hit=null;
   for(const c of cases){
     if(c.else){hit=c;break;}
@@ -2792,15 +2978,18 @@ async function routeExec(spec,run,ex,byId,loopEntries,log){
   run.routeSeq=(run.routeSeq||0)+1;      // ここで配る線は「同時に届いた」とみなす
   const node=byId[ex.nodeId];const outEdges=(spec.edges||[]).filter(e=>e.from.node===node.id);
   if(isLoopNode(node))return await routeLoopNode(spec,run,ex,node,log);
+  if(isMapNode(node))return await routeMapNode(spec,run,ex,node,log);
   if(node.type==="cond")return await routeCondNode(spec,run,ex,node,log);
   if(outEdges.length===0)return{kind:"completed"};
   const loopEdge=outEdges.find(e=>e.loop&&!isLoopNode(byId[e.to.node]));
   if(loopEdge){const lid=loopEdge.loop.id;const inst=ex.loopInstanceId;const iter=run.loopInstances[inst].iteration;const max=loopEdge.loop.max;
     const ctx=buildCtx(run,spec,inst);let untilTrue=false;if(loopEdge.loop.until)untilTrue=evalBoolAt(loopEdge.loop.until,ctx,`loop[${lid}] の until`);
     log&&log("loop",`↻ loop[${lid}] iter=${iter}/${max} until=${untilTrue}`);
-    if(untilTrue||iter>=max){run.loopInstances[inst].active=false;
+    if(untilTrue||iter>=max){const st0=run.loopInstances[inst];st0.active=false;
       const elseE=outEdges.find(e=>e.else)||outEdges.find(e=>!e.loop&&!e.if);
-      if(elseE){const tctx={activationId:ex.activationId,loopInstanceId:null,iteration:null};makeDelivery(run,spec,elseE,ex._rv,ex.execId,tctx);enqueueTo(run,spec,elseE,tctx);}
+      if(elseE){const tctx={activationId:ex.activationId,loopInstanceId:st0.parent||null,
+        iteration:st0.parentIteration==null?null:st0.parentIteration};
+        makeDelivery(run,spec,elseE,ex._rv,ex.execId,tctx);enqueueTo(run,spec,elseE,tctx);}
     }else{run.loopInstances[inst].iteration=iter+1;run.iterationTotal++;
       const tctx=resolveTargetContext(run,spec,ex,loopEdge,loopEntries);makeDelivery(run,spec,loopEdge,ex._rv,ex.execId,tctx);enqueueTo(run,spec,loopEdge,tctx);}
     return{kind:"completed"};}
@@ -2872,8 +3061,10 @@ function remapNodeIds(spec,map){
 /* ループIDの付け替え（ループノードと、そこへ戻る線の両方） */
 function remapLoopIds(spec,map){
   const to=id=>Object.prototype.hasOwnProperty.call(map,id)?map[id]:id;
-  for(const n of spec.nodes||[])if(n.loop&&n.loop.id)n.loop.id=to(n.loop.id);
-  for(const e of spec.edges||[])if(e.loop&&e.loop.id)e.loop.id=to(e.loop.id);
+  for(const n of spec.nodes||[]){if(n.loop&&n.loop.id)n.loop.id=to(n.loop.id);
+    if(n.map&&n.map.id)n.map.id=to(n.map.id);}
+  for(const e of spec.edges||[]){if(e.loop&&e.loop.id)e.loop.id=to(e.loop.id);
+    if(e.map&&e.map.id)e.map.id=to(e.map.id);}
   return spec;
 }
 /* ---- モジュール（部分ハーネスの再利用） ----
@@ -3029,10 +3220,16 @@ function traceReport(spec,run,opt){
       input:traceVal(run.input,cap),result:run.result?traceVal(run.result.value,cap):null},
     errors:run.errors||[],
     assertions:run.assertions||[],
+    log:(run.log||[]).slice(),          // 画面のログに出た行ぜんぶ（古い分を落としたら logDropped に数）
+    logDropped:run.logDropped||0,
     notRun:whyNotRun(spec,run),
     nodes,executions,deliveries,
     workQueue:(run.workQueue||[]).map(w=>({execId:w.execId,phase:w.phase})),
     loopInstances:run.loopInstances||{},
+    maps:Object.values(run.mapInstances||{}).map(G=>({groupId:G.groupId,map:G.mapId,node:G.nodeId,
+      total:G.total,done:G.done,active:!!G.active,startedAt:G.startedAt||null,
+      items:G.items.map((v,i)=>({index:i,status:G.status[i],value:traceVal(v,cap),
+        output:G.status[i]==="skipped"?null:traceVal(G.results[i],cap),error:G.errors[i]||null}))})),
     branchGroups:Object.values(run.branchGroups||{}).map(g=>({activationId:g.activationId,failurePolicy:g.failurePolicy,
       status:g.status,branches:Object.values(g.branches||{}),failures:g.failures||[]}))};
 }
@@ -3070,7 +3267,12 @@ const traceText=(spec,run,opt)=>JSON.stringify(traceReport(spec,run,opt),null,1)
 
 /* ---- runUntilIdle ---- */
 const RUN_GUARD=20000;      // 安全装置。ここまで回ったら止めて Resume に任せる（勝手に諦めない）
+/* Runtime に渡される log を包んで、画面に出すのと同時に記録にも残す */
+function tapLog(run,log){
+  return (cls,msg)=>{keepLog(run,cls,msg);if(log)log(cls,msg);};
+}
 async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
+  log=tapLog(run,log);
   while(run.status==="running"||run.status==="cancelling"){
     if(guard++>=RUN_GUARD){hitGuard=true;break;}
     // 無限ループでも「緊急停止」を押せるように、ときどきブラウザに順番を返す
@@ -3123,7 +3325,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,runSummary,whyNotRun,LOGOPT,expandModules,modulePorts,remapNodeIds,remapLoopIds,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,runSummary,whyNotRun,LOGOPT,expandModules,startRun,resumeRun,modulePorts,remapNodeIds,remapLoopIds,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -3343,10 +3545,14 @@ function setSize(id,v){const m=Ed.spec.metadata=Ed.spec.metadata||{};
 /* 入口(●)と出口(○)をノードのどこに置くか。
    ループノードは「戻ってくる線」が下から入り、「繰り返す先（本体）」は上へ戻し、
    「抜けたあと」は下へ流れる。だから入口＝下、本体の出口＝上、抜けたあとの出口＝下に置く。 */
-const loopRoleOf=e=>(e&&e.loopRole==="done")?"done":"body";
+const loopRoleOf=e=>(e&&(e.loopRole==="done"||e.mapRole==="done"))?"done":"body";
+/* 上下に「本体 / 抜けたあと」の丸が分かれるノード（ループと 1件ずつ） */
+const hasRoleDots=n=>!!n&&(n.type==="loop"||n.type==="map");
+const roleKeyOf=n=>(n&&n.type==="map")?"mapRole":"loopRole";
+const backKeyOf=n=>(n&&n.type==="map")?"map":"loop";
 function outDotsOf(n){
   const ps=outPortsOf(n);
-  if(!n||n.type!=="loop")return ps.map(x=>({port:x.id,role:null}));
+  if(!hasRoleDots(n))return ps.map(x=>({port:x.id,role:null}));
   const out=[];
   const add=(port,role)=>{if(!out.some(d=>d.port===port&&d.role===role))out.push({port,role});};
   for(const e of Ed.spec.edges||[])if(e.from.node===n.id)add(e.from.port||"out",loopRoleOf(e));
@@ -3354,7 +3560,7 @@ function outDotsOf(n){
   if(!out.some(d=>d.role==="done"))add(ps[0].id,"done");
   return out;}
 function portPos(n,which,sz,portId,role){
-  const isLoop=n&&n.type==="loop";
+  const isLoop=hasRoleDots(n);
   const XY=(f,far)=>Ed.dir==="tb"?{x:Math.round(sz.w*f),y:far?sz.h:0}:{x:far?sz.w:0,y:Math.round(sz.h*f)};
   if(!isLoop){
     if(which!=="out")return XY(0.5,false);
@@ -3379,6 +3585,7 @@ const NODE_KINDS=[
   {type:"loop",label:"ループ",desc:"条件が来るまで同じところを何回も回す"},
   {type:"cond",label:"条件分岐",desc:"条件で行き先を選ぶ（式・JavaScript）"},
   {type:"calc",label:"計算",desc:"入ってきた値を計算する（式・JavaScript）"},
+  {type:"map",label:"1件ずつ",desc:"配列の1件ずつに同じところを通して、結果を配列で返す"},
   {type:"module",label:"モジュール",desc:"別に作った部分ハーネスを1つのノードとして呼ぶ"},
   {type:"pass",label:"そのまま通す",desc:"値を変えずに中継する（名前を付けて追いやすくする）"},
   {type:"reduce",label:"まとめる",desc:"並んだ値を合計・平均・いちばん良いもの…にする"},
@@ -3387,7 +3594,8 @@ const NODE_KINDS=[
   {type:"output",label:"出力",desc:"最終結果を受け取る"}
 ];
 const TYPE_LABEL={input:"入力",llm:"LLM",join:"Join",loop:"ループ",cond:"条件分岐",calc:"計算",
-  reduce:"まとめる",quorum:"多数決",assert:"点検",module:"モジュール",pass:"そのまま通す",output:"出力",tool:"ツール"};
+  reduce:"まとめる",quorum:"多数決",assert:"点検",module:"モジュール",pass:"そのまま通す",
+  map:"1件ずつ",output:"出力",tool:"ツール"};
 const LANGS=[{v:"expr",t:"かんたんな式（+ - * / と比較）"},{v:"js",t:"JavaScript（この端末で動く）"}];
 const LANG_LABEL={expr:"式",js:"JavaScript"};
 /* ブラウザの中で動かせる言語は JavaScript だけ。ここは正直に書く（選べるように見せない）。 */
@@ -3693,7 +3901,7 @@ function edRender(){
     d.innerHTML=`<div class="ndh">${esc(n.id)}</div><div class="ndb">${esc(nodeSub(n))}</div>`
       +(m2?`<div class="ndm">${esc(m2)}</div>`:"")+`<div class="ndp" data-prev="${esc(n.id)}"></div>`
       +(n.type==="input"?""
-        :n.type==="loop"
+        :hasRoleDots(n)
           ?`<div class="port pin" style="${pst("in",null,"entry")}" data-node="${esc(n.id)}" data-side="in" data-role="entry"></div>`
            +`<div class="port pin" style="${pst("in",null,"back")}" data-node="${esc(n.id)}" data-side="in" data-role="back"></div>`
           :`<div class="port pin" style="${pst("in")}" data-node="${esc(n.id)}" data-side="in"></div>`)
@@ -3760,6 +3968,8 @@ function nodeSub(n){
 }
 function edgeLabel(e){
   if(e.loop&&isLoopNode(nodeById(e.to.node)))return "戻る";
+  if(e.mapRole==="done")return "ぜんぶ終わったあと";
+  if(e.map)return "1件ぶんの戻り";
   if(e.loopRole==="done")return "抜けたあと";
   if(e.loop)return `loop ${e.loop.id||""} ×${e.loop.max||"?"}`;
   if(e.else)return "else";
@@ -3862,7 +4072,7 @@ $("#cv").addEventListener("pointermove",ev=>{
     if(!moved&&Math.hypot(ev.clientX-press.px,ev.clientY-press.py)<8)return;
     moved=true;
     const e=(Ed.spec.edges||[])[press.i];if(!e)return;
-    const a=portXY(e.from.node,"out",e.from.port,loopRoleOf(e)),b=portXY(e.to.node,"in",null,e.loop?"back":"entry");
+    const a=portXY(e.from.node,"out",e.from.port,loopRoleOf(e)),b=portXY(e.to.node,"in",null,(e.loop||e.map)?"back":"entry");
     const w=toWorld(ev.clientX,ev.clientY);
     // 中点が指の位置に来るように制御点を置く（Q曲線の中点は (a+2c+b)/4）
     setBend(e,{x:Math.round(2*w.x-(a.x+b.x)/2),y:Math.round(2*w.y-(a.y+b.y)/2)});
@@ -3881,7 +4091,7 @@ function setBend(e,v){const m=Ed.spec.metadata=Ed.spec.metadata||{};
   if(m.bends){delete m.bends[edgeKey(e)];if(!Object.keys(m.bends).length)delete m.bends;}}
 const edgeKey=e=>`${e.from.node}${(e.from.port&&e.from.port!=="out")?":"+e.from.port:""}>${e.to.node}${(e.to.port&&e.to.port!=="in")?"."+e.to.port:""}${e.position!=null?"#"+e.position:""}`;
 function edgeGeom(e){
-  const a=portXY(e.from.node,"out",e.from.port,loopRoleOf(e)),b=portXY(e.to.node,"in",null,e.loop?"back":"entry");
+  const a=portXY(e.from.node,"out",e.from.port,loopRoleOf(e)),b=portXY(e.to.node,"in",null,(e.loop||e.map)?"back":"entry");
   const bd=bendOf(e);
   if(bd)return{d:`M ${a.x} ${a.y} Q ${bd.x} ${bd.y} ${b.x} ${b.y}`,mx:(a.x+2*bd.x+b.x)/4,my:(a.y+2*bd.y+b.y)/4,bent:true};
   return{d:edgePath(a,b),mx:(a.x+b.x)/2,my:(a.y+b.y)/2,bent:false};
@@ -3955,7 +4165,7 @@ function insertJoin(nodeId,port){
 function fanInTargets(){
   const out=[],seen=new Set();
   for(const e of Ed.spec.edges||[]){
-    if(e.loop)continue;const port=e.to.port||"in";const k=e.to.node+"."+port;
+    if(e.loop||e.map)continue;const port=e.to.port||"in";const k=e.to.node+"."+port;
     if(seen.has(k))continue;seen.add(k);
     const es=edgesInto(e.to.node,port);
     if(es.length>1&&!es.every(x=>x.if||x.else))out.push({id:e.to.node,port});
@@ -3984,18 +4194,23 @@ function connect(from,to,fromPort,fromRole){
   const src=nodeById(from);
   es.push(edge);
   // 本体の先から ループノード へ戻る線は「戻り線」にする（回数と条件はループノードが持つ）
-  if(tn&&tn.type==="loop"&&canReach(to,from)){
-    edge.loop={id:loopIdOf(tn)};delete edge.position;
-    syncFromCanvas();setHint(`戻り線にした: ${from} → ${to}（${to} が回数と条件を見る）`);return;}
-  // ループノードから出る線は、どの丸から引いたかで役割が決まる（上=本体 / 下=抜けたあと）
-  if(src&&src.type==="loop"){
-    if(fromRole==="done")edge.loopRole="done";
+  if(tn&&hasRoleDots(tn)&&canReach(to,from)){
+    if(tn.type==="map")edge.map={id:(tn.map&&tn.map.id)||tn.id};
+    else edge.loop={id:loopIdOf(tn)};
+    delete edge.position;
+    syncFromCanvas();
+    setHint(tn.type==="map"?`戻り線にした: ${from} → ${to}（1件ぶんが ${to} に戻る）`
+      :`戻り線にした: ${from} → ${to}（${to} が回数と条件を見る）`);return;}
+  // ループ / 1件ずつ から出る線は、どの丸から引いたかで役割が決まる（上=本体 / 下=抜けたあと）
+  if(src&&hasRoleDots(src)){
+    const rk=roleKeyOf(src);
+    if(fromRole==="done")edge[rk]="done";
     else if(!fromRole){
       const others=outEdges(from).filter(e=>e!==edge);
-      if(others.length&&!others.some(e=>e.loopRole==="done"))edge.loopRole="done";
+      if(others.length&&!others.some(e=>e[rk]==="done"))edge[rk]="done";
     }
     syncFromCanvas();
-    setHint(`つないだ: ${from} → ${to}（${edge.loopRole==="done"?"抜けたあと（下へ流れる）":"繰り返す先（本体）"}）`);return;}
+    setHint(`つないだ: ${from} → ${to}（${edge[rk]==="done"?(src.type==="map"?"ぜんぶ終わったあと":"抜けたあと（下へ流れる）"):(src.type==="map"?"1件ずつ流す先":"繰り返す先（本体）")}）`);return;}
   // 入口が2本目になったら、そのまま受け取れる形にする（確認は出さない）。
   // どう1つの文にするかはノード編集の「複数の入力が来たときの受け取り方」で決まる（既定は改行でつなぐ）
   if(port!=="items"&&already>=1&&portCard(to,port)!=="many"){
@@ -4360,6 +4575,41 @@ function openNodeSheet(id){
       +(n.lang==="js"?`<br>別スレッドで動かすので画面は止まらない。3秒で終わらなければ打ち切る。`
                      :`<br>使える関数: len() has() regex() count() min() max() json_parse() json_stringify()。他のノードの値は <code>ノード名.out.項目</code> でも読める。`)+`</div>`;
   }
+  if(n.type==="map"){
+    const body=(Ed.spec.edges||[]).filter(e=>e.from.node===n.id&&e.mapRole!=="done"&&!e.map);
+    const back=(Ed.spec.edges||[]).filter(e=>e.map&&e.map.id===((n.map&&n.map.id)||n.id)&&e.to.node===n.id);
+    const fin=(Ed.spec.edges||[]).filter(e=>e.from.node===n.id&&e.mapRole==="done");
+    h+=`<div class="mini">入ってきた<b>配列</b>の1件ずつに、同じところを通す。`
+      +`全部終わったら<b>入力と同じ順番</b>の配列にして「終わったあと」へ流す。</div>`;
+    h+=fld("この1件ずつの名前（戻り線と合わせる）",txt("map.id",getP(n,"map.id")||n.id,n.id));
+    h+=fld("1件が失敗したとき",sel("onItemError",n.onItemError||"error",[
+      {v:"error",t:"実行を止める（既定）"},
+      {v:"skip",t:"その件を結果から外して、残りを続ける"},
+      {v:"null",t:"その件を null にして、残りを続ける"},
+      {v:"value",t:"その件を決めた値にして、残りを続ける"}]));
+    if(n.onItemError==="value")
+      h+=fld("そのとき出す値（JSONで書く）",
+        `<textarea data-json="onItemErrorValue" placeholder='{"error":true}'>${esc(n.onItemErrorValue===undefined?"":JSON.stringify(n.onItemErrorValue))}</textarea>`);
+    h+=`<div class="mini">これは<b>1件だけ</b>の話。Mapノード自身が失敗したとき（配列でない値が来たなど）は、`
+      +`下の「エラーが起きたとき」の方が効く。</div>`;
+    h+=`<div class="mini">いまの配線: 1件ずつ流す先 <b>${body.length}</b>本 ／ 戻り線 <b>${back.length}</b>本 ／ 終わったあと <b>${fin.length}</b>本`
+      +(back.length?"":`<br><span style="color:var(--warn)">戻り線が無い。本体の終わりから ${esc(n.id)} へつなぐと戻り線になる。</span>`)
+      +`</div>`;
+    {const outs=outEdges(n.id).filter(e=>!e.map);
+     if(outs.length){
+       h+=`<div class="fld"><span>出口（どれが1件ずつ流す先か）</span><div>`;
+       outs.forEach(e=>{const gi=(Ed.spec.edges||[]).indexOf(e);
+         h+=`<div class="ordrow"><span class="nm">→ ${esc(e.to.node)}</span><select data-mrole="${gi}">`
+           +[["body","1件ずつ流す先（本体）"],["done","ぜんぶ終わったあと"]].map(([v,t])=>
+             `<option value="${v}"${(e.mapRole==="done"?"done":"body")===v?" selected":""}>${t}</option>`).join("")
+           +`</select></div>`;});
+       h+=`</div></div>`;}}
+    if(body.length>1||fin.length>1)
+      h+=fld("同じ役割の線が2本以上 — 失敗したときの波及",sel("routing.failurePolicy",getP(n,"routing.failurePolicy")||"fail_fast",
+        [{v:"fail_fast",t:"fail_fast（兄弟を止める）"}]));
+    h+=`<div class="mini">1件の中では <code>value</code>（その件の値）と <code>index</code>（何件目か・0から）が使える。`
+      +`Runtime は待ち行列を1件ずつ処理するので、<b>同時ではなく交互</b>に進む。</div>`;
+  }
   if(n.type==="module"){
     const mods=Object.keys(Ed.spec.modules||{});
     const def=(Ed.spec.modules||{})[n.module];
@@ -4613,6 +4863,10 @@ function openNodeSheet(id){
   });
   $("#sheetBody").querySelectorAll("[data-mv]").forEach(b=>{
     b.onclick=()=>moveInput(n.id,b.dataset.port,Number(b.dataset.i),b.dataset.mv);});
+  $("#sheetBody").querySelectorAll("[data-mrole]").forEach(sl=>{
+    sl.onchange=()=>{const e=(Ed.spec.edges||[])[Number(sl.dataset.mrole)];if(!e)return;
+      if(sl.value==="done")e.mapRole="done";else delete e.mapRole;
+      syncFromCanvas();openNodeSheet(n.id);};});
   $("#sheetBody").querySelectorAll("[data-role]").forEach(sl=>{
     sl.onchange=()=>{const e=(Ed.spec.edges||[])[Number(sl.dataset.role)];if(!e)return;
       if(sl.value==="done")e.loopRole="done";else delete e.loopRole;
@@ -4919,6 +5173,17 @@ function openNodeSheet(id){
      else{n.onError=oe.value;if(oe.value!=="value")delete n.onErrorValue;
        else if(n.onErrorValue===undefined)n.onErrorValue=null;}
      syncFromCanvas();openNodeSheet(n.id);};}
+  {const iv=$("#sheetBody").querySelector('[data-json="onItemErrorValue"]');
+   if(iv)iv.oninput=()=>{const v=iv.value.trim();
+     if(!v){n.onItemErrorValue=null;iv.style.borderColor="";}
+     else{try{n.onItemErrorValue=JSON.parse(v);iv.style.borderColor="";}
+       catch(_){iv.style.borderColor="var(--err)";return;}}
+     syncFromCanvas();};}
+  {const oi=$("#sheetBody").querySelector('select[data-f="onItemError"]');
+   if(oi)oi.onchange=()=>{n.onItemError=oi.value;
+     if(oi.value!=="value")delete n.onItemErrorValue;
+     else if(n.onItemErrorValue===undefined)n.onItemErrorValue=null;
+     syncFromCanvas();openNodeSheet(n.id);};}
   {const ev=$("#sheetBody").querySelector('[data-json="onErrorValue"]');
    if(ev)ev.oninput=()=>{
      const v=ev.value.trim();
@@ -5059,7 +5324,7 @@ function openAddSheet(){
 }
 function addNode(type){
   const base={input:"in",llm:"llm",join:"jn",loop:"lp",cond:"cd",calc:"cl",
-    reduce:"rd",quorum:"qm",assert:"chk",module:"mod",pass:"ps",output:"out"}[type]||"n";
+    reduce:"rd",quorum:"qm",assert:"chk",module:"mod",pass:"ps",map:"mp",output:"out"}[type]||"n";
   const id=newId(base);
   const n={id,type};
   if(type==="llm"){const provs=Object.keys(Ed.spec.providers||{});
@@ -5075,6 +5340,8 @@ function addNode(type){
   if(type==="quorum"){n.lang="expr";n.condition="value.score >= 80";n.required=2;
     n.inputs={in:{type:"any",cardinality:"many"}};n.start={mode:"all"};}
   if(type==="module")n.module=Object.keys(Ed.spec.modules||{})[0]||"";
+  if(type==="map"){n.map={id};n.order="input";n.onItemError="error";
+    n.inputs={in:{type:"any",cardinality:"many"}};}
   if(type==="assert"){n.lang="expr";n.onFail="continue";
     n.asserts=[{name:"点数が8以上",expr:"value.score >= 8",severity:"fail"}];}
   Ed.spec.nodes=Ed.spec.nodes||[];Ed.spec.nodes.push(n);
@@ -6092,8 +6359,9 @@ setHint("ノードをタップすると中身を編集。○ → ● の順に�
 window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
   nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;},
   // Runtime をそのまま呼べる口（自動テスト用。画面を触らずに走らせて中身を見る）
-  eng:{fullRun,validate,traceReport,traceText,whyNotRun,LOGOPT,specToHSL,hslToSpec,errText,
-    expandModules,modulePorts,remapNodeIds,remapLoopIds,reviewSpec}};
+  eng:{fullRun,validate,traceReport,traceText,runSummary,whyNotRun,LOGOPT,specToHSL,hslToSpec,errText,
+    expandModules,modulePorts,remapNodeIds,remapLoopIds,reviewSpec,
+    processOneWorkItem,resumeRun,startRun,makeRun,memStore}};
 
 /* ---- 使い方（？ボタン） ---- */
 const HELP_TEXT=`# Harness Studio の使い方
@@ -7779,6 +8047,146 @@ export async function CreateMLCEngine(model,opt){
     &&(r.nodeRuns["w1__評価"]||[]).length===2&&(r.nodeRuns["w2__評価"]||[]).length===2
     &&T.harness.modules.some(m=>m.name==="書き直し"&&m.version==="1")
     &&validate(rec).some(e=>/再帰/.test(e)));}
+ // 70 Map: 0件/1件/3件/100件・入力順を守る・text/JSON/null が混ざってもよい
+ {const mk=(items,extra)=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"src",type:"calc",lang:"js",code:"return "+JSON.stringify(items)+";"},
+    Object.assign({id:"各件",type:"map"},extra||{}),
+    {id:"検証",type:"calc",lang:"js",code:"return {v:value,i:index,len:String(value??'').length};"},
+    {id:"まとめ",type:"pass"},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"src",port:"in"}},
+     {from:{node:"src",port:"out"},to:{node:"各件",port:"in"},position:0},
+     {from:{node:"各件",port:"out"},to:{node:"検証",port:"in"},mapRole:"body"},
+     {from:{node:"検証",port:"out"},to:{node:"各件",port:"in"},map:{id:"各件"},position:1},
+     {from:{node:"各件",port:"out"},to:{node:"まとめ",port:"in"},mapRole:"done"},
+     {from:{node:"まとめ",port:"out"},to:{node:"out",port:"in"}}]});
+  const go=async items=>{const sp=mk(items);const v=validate(sp);if(v.length)return{v};
+    const r=await fullRun(sp,{});return{st:r.status,out:r.result&&r.result.value,
+      n:(r.nodeRuns["検証"]||[]).length,items:r.totals.mapItems};};
+  const r0=await go([]),r1=await go(["A"]),r3=await go(["あ",null,123]);
+  const big=Array.from({length:100},(_,i)=>"x".repeat((i%7)+1));
+  const r100=await go(big);
+  ok("70 Map: 0/1/3/100件・入力順を守る・text/JSON/null が混ざってもよい",
+    r0.st==="success"&&JSON.stringify(r0.out)==="[]"&&r0.n===0
+    &&r1.st==="success"&&r1.out.length===1&&r1.out[0].v==="A"&&r1.out[0].i===0
+    &&r3.st==="success"&&JSON.stringify(r3.out.map(x=>x.v))==='["あ",null,123]'
+      &&JSON.stringify(r3.out.map(x=>x.i))==="[0,1,2]"
+    &&r100.st==="success"&&r100.out.length===100&&r100.n===100&&r100.items===100
+      &&r100.out.every((x,i)=>x.i===i&&x.v===big[i]));}
+ // 71 Map の入れ子: Map内Loop / Map内Map / Map→並列→Join / Map→Module（場が混ざらない）
+ {const pass=(id)=>({id,type:"pass"});
+  // Map の中にループ
+  const A={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"src",type:"calc",lang:"js",code:'return ["a","b"];'},
+    {id:"m",type:"map"},
+    {id:"lp",type:"loop",loop:{id:"lp",max:2},inputs:{in:{type:"any",cardinality:"many"}},start:{mode:"any"}},
+    {id:"w",type:"calc",lang:"js",code:'return String(inputs[0]||"")+"*";'},
+    pass("end"),{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"src",port:"in"}},
+     {from:{node:"src",port:"out"},to:{node:"m",port:"in"},position:0},
+     {from:{node:"m",port:"out"},to:{node:"lp",port:"in"},mapRole:"body",position:0},
+     {from:{node:"lp",port:"out"},to:{node:"w",port:"in"},loopRole:"body"},
+     {from:{node:"w",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+     {from:{node:"lp",port:"out"},to:{node:"m",port:"in"},loopRole:"done",map:{id:"m"}},
+     {from:{node:"m",port:"out"},to:{node:"end",port:"in"},mapRole:"done"},
+     {from:{node:"end",port:"out"},to:{node:"out",port:"in"}}]};
+  // Map の中に Map
+  const B={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"src",type:"calc",lang:"js",code:'return [["a","b"],["c"]];'},
+    {id:"m1",type:"map"},{id:"m2",type:"map"},
+    {id:"f",type:"calc",lang:"js",code:'return String(value)+index;'},
+    pass("j1"),{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"src",port:"in"}},
+     {from:{node:"src",port:"out"},to:{node:"m1",port:"in"},position:0},
+     {from:{node:"m1",port:"out"},to:{node:"m2",port:"in"},mapRole:"body",position:0},
+     {from:{node:"m2",port:"out"},to:{node:"f",port:"in"},mapRole:"body"},
+     {from:{node:"f",port:"out"},to:{node:"m2",port:"in"},map:{id:"m2"},position:1},
+     {from:{node:"m2",port:"out"},to:{node:"m1",port:"in"},mapRole:"done",map:{id:"m1"},position:1},
+     {from:{node:"m1",port:"out"},to:{node:"j1",port:"in"},mapRole:"done"},
+     {from:{node:"j1",port:"out"},to:{node:"out",port:"in"}}]};
+  // 1件の中で並列 → Join
+  const C={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"src",type:"calc",lang:"js",code:'return ["x","yy"];'},
+    {id:"m",type:"map",routing:{failurePolicy:"fail_fast"}},
+    {id:"A",type:"calc",lang:"js",code:'return "A"+value;'},
+    {id:"B",type:"calc",lang:"js",code:'return "B"+value;'},
+    {id:"jn",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}},
+    pass("end"),{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"src",port:"in"}},
+     {from:{node:"src",port:"out"},to:{node:"m",port:"in"},position:0},
+     {from:{node:"m",port:"out"},to:{node:"A",port:"in"},mapRole:"body"},
+     {from:{node:"m",port:"out"},to:{node:"B",port:"in"},mapRole:"body"},
+     {from:{node:"A",port:"out"},to:{node:"jn",port:"items"},position:0},
+     {from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:1},
+     {from:{node:"jn",port:"out"},to:{node:"m",port:"in"},map:{id:"m"},position:1},
+     {from:{node:"m",port:"out"},to:{node:"end",port:"in"},mapRole:"done"},
+     {from:{node:"end",port:"out"},to:{node:"out",port:"in"}}]};
+  // 1件をモジュールに通す
+  const inner={metadata:{name:"検証",version:"1"},nodes:[{id:"i",type:"input"},
+    {id:"c",type:"calc",lang:"js",code:'return {claim:inputs[0],ok:String(inputs[0]||"").length>1};'},
+    {id:"o",type:"output"}],
+   edges:[{from:{node:"i",port:"out"},to:{node:"c",port:"in"}},{from:{node:"c",port:"out"},to:{node:"o",port:"in"}}]};
+  const D={metadata:{version:"1"},modules:{"検証":{version:"1",spec:inner}},nodes:[
+    {id:"in",type:"input"},{id:"src",type:"calc",lang:"js",code:'return ["a","bb","ccc"];'},
+    {id:"m",type:"map"},{id:"mod",type:"module",module:"検証"},pass("end"),{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"src",port:"in"}},
+     {from:{node:"src",port:"out"},to:{node:"m",port:"in"},position:0},
+     {from:{node:"m",port:"out"},to:{node:"mod",port:"in"},mapRole:"body"},
+     {from:{node:"mod",port:"out"},to:{node:"m",port:"in"},map:{id:"m"},position:1},
+     {from:{node:"m",port:"out"},to:{node:"end",port:"in"},mapRole:"done"},
+     {from:{node:"end",port:"out"},to:{node:"out",port:"in"}}]};
+  const ra=await fullRun(A,{}),rb=await fullRun(B,{}),rc=await fullRun(C,{}),rd=await fullRun(D,{});
+  ok("71 Map の入れ子: Map内Loop / Map内Map / 1件の中で並列→Join / 1件をモジュールへ（場が混ざらない）",
+    ra.status==="success"&&JSON.stringify(ra.result.value)==='["a**","b**"]'
+      &&(ra.nodeRuns.w||[]).length===4&&Object.keys(ra.mapInstances).length===1
+      &&Object.keys(ra.loopInstances).some(k=>k.indexOf("|")>0)
+    &&rb.status==="success"&&JSON.stringify(rb.result.value)==='[["a0","b1"],["c0"]]'
+    &&rc.status==="success"&&JSON.stringify(rc.result.value)==='[["Ax","Bx"],["Ayy","Byy"]]'
+    &&rd.status==="success"&&JSON.stringify(rd.result.value.map(x=>x.ok))==="[false,true,true]");}
+ // 72 Map の1件だけ失敗したとき（error/skip/null/value）と、途中から続き（完了した件は二度実行しない）
+ {const mk=(pol,val)=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"src",type:"calc",lang:"js",code:'return ["a","BAD","c"];'},
+    Object.assign({id:"m",type:"map"},pol?{onItemError:pol}:{},val!==undefined?{onItemErrorValue:val}:{}),
+    {id:"f",type:"calc",lang:"js",code:'if(value==="BAD")throw new Error("わざと");return String(value)+"!";'},
+    {id:"end",type:"pass"},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"src",port:"in"}},
+     {from:{node:"src",port:"out"},to:{node:"m",port:"in"},position:0},
+     {from:{node:"m",port:"out"},to:{node:"f",port:"in"},mapRole:"body"},
+     {from:{node:"f",port:"out"},to:{node:"m",port:"in"},map:{id:"m"},position:1},
+     {from:{node:"m",port:"out"},to:{node:"end",port:"in"},mapRole:"done"},
+     {from:{node:"end",port:"out"},to:{node:"out",port:"in"}}]});
+  const re=await fullRun(mk(null),{}),rs=await fullRun(mk("skip"),{});
+  const rn=await fullRun(mk("null"),{}),rv=await fullRun(mk("value",{error:true}),{});
+  // 途中で止めて、保存した続きから再開する
+  const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"src",type:"calc",lang:"js",code:'return ["a","b","c","d"];'},
+    {id:"m",type:"map"},{id:"f",type:"calc",lang:"js",code:'return String(value)+"!";'},
+    {id:"end",type:"pass"},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"src",port:"in"}},
+     {from:{node:"src",port:"out"},to:{node:"m",port:"in"},position:0},
+     {from:{node:"m",port:"out"},to:{node:"f",port:"in"},mapRole:"body"},
+     {from:{node:"f",port:"out"},to:{node:"m",port:"in"},map:{id:"m"},position:1},
+     {from:{node:"m",port:"out"},to:{node:"end",port:"in"},mapRole:"done"},
+     {from:{node:"end",port:"out"},to:{node:"out",port:"in"}}]};
+  const run=makeRun(sp,{});const store=memStore();startRun(sp,run);
+  // 1件が終わって、まだ残りがある所まで進める（＝途中で止まった状態）
+  for(let i=0;i<40;i++){const r=await processOneWorkItem(sp,run,store,null,null);
+    if(r.kind==="idle"||!run.workQueue.length)break;
+    const G0=Object.values(run.mapInstances)[0];
+    if(G0&&G0.done>=1&&G0.done<G0.total)break;}
+  const midF=(run.nodeRuns.f||[]).length;
+  const midDone=Object.values(run.mapInstances)[0].done;
+  const cp=JSON.parse(JSON.stringify(run));        // Checkpoint に保存して読み直したのと同じ
+  const r2=await resumeRun(sp,cp,store,null,null);
+  ok("72 Map: 1件の失敗（止める/飛ばす/null/決めた値）と、続きから（終わった件は二度実行しない）",
+    re.status==="failed"&&(re.totals.mapItemErrors||0)===0
+    &&rs.status==="success"&&JSON.stringify(rs.result.value)==='["a!","c!"]'
+      &&rs.totals.mapItemErrors===1&&rs.errors[0].handledAs==="map:skip"
+    &&rn.status==="success"&&JSON.stringify(rn.result.value)==='["a!",null,"c!"]'
+    &&rv.status==="success"&&JSON.stringify(rv.result.value)==='["a!",{"error":true},"c!"]'
+    &&midF>0&&midDone>=1&&midDone<4        // 1件は終わっていて、まだ残っている所で止めた
+    &&r2.status==="success"&&JSON.stringify(r2.result.value)==='["a!","b!","c!","d!"]'
+      &&(r2.nodeRuns.f||[]).length===4);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

@@ -5,7 +5,7 @@ const p=await (await b.newContext({viewport:{width:1100,height:900}})).newPage()
 const errs=[]; p.on('pageerror',e=>errs.push(String(e)));
 const URL_='file://'+new URL('../harness.html',import.meta.url).pathname;
 await p.goto(URL_);
-await p.waitForFunction(()=>window.__selfTest,null,{timeout:30000});
+await p.waitForFunction(()=>window.__selfTest,null,{timeout:180000});   // 100件のMapなどで時間がかかる
 const r=await p.evaluate(()=>window.__selfTest);
 console.log(r.lines.join('\n'));
 console.log(`\n${r.pass}/${r.total} PASS  SKIP=${r.skip||0}  pageerror=${errs.length}`);
