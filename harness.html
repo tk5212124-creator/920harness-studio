@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 途中で切れたときの扱い v0.23.0</title>
+<title>Harness Studio — エラーの扱いと実行の記録 v0.24.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -95,6 +95,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .help h4{margin:14px 0 4px;font-size:13px}
 .help p{margin:0 0 6px;font-size:12.5px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
 .help p.li{padding-left:12px}
+.hcode{background:#12151a;color:#d5dae0;border-radius:8px;padding:10px 12px;margin:6px 0;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.55;white-space:pre;overflow-x:auto;max-width:100%}
 #estop{position:fixed;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:60;display:none;
   font-weight:700;padding:12px 16px;border-radius:999px;box-shadow:0 3px 14px rgba(0,0,0,.28)}
 #estop.show{display:block}
@@ -113,7 +114,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.23.0 · 途中で切れたときの扱い</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.24.0 · エラーの扱いと実行の記録</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -5365,7 +5366,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 
 - 流れる値は2種類だけ: **文章**（text）と **JSON**（json）。リストや数値はJSONとして流れる。
 - 1回の実行で出す値は1つ。**ループの周ごと・分岐ごとに別物**として扱われ、混ざらない。
-- ノードをタップすると中身を編集できる。すべてのノードで決められるのは次の6つ。
+- ノードをタップすると中身を編集できる。すべてのノードで決められるのは次の7つ。
 
 **(1) 入力の順番** — 入口に2本以上入るときだけ出る。線をつないだ順に自動で番号が振ってあり、↑↓で入れ替えられる。まとめる順・\`inputs\` の並び順になる。
 
@@ -5382,7 +5383,12 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 
 **(6) 出口が2本以上あるときの扱い** — **並列**（全部に流す。片方が失敗したら兄弟を止める＝fail_fast）／**条件で1本だけ選ぶ**（if / else）。2本目を繋いだ時点で並列が入る。
 
-**失敗したとき**: そのノードで止まり、並列の兄弟は止まる（cancelled は failed ではない）。**Retry** で同じ実行だけやり直し、**Resume** で続きから。実行ログに理由が文で出る。
+**(7) エラーが起きたとき** — そのノードが何を返すかを決める。
+- **エラーにして止める（既定）** … そこで実行が止まる。並列の兄弟も止まる（fail_fast）。**Retry** で同じ実行だけやり直し、**Resume** で続きから。
+- **決めた値を出して先へ進む** … 書いておいた値（例: \`{"score":0}\` や \`"（失敗）"\`）を出して、何事もなかったように次へ渡す。
+- **null を出して先へ進む** … 値として null を渡す。
+- **このノードだけ止めて、待っている他のノードを進める** … このノードの先へは何も流れないが、他の枝はそのまま出力まで行く。先のノードが「全部そろったら動く」ままだとそこで待ち続けるので、「どれか来たら」にしておく。
+- どれを選んでも、**エラーが起きたことはログに赤字で出て、実行の記録にも残る**（黙って無かったことにはしない）。使用量にも失敗した呼び出しが入る。
 
 **名前**: ノード名・項目名は日本語でよい。空白と \`. " { } >\` は使えない。条件式にもそのまま書ける（\`点数評価.out.点数 >= 8\`）。
 
@@ -5496,8 +5502,11 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 ## 13. うまくいかないとき
 - 赤い ⚠ は**実行前に分かった直すところ**。その場で直せるものはボタンが出る（「schema を付ける」「出口の流し方を決める」「条件の見る先を変える」など）。
 - 「診断する」で、機械で確実に分かることだけを一覧にする（LLMの意見ではない）。
-- 「実行ログ」→ **まとめてコピー**（Spec・ログ・失敗の理由・端末の対応状況が1つに入る）。そのまま相談先に貼れる。
-- 出力に届かず終わったときは、**入力は届いたのに動かなかったノード**を名指しする。そのノードの「動き出す条件」を見る。
+- 「実行ログ」→ **まとめてコピー**（Spec・ログ・失敗の理由・端末の対応状況・実行の記録が1つに入る）。そのまま相談先に貼れる。
+- 「**実行の記録をコピー**」は機械が読む用の全部入り（どのノードが何を受け取って何を返したか・掛かった時間・トークン・どの枝の何周目か・モデルへ送った文・動かなかったノードが何を待っていたか）。直させたいLLMにはこれを渡すのがいちばん早い。
+- ログの「**詳しく**」に印を付けると、次の実行からモデルへ送った文と値の全文もログに出る。
+- 進めなくなったとき・出力に届かず終わったときは、**どのノードが何を待っていたか**を名指しで出す。そのノードの「動き出す条件」を見る。
+- ノードごとに「**エラーが起きたとき**」を決められる（止める／決めた値を出す／null を出す／そのノードだけ止めて先へ進む）。どれを選んでも、エラーはログと記録に残る。
 - 使用量は**失敗した呼び出しも数える**（実際にモデルを動かしているため）。
 - 版が古いと画面の上にお知らせが出る。リロードすると新しくなる。
 
@@ -5505,13 +5514,370 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - **書き出す**: HSL（人が読める1枚のテキスト）か JSON。共有リンクも作れる（中身はURLに入る・サーバには送らない）。
 - **外部のLLMに直させる**: 「書き出す」→ 説明付きの1枚を渡し、返ってきた文を「取り込む」に貼ると、**差分を見てから**適用できる。
 - **取り込む**: HSL / JSON / 共有リンクのどれでも。読めないときは行番号付きで理由が出る。
+- **JSONで直に書く**: このシートの上の「**JSONで書く**」タブに、ノードと線に書ける設定が全部載っている。そこも全文コピーできるので、外部のLLMに渡す説明としてそのまま使える。
 
 ## 15. 気をつけること
 - 端末のメモリには限りがある。大きいモデル＋長い文脈＋並列は落ちやすい。
 - JavaScript は自分で書いたコードがそのまま動く（別スレッド・3秒で打ち切り）。
 - クラウドのLLMにはまだ繋がない（料金の話が絡むので、いまは端末の中だけ）。
 `;
+/* JSONの説明に出す「まるごと1つの例」。
+   ここで持っておいて、自己テストで validate に通ることを毎回確かめる
+   （説明に載っている例が動かない、という事故を作らないため）。 */
+const HELP_JSON_EXAMPLE_SPEC={
+ metadata:{name:"点数で作り直す",version:"1"},
+ providers:{local:{adapter:"webllm",model:"Qwen2.5-0.5B-Instruct-q4f16_1-MLC"}},
+ nodes:[
+  {id:"in",type:"input",label:"お題を入れる",default:"雨の日にできること"},
+  {id:"lp",type:"loop",loop:{id:"lp",max:3,until:"点数評価.out.score >= 8"}},
+  {id:"書く",type:"llm",provider:"local",start:{mode:"any"},
+   inputs:{in:{type:"any",cardinality:"many"}},
+   prompt:{template:{syntax:"mustache",mode:"interpolation_only",value:"{{{in}}} について3つ書いて"}},
+   generation:{maxTokens:200},
+   onError:"value",onErrorValue:"（書けなかった）"},
+  {id:"点数評価",type:"llm",provider:"local",
+   schema:{type:"object",required:["score"],properties:{score:{type:"integer",minimum:0,maximum:10}}},
+   generation:{maxTokens:80},onBadOutput:"retry"},
+  {id:"out",type:"output"}],
+ edges:[
+  {from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+  {from:{node:"lp",port:"out"},to:{node:"書く",port:"in"},loopRole:"body",position:1},
+  {from:{node:"書く",port:"out"},to:{node:"点数評価",port:"in"}},
+  {from:{node:"点数評価",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}},
+  {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}]};
+const HELP_JSON_EXAMPLE=JSON.stringify(HELP_JSON_EXAMPLE_SPEC,null,1);
+const HELP_JSON=`# JSONで書く（設定の全部）
+
+画面のノード編集で触れる設定は、ぜんぶ JSON にも書ける。
+「エディタ / JSON」の JSON タブに貼れば、その場で図になる。
+ここに載っていないキーは Runtime が読まない（書いても何も起きない）。
+
+## 1. 全体の形
+
+~~~
+{
+  "metadata": {"name":"ためし","version":"1"},
+  "providers": {"local":{"adapter":"webllm","model":"Qwen2.5-0.5B-Instruct-q4f16_1-MLC"}},
+  "vars": {"目標点":8},
+  "nodes": [ … ],
+  "edges": [ … ]
+}
+~~~
+
+- **nodes と edges だけが要る**。providers はモデルを使うときだけ。
+- metadata の \`layout\` \`sizes\` \`flow\` \`bends\` は**図の見た目だけ**。消しても何が動くかは変わらない（同時に届いたときの並び順だけ変わる）。
+
+## 2. metadata
+
+~~~
+"metadata": {
+  "name": "ためし",
+  "version": "1",
+  "flow": "tb",
+  "layout": {"in":{"x":40,"y":40}, "書く":{"x":40,"y":200}},
+  "sizes":  {"書く":{"w":180,"h":80}},
+  "bends":  {"0":[{"x":120,"y":150}]}
+}
+~~~
+- \`flow\`: \`"tb"\`（縦に流す・既定）か \`"lr"\`（横に流す）。
+- \`layout\`: ノードの置き場所。\`sizes\`: 手で変えた大きさ。\`bends\`: 線の曲げ点（キーは edges の並び番号）。
+
+## 3. providers（モデルの置き場）
+
+~~~
+"providers": {
+  "local":  {"adapter":"webllm","model":"Qwen2.5-0.5B-Instruct-q4f16_1-MLC"},
+  "cpu":    {"adapter":"wllama","model":"qwen2.5-0.5b-instruct-q4_k_m","url":"https://…/x.gguf","contextSize":2048},
+  "server": {"adapter":"openai_local","baseUrl":"http://localhost:1234/v1","model":"…"},
+  "test":   {"adapter":"mock"}
+}
+~~~
+- \`adapter\` は \`webllm\`（この端末のGPUで動く）/ \`wllama\`（CPUで動く・WebGPU不要）/ \`openai_local\`（OpenAI互換のローカルサーバ）/ \`mock\`（推論しない・テスト用）。
+- provider に \`generation\` \`schema\` \`overrides\` を書くと、その provider を使うノード全部の既定になる（ノード側に書けば上書き）。
+- クラウドのLLMにはまだ繋がない。
+
+## 4. vars（どこからでも読める値）
+
+~~~
+"vars": {"目標点":8, "口調":"ていねい"}
+~~~
+式からは \`vars.目標点\`、本文テンプレからは \`{{{vars.口調}}}\` で読める。
+
+## 5. ノードに共通のキー（どの種類にも書ける）
+
+~~~
+{
+  "id": "評価",
+  "type": "llm",
+  "merge": {"op":"markdown","labels":["案A","案B"]},
+  "start": {"mode":"all"},
+  "inputs": {"in":{"type":"any","cardinality":"many"}},
+  "ports": [{"id":"p1","label":"点数","pick":"score"}],
+  "routing": {"mode":"parallel","failurePolicy":"fail_fast"},
+  "onError": "value",
+  "onErrorValue": {"score":0}
+}
+~~~
+
+- **id** … 必須。かぶらない名前。日本語でよい。
+- **type** … \`input\` \`llm\` \`join\` \`loop\` \`cond\` \`calc\` \`output\` \`tool\`。書かないと \`llm\`。
+- **merge** … 1つの入口に線が2本以上入ったとき、どう1つにするか。
+  - \`op\`: \`concat\`（改行でつなぐ・既定）/ \`numbered\`（1. 2. …）/ \`markdown\`（## 名前）/ \`csv\` / \`json_array\`
+  - \`labels\`: つないだ順の名前（numbered / markdown / csv で使う）
+  - \`sep\`: concat の区切り（書かないと改行）
+- **start** … いつ動き出すか。
+  - \`{"mode":"all"}\` … 入口が全部そろったら（既定。書かなくてよい）
+  - \`{"mode":"any"}\` … どれか1つ来たら動く（来るたびに動く）
+  - \`{"mode":"custom","op":"or","groups":[{"op":"and","from":["in","点検"]},{"op":"or","from":["やり直し"]}]}\`
+    条件1＝in と 点検 の両方が来たら、条件2＝やり直しが来たら。外側の \`op\` が条件どうしのつなぎ方。
+- **inputs** … 入口ごとの受け取り方。\`{"<入口名>":{"type":"any","cardinality":"many"}}\`
+  - \`cardinality\`: \`one\`（1本だけ）/ \`many\`（何本でも。配列で来る）
+  - \`type\`: \`any\`（何でも）/ \`text\` / \`json\`。合わないと実行前か実行時に落ちる。
+  - 1つの入口に線を2本以上つなぐと、取り込みのときに \`many\` が自動で入る。
+- **ports** … 出口を増やす。→ 8章
+- **routing** … 出口が2本以上あるときの流し方。→ 9章
+- **onError** … このノードでエラーが起きたとき。どれを選んでも、エラーが起きたことはログと記録に必ず残る。
+  - \`"error"\` … そこで止める（既定）
+  - \`"value"\` … \`onErrorValue\` に書いた値を出して先へ進む
+  - \`"null"\` … null を出して先へ進む
+  - \`"skip"\` … このノードだけ止めて、待っている他のノードを進める。このノードの先へは何も流れない
+- **onErrorValue** … \`onError\` が \`"value"\` のときに出す値。JSONならそのまま（\`{"score":0}\`）、文章なら \`"（失敗）"\`。
+
+## 6. 種類ごとのキー
+
+## input（入力）
+~~~
+{"id":"in","type":"input","label":"直したい文章を貼る","default":"ここに文章"}
+~~~
+- \`label\` … 実行画面の入力欄の見出し。何を入れる場所かを書く。
+- \`default\` … 最初から入れておく文。
+
+## llm（モデルに聞く）
+~~~
+{
+  "id": "点数評価", "type": "llm",
+  "provider": "local",
+  "model": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+  "contextSize": 2048,
+  "url": "https://…/x.gguf",
+  "overrides": {"context_window_size":2048},
+  "prompt": {
+    "system": "あなたは編集者です",
+    "template": {"syntax":"mustache","mode":"interpolation_only","value":"次を直して:\\n{{{in}}}"},
+    "prefix": "必ず日本語で。",
+    "suffix": "以上。"
+  },
+  "generation": {"maxTokens":256,"temperature":0.2},
+  "schema": {"type":"object","required":["score"],"properties":{"score":{"type":"integer","minimum":0,"maximum":10}}},
+  "onTruncate": "retry",
+  "onBadOutput": "retry",
+  "mock": {"tag":"A"}
+}
+~~~
+- \`provider\` … providers のキー名。\`model\` を書くと provider の既定を上書きする。
+- \`contextSize\` / \`overrides.context_window_size\` … 文脈の長さ。短いほどメモリが少なくて済む。
+- \`url\` … wllama のとき、置き場そのものがモデル。
+- \`prompt.template.value\` … 本文。\`syntax\` は \`"mustache"\`、\`mode\` は \`"interpolation_only"\` で固定（他を書くと検証で落ちる）。
+  差し込める名前:
+  - \`{{{in}}}\` … 入ってきた値
+  - \`{{{inputs.items.0}}}\` … 入口 items の1つ目
+  - \`{{{run_input.<入力ノードのid>}}}\` … 実行画面で入れた文
+  - \`{{{vars.<名前>}}}\` … vars の値
+  - \`{{{iteration}}}\` … いまの周回（1から）
+  - 空なら、入ってきた値をそのまま渡す。
+- \`prompt.prefix\` / \`prompt.suffix\` … 本文の前後に必ず付ける文。
+- \`generation.maxTokens\` … 答えの長さの上限。\`temperature\` … ばらつき（0に近いほど同じ答えになる）。
+- \`schema\` … 出力の形。内蔵LLMなら文法で強制する。→ 7章
+- \`onTruncate\` … maxTokens に届いて途中で切れたとき。
+  \`"error"\`（既定・止める）/ \`"use"\`（切れた所までを使う。JSONは閉じ直す）/ \`"retry"\`（maxTokens を倍にしてやり直す・最大2回）
+- \`onBadOutput\` … 答えが schema に合わなかったとき。\`"error"\`（既定）/ \`"retry"\`（もう一度聞く・最大2回）
+- \`mock\` … テスト用。推論しない。\`{"tag":"A"}\` \`{"fixed":{…}}\` \`{"raw":"…"}\` \`{"cut":8}\` \`{"fail":"oom"}\` など。
+- 会話は**毎回まっさら**。前のやり取りは持ち越さない（だから「会話を続ける」設定は無い）。
+
+## join（まとめる）
+~~~
+{
+  "id":"bundle","type":"join","op":"markdown",
+  "labels":["案A","案B"],
+  "keys":["a","b"],
+  "sep":"\\n",
+  "prefix":"以下は下書き。","suffix":"ここまで。",
+  "template":{"syntax":"mustache","mode":"interpolation_only","value":"A: {{{items.0}}}\\nB: {{{items.1}}}"},
+  "inputs":{"items":{"type":"any","cardinality":"many"}}
+}
+~~~
+- \`op\` … \`concat\`（文章のままつなぐ）/ \`markdown\`（## 名前 付き）/ \`csv\`（カンマつなぎ1行）/ \`json_array\`（配列）/ \`json_object\`（キー付き）/ \`template\`（差し込む）。
+- \`inputs.items\` は必須。join に入る線は \`"to":{"node":"bundle","port":"items"}\` と書く。
+- \`json_object\` は \`keys\` か \`labels\` のどちらかが要る。
+- \`prefix\` / \`suffix\` は文章になる op（concat / markdown / csv / template）のときだけ効く。
+
+## loop（繰り返す）
+~~~
+{
+  "id":"lp","type":"loop",
+  "loop":{"id":"lp","max":5,"until":"点数評価.out.score >= 8","lang":"expr"},
+  "routing":{"failurePolicy":"fail_fast"}
+}
+~~~
+- \`loop.id\` … このループの名前。戻り線の \`loop.id\` と合わせる。
+- \`loop.max\` … 最大の周回数。**書かない／空にすると止まらない**（無限ループ。緊急停止ボタンで止める）。
+- \`loop.until\` … 真になったら抜ける。1周まわってから見る。
+- \`loop.lang\` … \`"expr"\`（式・既定）か \`"js"\`（JavaScript。\`return 〜;\` で返す）。
+- 出口は**線の \`loopRole\`** で分ける。\`"body"\`（繰り返す先・既定）と \`"done"\`（抜けたあと）。
+- 同じ役割の出口が2本以上あるときだけ \`routing.failurePolicy\` が要る。
+
+## cond（条件分岐）
+~~~
+{
+  "id":"check","type":"cond","lang":"expr",
+  "ports":[
+    {"id":"pass","label":"合格","expr":"score >= 8"},
+    {"id":"fail","label":"それ以外","else":true}
+  ],
+  "routing":{"onNoMatch":"error"}
+}
+~~~
+- \`ports\` が条件そのもの。**上から順に見て、最初に当たった1本だけ**に流す。
+- 最後の出口に \`"else":true\` を付けると必ずどれかを通る。
+- \`lang\` … \`"expr"\` か \`"js"\`。
+- どれにも当たらないとき: \`routing.onNoMatch\` が \`"error"\`（止める・既定）か \`"stop"\`（止めるが Resume できる）。
+- 線側は \`"from":{"node":"check","port":"pass"}\` のように出口の \`id\` を書く。
+- 出口に \`pick\` を書くと、その出口から出る値を絞れる。
+
+## calc（計算）
+~~~
+{"id":"長さ","type":"calc","lang":"js","code":"return {字数: String(本文).length};"}
+{"id":"合計","type":"calc","lang":"expr","code":"a + b * 2"}
+~~~
+- \`lang\` … \`"expr"\`（式）か \`"js"\`（JavaScript。別スレッドで動き、3秒で打ち切る）。
+- \`code\` … 中身。\`"js"\` のときは必ず \`return\` する。
+- 使える名前は**線の \`as\`** で決まる（書かなければ \`pick\` か、つなぎ元のノード名）。
+- \`"js"\` では \`inputs\`（入ってきた順の配列）も使える。
+- Python / C / VB でも書けるが**動かない**（この道具はブラウザの中だけで動く）。
+
+## output（出力）
+~~~
+{"id":"out","type":"output","merge":{"op":"json_array"}}
+~~~
+入ってきた値をそのまま結果にする。線が2本以上なら \`merge\` でまとめ方を決める。
+
+## 7. schema（出力の形）
+
+~~~
+"schema": {
+  "type":"object",
+  "required":["score","理由"],
+  "properties":{
+    "score": {"type":"integer","minimum":0,"maximum":10},
+    "理由":  {"type":"string","minLength":1},
+    "候補":  {"type":"array","items":{"type":"string"},"minItems":1}
+  }
+}
+~~~
+- \`type\` … \`object\` \`string\` \`number\` \`integer\` \`array\` \`boolean\`
+- 数値は \`minimum\` / \`maximum\`、文字は \`minLength\` / \`maxLength\`、配列は \`items\` と \`minItems\` / \`maxItems\`。
+- キー名は日本語でよい。空白と \`.\` \`"\` \`{\` \`}\` \`>\` は使えない。
+- 形を付けると、条件式から \`<ノードid>.out.<キー名>\` で読める。
+- 付けないと文章のまま流れる。
+
+## 8. ports（出口を増やす）
+
+~~~
+"ports":[
+  {"id":"p1","label":"点数","pick":"score"},
+  {"id":"p2","label":"理由","pick":"理由"}
+]
+~~~
+- \`pick\` の書き方:
+  - \`"score"\` … そのキー
+  - \`"items.0"\` … リストの1つ目
+  - \`"items.1..3"\` … リストの2〜4つ目
+  - \`"items.1.."\` … リストの2つ目から最後まで
+  - 書かないと、出した値まるごと。
+- 線は \`"from":{"node":"評価","port":"p1"}\` と、どの出口から出るかを書く。
+- cond ノードでは \`ports\` が条件（\`expr\` / \`else\`）になる。
+
+## 9. routing（出口が2本以上のとき）
+
+~~~
+"routing":{"mode":"parallel","failurePolicy":"fail_fast"}
+"routing":{"mode":"first_match","onNoMatch":"error"}
+~~~
+- \`"parallel"\` … 全部の線に流す。\`failurePolicy\` は \`"fail_fast"\`（1本が失敗したら兄弟も止める）。
+- \`"first_match"\` … 線の \`if\` / \`else\` を上から見て、1本だけ選ぶ。\`onNoMatch\` は \`"error"\` か \`"stop"\`。
+- 書かなければ、取り込みのときに \`{"mode":"parallel","failurePolicy":"fail_fast"}\` が入る。
+- loop と cond は出口が役割・条件で分かれるので \`mode\` は要らない。
+
+## 10. edges（線）
+
+~~~
+{
+  "from":{"node":"点数評価","port":"out"},
+  "to":{"node":"bundle","port":"items"},
+  "position":0,
+  "pick":"score",
+  "as":"点数",
+  "transform":"json_stringify",
+  "if":"score >= 8",
+  "else":true,
+  "priority":0,
+  "loop":{"id":"lp"},
+  "loopRole":"done",
+  "validation":{"typeCheck":"bypass"}
+}
+~~~
+- \`from.node\` / \`to.node\` は必須。\`from.port\` は書かないと \`"out"\`、\`to.port\` は書かないと \`"in"\`。
+- **position** … 同じ入口に何本も入るときの順番（0から）。書かないと、つないだ順に振られる。
+- **pick** … 受け取る側で「入ってきた値のどれを使うか」。書き方は ports の \`pick\` と同じ。
+- **as** … calc ノードで使う変数名。英数字で始め、JavaScript の予約語は使えない。
+- **transform** … \`"json_stringify"\`（JSON→文章）/ \`"json_parse"\`（文章→JSON）/ \`"list_to_text"\`（配列→箇条書き）。
+- **if / else / priority** … \`routing.mode\` が \`"first_match"\` のときの条件。\`priority\` の小さい順に見る。
+- **loop** … 戻り線（ループの中から loop ノードへ戻る線）に付ける。\`{"id":"<loop.id>"}\`。
+- **loopRole** … loop ノードから出る線の役割。\`"body"\`（繰り返す先・既定）/ \`"done"\`（抜けたあと）。
+- **validation.typeCheck** … \`"bypass"\` にすると型の突き合わせをやめる（普段は要らない）。
+
+## 11. 式で使える名前（until / if / cond の expr）
+
+~~~
+"until": "点数評価.out.score >= 8 and len(点数評価.out.理由) > 10"
+~~~
+- \`<ノードid>.out.<キー>\` … そのノードが最後に出した値
+- \`<ノードid>.meta.len\` … 文字数 ／ \`<ノードid>.meta.tokens\` … トークン数
+- \`run.input.<入力ノードid>\` … 実行画面で入れた文
+- \`vars.<名前>\` … vars に書いた値
+- \`iteration\` … いまの周回（1から）
+- \`value\` … そのノードに入ってきた値そのもの。中身がJSONなら、そのキー名もそのまま名前として使える
+- 使える形: \`+ - * / %\` ／ \`== != < <= > >=\` ／ \`and or not\`
+- 使える関数: \`len() has() regex() count() min() max() json_parse() json_stringify()\`
+- ノードの名前は日本語でよい。
+
+## 12. まるごと1つの例（貼ればそのまま動く）
+
+~~~
+${HELP_JSON_EXAMPLE}
+~~~
+
+## 13. 書いたあとの確かめ方
+
+- JSON タブに貼ると、その場で図になる。赤い ⚠ が出たら、その文のとおりに直す。
+- 「診断する」は機械で分かることだけを出す（LLMの意見ではない）。
+- 動かしたあと「実行の記録をコピー」を押すと、**どのノードが何を受け取って何を返したか／どれだけ掛かったか／動かなかったノードは何を待っていたか／モデルへ送った文**が全部入った JSON が出る。直すときはこれをそのまま貼ればいい。
+`;
 function helpHTML(t){
+  // ~~~ で囲んだところは JSON のかたまりなので、字下げを潰さずそのまま出す
+  const parts=[];let buf=[],code=null;
+  for(const l of String(t).split("\n")){
+    if(/^~~~/.test(l)){
+      if(code===null){if(buf.length){parts.push({k:"md",v:buf.join("\n")});buf=[];}code=[];}
+      else{parts.push({k:"code",v:code.join("\n")});code=null;}
+      continue;}
+    (code===null?buf:code).push(l);
+  }
+  if(code!==null)parts.push({k:"code",v:code.join("\n")});
+  if(buf.length)parts.push({k:"md",v:buf.join("\n")});
+  return parts.map(p=>p.k==="code"?`<pre class="hcode">${esc(p.v)}</pre>`:helpMd(p.v)).join("");
+}
+function helpMd(t){
   return String(t).split(/\n{2,}/).map(block=>{
     const ls=block.split("\n");
     return ls.map(l=>{
@@ -5525,15 +5891,24 @@ function helpHTML(t){
     }).join("");
   }).join("");
 }
-function openHelp(){
+let helpTab="read";
+function openHelp(tab){
+  if(tab)helpTab=tab;
+  const isJ=helpTab==="json";
+  const T=isJ?HELP_JSON:HELP_TEXT;
+  const label=isJ?"JSONの書き方を全部コピー":"使い方を全部コピー";
   openSheet(head("使い方")
-    +`<div class="row"><button class="primary" id="hlCopy">使い方を全部コピー</button><button id="hlSave">文で保存</button></div>`
-    +`<div class="help">${helpHTML(HELP_TEXT)}</div>`
-    +`<div class="row"><button class="primary" id="hlCopy2">使い方を全部コピー</button></div>`);
+    +`<div class="row"><button id="hlTabR"${isJ?"":' class="primary"'}>読みもの</button>`
+    +`<button id="hlTabJ"${isJ?' class="primary"':""}>JSONで書く</button></div>`
+    +`<div class="row"><button class="primary" id="hlCopy">${label}</button><button id="hlSave">文で保存</button></div>`
+    +`<div class="help">${helpHTML(T)}</div>`
+    +`<div class="row"><button class="primary" id="hlCopy2">${label}</button></div>`);
   bindClose();
-  const doCopy=()=>copyOut(HELP_TEXT,"使い方");
+  $("#hlTabR").onclick=()=>openHelp("read");
+  $("#hlTabJ").onclick=()=>openHelp("json");
+  const doCopy=()=>copyOut(T,isJ?"JSONの書き方":"使い方");
   $("#hlCopy").onclick=doCopy;$("#hlCopy2").onclick=doCopy;
-  $("#hlSave").onclick=()=>saveOut(HELP_TEXT,"harness-studio-使い方.txt");
+  $("#hlSave").onclick=()=>saveOut(T,isJ?"harness-studio-JSONの書き方.txt":"harness-studio-使い方.txt");
 }
 $("#helpBtn").onclick=openHelp;
 
@@ -6357,6 +6732,19 @@ export async function CreateMLCEngine(model,opt){
     &&ta.runs[0].ms!=null&&ta.runs[0].used.length===1&&ta.runs[0].used[0].from==="in"
     &&((ea.attempts[0]||{}).request||{}).messages.length>=1
     &&T.harness.nodeCount===5&&T.deliveries.length>=2&&T.format==="harness-trace/1");}
+ // 65 使い方の「JSONで書く」: 載せている例がそのまま動く／設定のキーが全部載っている
+ {const ex=JSON.parse(JSON.stringify(HELP_JSON_EXAMPLE_SPEC));
+  const errs=validate(ex);
+  const r=await fullRun(ex,{in:"雨の日にできること"});   // provider は端末が要るので、走るところまでは見ない
+  const keys=["onError","onErrorValue","onTruncate","onBadOutput","start","merge","inputs","ports",
+    "routing","failurePolicy","onNoMatch","loopRole","transform","position","pick","as","validation",
+    "cardinality","maxTokens","temperature","interpolation_only","layout","sizes","bends","flow",
+    "adapter","vars","schema","minimum","minLength","priority","contextSize","overrides","keys","labels","sep"];
+  const missing=keys.filter(k=>HELP_JSON.indexOf(k)<0);
+  ok("65 使い方のJSON: 載せた例は検証を通る／設定のキーが全部書いてある",
+    errs.length===0&&missing.length===0
+    &&/^\{/.test(HELP_JSON_EXAMPLE.trim())&&HELP_JSON.indexOf(HELP_JSON_EXAMPLE)>0
+    &&(r.status==="failed"||r.status==="success"));}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

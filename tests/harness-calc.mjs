@@ -120,6 +120,19 @@ R['⑥ 使い方'] = { 見出し: await p.locator('.help h4').count(), 文字数
 await tap('#hlCopy');
 R['⑥ 使い方'].コピー = (await p.textContent('#logMsg')).includes('コピーした');
 ok.help = R['⑥ 使い方'].見出し >= 10 && R['⑥ 使い方'].文字数 > 2000 && R['⑥ 使い方'].コピー;
+
+// ⑦ 使い方の「JSONで書く」タブ: JSONのかたまりが形のまま出て、全文コピーできる
+await tap('#hlTabJ');
+R['⑦ JSONタブ'] = { 見出し: await p.locator('.help h4').count(), かたまり: await p.locator('.help pre.hcode').count(),
+  文字数: (await p.textContent('.help')).length,
+  例にloopRole: (await p.textContent('.help')).includes('"loopRole": "done"'),
+  onError: (await p.textContent('.help')).includes('onError'), コピー: null };
+await tap('#hlCopy');
+R['⑦ JSONタブ'].コピー = (await p.textContent('#logMsg')).includes('コピーした');
+await tap('#hlTabR');                                   // 読みものへ戻れる
+R['⑦ 戻れる'] = (await p.textContent('.help')).includes('まず動かす');
+ok.helpJson = R['⑦ JSONタブ'].かたまり >= 15 && R['⑦ JSONタブ'].文字数 > 6000
+  && R['⑦ JSONタブ'].例にloopRole && R['⑦ JSONタブ'].onError && R['⑦ JSONタブ'].コピー && R['⑦ 戻れる'];
 await tap('#shClose');
 
 R['pageerror'] = errs;
