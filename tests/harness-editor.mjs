@@ -64,12 +64,13 @@ const lastEdge = (await spec()).edges.slice(-1)[0];
 R['④ つないだ辺'] = { before: e0, after: e1, edge: lastEdge };
 ok.connect = e1 === e0 + 1 && lastEdge.from.node === 'draft' && lastEdge.to.node === id;
 
-// ⑤ 2本目の出口 → 「勝手に決めない」ので分岐のしかたを聞かれる
-R['⑤ 分岐の確認シート'] = (await p.textContent('#sheetBody')).replace(/\s+/g, ' ').slice(0, 60);
-ok.askRouting = await p.isVisible('#rPar');
-await tap('#rPar');
-R['⑤ 選んだ結果 draft.routing'] = (await spec()).nodes.find(n => n.id === 'draft').routing;
-ok.routing = JSON.stringify(R['⑤ 選んだ結果 draft.routing']) === '{"mode":"parallel","failurePolicy":"fail_fast"}';
+// ⑤ 2本目の出口 → 聞かずに「並列」にする（未設定という状態を作らない）
+R['⑤ 2本目を繋いだお知らせ'] = (await p.textContent('#hint')).replace(/\s+/g, ' ').slice(0, 60);
+ok.askRouting = !(await p.isVisible('#sheet.show')) && R['⑤ 2本目を繋いだお知らせ'].includes('並列');
+R['⑤ draft.routing'] = (await spec()).nodes.find(n => n.id === 'draft').routing;
+R['⑤ 検証'] = (await p.textContent('#vErr')).replace(/\s+/g, ' ').trim() || '（エラーなし）';
+ok.routing = JSON.stringify(R['⑤ draft.routing']) === '{"mode":"parallel","failurePolicy":"fail_fast"}'
+  && R['⑤ 検証'] === '（エラーなし）';
 
 // ⑥ 辺をタップ → 種類を loop に変える → 消す
 await tap('#edges circle.midhit >> nth=0');

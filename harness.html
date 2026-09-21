@@ -58,12 +58,14 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 @keyframes pulse{from{box-shadow:0 0 0 0 rgba(43,92,138,.30)}to{box-shadow:0 0 0 7px rgba(43,92,138,0)}}
 .port{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .port::after{content:"";width:12px;height:12px;border-radius:50%;background:#fff;border:2px solid #8a939c}
-.port.pin{left:0;top:50%}.port.pout{left:150px;top:50%}
-.canvas.tb .port.pin{left:50%;top:0}.canvas.tb .port.pout{left:50%;top:62px}
 .port.pout::after{background:#8a939c}
+.ndrz{position:absolute;right:-3px;bottom:-3px;width:22px;height:22px;cursor:nwse-resize;
+  background:linear-gradient(135deg,transparent 54%,#b9c1c9 54%,#b9c1c9 63%,transparent 63%,transparent 73%,#b9c1c9 73%,#b9c1c9 82%,transparent 82%)}
 .port.arm::after{background:var(--accent);border-color:var(--accent);transform:scale(1.35)}
 .port.tgt::after{border-color:var(--accent);box-shadow:0 0 0 4px rgba(43,92,138,.2)}
-.plab{position:absolute;left:150px;top:50%;margin:10px 0 0 -6px;font-size:9px;color:var(--sub);font-family:ui-monospace,monospace}
+.plab{position:absolute;font-size:9px;color:var(--sub);font-family:ui-monospace,monospace;white-space:nowrap;pointer-events:none}
+.chip{padding:5px 9px;font-size:12px;border-radius:999px;line-height:1.3;text-align:left;max-width:100%;white-space:normal}
+#ioSamples{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:2px 0 8px}
 .hintbar{font-size:12px;color:var(--accent);min-height:20px;margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .vErr{font-size:11px;color:var(--err);font-family:ui-monospace,monospace;white-space:pre-wrap;margin-top:6px;line-height:1.5}
 .fab{position:absolute;right:10px;bottom:10px;display:flex;flex-direction:column;gap:6px}
@@ -110,6 +112,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 
 <div class="card" style="margin-bottom:16px"><h2>入出力</h2>
 <div id="ioIn"></div>
+<div id="ioSamples"></div>
 <div class="row"><button class="primary" id="runTop">実行</button><button id="cancelTop" class="danger" disabled>■ 緊急停止</button></div>
 <div class="mini" id="ioStatus"></div>
 <div id="ioOut"></div>
@@ -1491,6 +1494,25 @@ function inPortGroups(spec){
     const key=e.to.node+"\u0000"+(e.to.port||"in");(g[key]=g[key]||[]).push(e);}
   return g;
 }
+/* 出口が2本以上あるのに流し方が決まっていない、という状態を作らない。
+   無条件の出口が2本以上なら「並列（失敗したら兄弟を止める）」にする。
+   条件分岐(if/else)が付いている所と、役割で分かれるノード（ループ・条件）は触らない。 */
+function normalizeOutRouting(spec){
+  let changed=false;
+  const byId={};(spec.nodes||[]).forEach(n=>byId[n.id]=n);
+  const bySrc={};
+  for(const e of spec.edges||[])(bySrc[e.from.node]=bySrc[e.from.node]||[]).push(e);
+  for(const[id,es]of Object.entries(bySrc)){
+    const n=byId[id];if(!n||n.type==="loop"||n.type==="cond")continue;
+    if(es.some(e=>e.if||e.else))continue;
+    if(es.filter(e=>!e.loop&&!e.if&&!e.else).length<2)continue;
+    const r=n.routing||{};
+    if(r.mode!=="parallel"&&r.mode!=="first_match"){n.routing=Object.assign({},r,{mode:"parallel",failurePolicy:"fail_fast"});changed=true;}
+    else if(r.mode==="parallel"&&!r.failurePolicy){n.routing=Object.assign({},r,{failurePolicy:"fail_fast"});changed=true;}
+  }
+  return changed;
+}
+function normalizeSpec(spec){const a=normalizeInputOrder(spec),b=normalizeOutRouting(spec);return a||b;}
 function normalizeInputOrder(spec){
   let changed=false;
   const byId={};(spec.nodes||[]).forEach(n=>byId[n.id]=n);
@@ -2263,7 +2285,20 @@ document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.onclick=(
    正本は HarnessSpec。画面の操作は spec を書き換え、textareaに反映する。
    ノードの座標は metadata.layout に持つ（Runtimeは見ない）。
    ================================================================== */
-const NW=150,NH=62;                      // ノードの箱の大きさ
+const NW=150,NH=62;                      // ノードの箱の既定の大きさ
+/* 手で変えた大きさは metadata.sizes に入る（図の見た目だけ。Runtimeは見ない）。
+   metadata.bends と同じで、触っていないうちは何も書かない（書き出しが変わらないように）。 */
+/* 手で決めた大きさが無いときは、いま描かれている高さを使う（中身が3行でも線が箱の底から出る） */
+const sizeOf=id=>{const q=(((Ed.spec.metadata||{}).sizes)||{})[id];
+  return{w:(q&&q.w)||NW,h:(q&&q.h)||(Ed.meas||{})[id]||NH,set:!!q};};
+function setSize(id,v){const m=Ed.spec.metadata=Ed.spec.metadata||{};
+  if(v){(m.sizes=m.sizes||{})[id]=v;return;}
+  if(m.sizes){delete m.sizes[id];if(!Object.keys(m.sizes).length)delete m.sizes;}}
+/* 入口(●)と出口(○)をノードのどこに置くか。
+   ループノードだけは上下（左右）が逆＝戻ってくる線が上から入るので、見た目も逆にする。 */
+function portPos(n,which,sz){
+  const far=(which==="out")!==(n&&n.type==="loop");
+  return Ed.dir==="tb"?{x:sz.w/2,y:far?sz.h:0}:{x:far?sz.w:0,y:sz.h/2};}
 const Ed={spec:null,view:{x:16,y:16,k:1},sel:null,arm:null,run:null,dir:"tb"};
 const NODE_KINDS=[
   {type:"input",label:"入力",desc:"実行時の入力を流す"},
@@ -2303,12 +2338,12 @@ function ensureLayout(){const L=layout();const miss=(Ed.spec.nodes||[]).some(n=>
   if(miss&&(Ed.spec.nodes||[]).length)autoLayout();}
 
 function setSpecObj(spec,opt){
-  Ed.spec=spec;normalizeInputOrder(Ed.spec);ensureLayout();
+  Ed.spec=spec;normalizeSpec(Ed.spec);ensureLayout();
   if(!(opt&&opt.keepText))$("#spec").value=JSON.stringify(spec,null,2);
   edRender();showErrs();renderIO();if(typeof renderModels==="function")renderModels();
   showNow();
 }
-function syncFromCanvas(){normalizeInputOrder(Ed.spec);$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();showNow();}
+function syncFromCanvas(){normalizeSpec(Ed.spec);$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();showNow();}
 /* いま図に載っているハーネスを、常に見える場所に書く（「反映されていない？」を作らない） */
 function showNow(){
   const el=$("#nowSpec");if(!el)return;
@@ -2416,10 +2451,8 @@ function showErrs(){
   return errs;
 }
 /* --- 描画 --- */
-function portXY(id,which){const p=posOf(id);
-  return Ed.dir==="tb"
-    ? {x:p.x+NW/2, y:p.y+(which==="out"?NH:0)}
-    : {x:p.x+(which==="out"?NW:0), y:p.y+NH/2};}
+function portXY(id,which){const p=posOf(id),q=portPos(nodeById(id),which,sizeOf(id));
+  return{x:p.x+q.x,y:p.y+q.y};}
 function edgePath(a,b){
   if(Ed.dir==="tb"){const dy=Math.max(34,Math.abs(b.y-a.y)*0.45);
     return `M ${a.x} ${a.y} C ${a.x} ${a.y+dy}, ${b.x} ${b.y-dy}, ${b.x} ${b.y}`;}
@@ -2432,16 +2465,31 @@ function edRender(){
   nodesEl.innerHTML="";while(svg.firstChild)svg.removeChild(svg.firstChild);
   const L=layout();let maxX=600,maxY=400;
   for(const n of Ed.spec.nodes||[]){
-    const p=L[n.id]||{x:20,y:20};maxX=Math.max(maxX,p.x+NW+60);maxY=Math.max(maxY,p.y+NH+60);
+    const p=L[n.id]||{x:20,y:20};const sz=sizeOf(n.id);
+    maxX=Math.max(maxX,p.x+sz.w+60);maxY=Math.max(maxY,p.y+sz.h+60);
     const d=document.createElement("div");
     d.className="nd t-"+(n.type||"llm")+(Ed.sel&&Ed.sel.kind==="node"&&Ed.sel.id===n.id?" sel":"");
     d.dataset.id=n.id;d.style.left=p.x+"px";d.style.top=p.y+"px";
     const m2=nodeModelText(n);d.title=nodeFullText(n);
+    d.style.width=sz.w+"px";if(sz.set)d.style.height=sz.h+"px";
+    const pst=w=>{const q=portPos(n,w,sz);return `left:${q.x}px;top:${q.y}px`;};
     d.innerHTML=`<div class="ndh">${esc(n.id)}</div><div class="ndb">${esc(nodeSub(n))}</div>`
       +(m2?`<div class="ndm">${esc(m2)}</div>`:"")+`<div class="ndp" data-prev="${esc(n.id)}"></div>`
-      +(n.type==="input"?"":`<div class="port pin" data-node="${esc(n.id)}" data-side="in"></div>`)
-      +(n.type==="output"?"":`<div class="port pout" data-node="${esc(n.id)}" data-side="out"></div>`);
+      +(n.type==="input"?"":`<div class="port pin" style="${pst("in")}" data-node="${esc(n.id)}" data-side="in"></div>`)
+      +(n.type==="output"?"":`<div class="port pout" style="${pst("out")}" data-node="${esc(n.id)}" data-side="out"></div>`)
+      +`<div class="ndrz" data-rz="${esc(n.id)}"></div>`;
     nodesEl.appendChild(d);
+  }
+  // 描いたあとの実際の高さを測って、丸（入口・出口）を箱の縁に置き直す
+  Ed.meas=Ed.meas||{};
+  for(const el of nodesEl.children){
+    const id=el.dataset.id,nd=nodeById(id);if(!nd)continue;
+    const q=(((Ed.spec.metadata||{}).sizes)||{})[id];
+    if(q)delete Ed.meas[id];
+    else{const hh=Math.round(el.offsetHeight);if(hh>0)Ed.meas[id]=hh;}
+    const sz=sizeOf(id);
+    el.querySelectorAll(".port").forEach(pt=>{const t=portPos(nd,pt.dataset.side,sz);
+      pt.style.left=t.x+"px";pt.style.top=t.y+"px";});
   }
   drawEdges();
   svg.setAttribute("width",maxX);svg.setAttribute("height",maxY);
@@ -2490,7 +2538,8 @@ function applyView(){$("#world").style.transform=`translate(${Ed.view.x}px,${Ed.
 function fitView(){
   const ns=Ed.spec.nodes||[];if(!ns.length)return;const L=layout();
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
-  ns.forEach(n=>{const p=L[n.id]||{x:0,y:0};x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x+NW);y1=Math.max(y1,p.y+NH);});
+  ns.forEach(n=>{const p=L[n.id]||{x:0,y:0},sz=sizeOf(n.id);
+    x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x+sz.w);y1=Math.max(y1,p.y+sz.h);});
   const cv=$("#cv").getBoundingClientRect();
   const k=Math.min(1.1,Math.max(0.2,Math.min((cv.width-32)/(x1-x0||1),(cv.height-32)/(y1-y0||1))));
   Ed.view.k=k;Ed.view.x=(cv.width-(x1-x0)*k)/2-x0*k;Ed.view.y=(cv.height-(y1-y0)*k)/2-y0*k;applyView();
@@ -2532,9 +2581,11 @@ $("#cv").addEventListener("pointerdown",ev=>{
     pinch0={d:Math.hypot(a.x-b.x,a.y-b.y),k:Ed.view.k,cx:(a.x+b.x)/2,cy:(a.y+b.y)/2,vx:Ed.view.x,vy:Ed.view.y};press=null;return;}
   moved=false;
   const port=ev.target.closest(".port");
+  const rz=ev.target.closest(".ndrz");
   const node=ev.target.closest(".nd");
   const eIdx=ev.target.getAttribute&&ev.target.getAttribute("data-edge");
   if(port)press={kind:"port",node:port.dataset.node,side:port.dataset.side};
+  else if(rz)press={kind:"resize",id:rz.dataset.rz,px:ev.clientX,py:ev.clientY,start:sizeOf(rz.dataset.rz)};
   else if(node)press={kind:"node",id:node.dataset.id,start:posOf(node.dataset.id),px:ev.clientX,py:ev.clientY};
   else if(eIdx!=null){const e=(Ed.spec.edges||[])[+eIdx];
     const g=e?edgeGeom(e):null;
@@ -2558,6 +2609,19 @@ $("#cv").addEventListener("pointermove",ev=>{
     const L=layout();L[press.id]={x:Math.round(press.start.x+dx),y:Math.round(press.start.y+dy)};
     const el=document.querySelector('.nd[data-id="'+CSS.escape(press.id)+'"]');
     if(el){el.style.left=L[press.id].x+"px";el.style.top=L[press.id].y+"px";}
+    drawEdgesOnly();
+  }else if(press.kind==="resize"){
+    const dx=(ev.clientX-press.px)/Ed.view.k,dy=(ev.clientY-press.py)/Ed.view.k;
+    if(!moved&&Math.hypot(ev.clientX-press.px,ev.clientY-press.py)<6)return;
+    moved=true;
+    const w=Math.max(90,Math.min(640,Math.round(press.start.w+dx)));
+    const h=Math.max(44,Math.min(420,Math.round(press.start.h+dy)));
+    setSize(press.id,{w,h});
+    const el=document.querySelector('.nd[data-id="'+CSS.escape(press.id)+'"]');
+    if(el){el.style.width=w+"px";el.style.height=h+"px";
+      const n=nodeById(press.id);
+      el.querySelectorAll(".port").forEach(q=>{const t=portPos(n,q.dataset.side,{w,h});
+        q.style.left=t.x+"px";q.style.top=t.y+"px";});}
     drawEdgesOnly();
   }else if(press.kind==="edge"&&press.start){
     if(!moved&&Math.hypot(ev.clientX-press.px,ev.clientY-press.py)<8)return;
@@ -2608,6 +2672,8 @@ $("#cv").addEventListener("pointerup",ev=>{
   pts.delete(ev.pointerId);if(pts.size<2)pinch0=null;
   const pr=press;press=null;
   if(!pr)return;
+  if(pr.kind==="resize"&&moved){syncFromCanvas();setHint("大きさを変えた（ノードをタップ →「大きさを戻す」で戻せる）");return;}
+  if(pr.kind==="resize")return;
   if((pr.kind==="node"||pr.kind==="edge")&&moved){syncFromCanvas();setHint(pr.kind==="edge"?"線の形を変えた（辺をタップ →「線の形を戻す」で戻せる）":"");return;}
   if(moved)return;
   if(pr.kind==="port"){
@@ -2696,11 +2762,10 @@ function connect(from,to){
     return;
   }
   const outs=outEdges(from).filter(e=>!e.loop);
-  if(outs.length>1&&!(src.routing&&src.routing.mode)){
-    askRouting(from,()=>{syncFromCanvas();setHint("つないだ: "+from+" → "+to);});
-    syncFromCanvas();return;
-  }
-  syncFromCanvas();setHint("つないだ: "+from+" → "+to);
+  syncFromCanvas();      // 出口が2本以上になったら、ここで「並列」が入る
+  setHint(outs.length>1&&(nodeById(from).routing||{}).mode==="parallel"
+    ?`つないだ: ${from} → ${to}（出口が${outs.length}本になったので並列で全部に流す。変えるならノードをタップ）`
+    :"つないだ: "+from+" → "+to);
 }
 /* --- シート --- */
 function openSheet(html){
@@ -2796,10 +2861,18 @@ function buildUntil(kind,q){
   if(kind==="json")return (q.node&&q.field)?`${q.node}.out.${q.field} ${q.op||">="} ${untilVal(q.val)}`:"";
   return "";
 }
-/* 条件で見るノードの候補（英数字の名前だけ。式では日本語の名前が使えない） */
+/* そのノードが宣言している出力の項目名（schema の properties） */
+function schemaKeys(n){const pr=n&&n.schema&&n.schema.properties;return pr?Object.keys(pr):[];}
+/* 条件で見るノードの候補（英数字の名前だけ。式では日本語の名前が使えない）。
+   「このノードへ値を渡していて、かつ項目を宣言している」ものを先に出す
+   （そうしないと、点数を出すノードではなく手前のノードが既定で選ばれてしまう）。 */
 function untilNodeOpts(n){
-  return (Ed.spec.nodes||[]).filter(x=>x.id!==n.id&&(x.type==="llm"||x.type==="tool"||x.type===undefined||x.type==="join"))
-    .filter(x=>/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(x.id)).map(x=>({v:x.id,t:x.id}));
+  const ns=(Ed.spec.nodes||[]).filter(x=>x.id!==n.id
+    &&["llm","tool","join","calc","cond",undefined].includes(x.type)
+    &&/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(x.id));
+  const rank=x=>(canReach(x.id,n.id)?0:2)+(schemaKeys(x).length?0:1);
+  return ns.map(x=>({v:x.id,t:x.id+(schemaKeys(x).length?`（${schemaKeys(x).join(" / ")}）`:"（文章）"),r:rank(x)}))
+    .sort((a,b)=>a.r-b.r).map(({v,t})=>({v,t}));
 }
 /* 複数の入力が来たときの受け取り方。いま1本でも、あとから線を足せるので常に出す */
 function mergeFields(n){
@@ -2854,8 +2927,12 @@ function openNodeSheet(id){
       {v:"free",t:"自分で式を書く"}]));
     if(kd==="json"||kd==="len"){
       if(!nopts.length)h+=`<div class="mini" style="color:var(--warn)">条件で見られるノードが無い（式では英数字の名前のノードしか指せない）。</div>`;
+      const kys=schemaKeys(nodeById(q.node)||{});
       h+=`<div class="fld2">${fld("どのノードの答えを見る",sel("__unode",q.node,nopts))}`
-        +(kd==="json"?fld("JSONのどの項目",txt("__ufield",q.field,"score")):fld("見るもの",`<input type="text" value="文字数" disabled>`))+`</div>`;
+        +(kd==="json"
+          ?(kys.length?fld("どの項目",sel("__ufield",kys.includes(q.field)?q.field:kys[0],kys.map(k=>({v:k,t:k}))))
+                      :fld("JSONのどの項目",txt("__ufield",q.field,"score")))
+          :fld("見るもの",`<input type="text" value="文字数" disabled>`))+`</div>`;
       h+=`<div class="fld2">${fld("くらべ方",sel("__uop",q.op,UNTIL_CMP))}${fld("値",txt("__uval",q.val,kd==="len"?"200":"8"))}</div>`;
       if(kd==="json")h+=`<div class="mini">見るノードには<b>出力の形</b>（点数・はい/いいえ など）が要る。文章のままだと項目が読めない。</div>`;
     }
@@ -2941,14 +3018,16 @@ function openNodeSheet(id){
     if(o2.filter(e=>e.loopRole!=="done").length>1||o2.filter(e=>e.loopRole==="done").length>1)
       h+=fld("同じ役割の出口が2本以上ある — 失敗したときの波及",sel("routing.failurePolicy",getP(n,"routing.failurePolicy"),
         [{v:"fail_fast",t:"fail_fast（兄弟を止める）"},{v:"",t:"(未設定・エラーになる)"}]));
-  }else{
-  h+=fld("出口の扱い（分岐するときだけ）",sel("routing.mode",getP(n,"routing.mode"),[{v:"",t:"(未設定・1本だけ出る)"},{v:"parallel",t:"parallel（全部に流す）"},{v:"first_match",t:"first_match（条件で1本選ぶ）"}]));
-  if(getP(n,"routing.mode")==="parallel")
-    h+=fld("失敗したときの波及",sel("routing.failurePolicy",getP(n,"routing.failurePolicy"),[{v:"fail_fast",t:"fail_fast（兄弟を止める）"},{v:"",t:"(未設定・エラーになる)"}]));
+  }else if(outEdges(n.id).filter(e=>!e.loop).length>1){
+  h+=fld("出口の扱い（2本以上出ているとき）",sel("routing.mode",getP(n,"routing.mode")||"parallel",
+    [{v:"parallel",t:"並列（全部に流す）"},{v:"first_match",t:"条件で1本だけ選ぶ（if / else）"}]));
+  if((getP(n,"routing.mode")||"parallel")==="parallel")
+    h+=fld("失敗したときの波及",sel("routing.failurePolicy",getP(n,"routing.failurePolicy")||"fail_fast",[{v:"fail_fast",t:"fail_fast（兄弟を止める）"}]));
   if(getP(n,"routing.mode")==="first_match")
     h+=fld("どれにも当たらないとき",sel("routing.onNoMatch",getP(n,"routing.onNoMatch"),[{v:"error",t:"error（失敗にする）"},{v:"stop",t:"stop（止めてResume可能に）"}]));
   }
-  h+=`<div class="row"><button class="danger" id="nDel">このノードを削除</button></div>`;
+  h+=`<div class="row">${sizeOf(n.id).set?`<button id="nSz">大きさを戻す</button>`:""}<button class="danger" id="nDel">このノードを削除</button></div>`;
+  h+=`<div class="mini">ノードの右下のつまみをドラッグすると大きさを変えられる（図の見た目だけ・Runtimeは見ない）。</div>`;
   openSheet(h);bindClose();
   bindFields(n,el=>{
     if(el.dataset.f==="prompt.template.value"){
@@ -2971,11 +3050,21 @@ function openNodeSheet(id){
       if(!q.node)q.node=(untilNodeOpts(n)[0]||{}).v||"";
       if(!q.op)q.op=">=";
       if(!q.val)q.val=(kd==="len"?"200":"8");
-      if(kd==="json"&&!q.field)q.field="score";
+      if(kd==="json"){const kk=schemaKeys(nodeById(q.node)||{});
+        if(!q.field||(kk.length&&!kk.includes(q.field)))q.field=kk[0]||"score";}
       const u=buildUntil(kd,q);if(u)n.loop.until=u;else delete n.loop.until;}
     syncFromCanvas();openNodeSheet(n.id);};
+  {const un=$("#sheetBody").querySelector('select[data-f="__unode"]');
+   if(un)un.onchange=()=>{
+     const kk=$("#sheetBody").querySelector('select[data-f="__ukind"]');
+     const q=untilParts((n.loop||{}).until);q.node=un.value;
+     if(kk&&kk.value==="json"){const ks=schemaKeys(nodeById(q.node)||{});
+       if(ks.length&&!ks.includes(q.field))q.field=ks[0];}
+     const u=buildUntil(kk?kk.value:"json",q);
+     n.loop=n.loop||{};if(u)n.loop.until=u;else delete n.loop.until;
+     syncFromCanvas();openNodeSheet(n.id);};}
   ["__unode","__ufield","__uop","__uval"].forEach(f=>{
-    const el=$("#sheetBody").querySelector('[data-f="'+f+'"]');if(!el)return;
+    const el=$("#sheetBody").querySelector('[data-f="'+f+'"]');if(!el||f==="__unode")return;
     const upd=()=>{
       const kk2=$("#sheetBody").querySelector('select[data-f="__ukind"]');if(!kk2)return;
       const g=k=>{const x=$("#sheetBody").querySelector('[data-f="'+k+'"]');return x?x.value:"";};
@@ -3104,14 +3193,19 @@ function openNodeSheet(id){
     syncFromCanvas();openNodeSheet(n.id);});
   const rm=$("#sheetBody").querySelector('[data-f="routing.mode"]');
   if(rm)rm.onchange=()=>{const v=rm.value;
-    if(!v){delete n.routing;}else{n.routing=n.routing||{};n.routing.mode=v;
-      if(v==="parallel"){delete n.routing.onNoMatch;n.routing.failurePolicy=n.routing.failurePolicy||"fail_fast";}
-      else{delete n.routing.failurePolicy;n.routing.onNoMatch=n.routing.onNoMatch||"error";}}
+    n.routing=n.routing||{};n.routing.mode=v;
+    if(v==="parallel"){delete n.routing.onNoMatch;n.routing.failurePolicy=n.routing.failurePolicy||"fail_fast";
+      outEdges(n.id).forEach(e=>{if(!e.loop){delete e.if;delete e.else;delete e.priority;}});}
+    else{delete n.routing.failurePolicy;n.routing.onNoMatch=n.routing.onNoMatch||"error";
+      // 条件で選ぶ形にする。最後の1本は else で受ける（そのままだと検証エラーになるため）
+      const outs=outEdges(n.id).filter(e=>!e.loop);
+      outs.forEach((e,i)=>{if(!e.if&&!e.else){if(i<outs.length-1){e.if="true==true";e.priority=i;}else{e.else=true;e.priority=i;}}});}
     syncFromCanvas();openNodeSheet(n.id);};
+  {const sb=$("#nSz");if(sb)sb.onclick=()=>{setSize(n.id,null);syncFromCanvas();openNodeSheet(n.id);setHint("大きさを戻した");};}
   $("#nDel").onclick=()=>{
     Ed.spec.nodes=Ed.spec.nodes.filter(x=>x.id!==id);
     Ed.spec.edges=(Ed.spec.edges||[]).filter(e=>e.from.node!==id&&e.to.node!==id);
-    delete layout()[id];Ed.sel=null;closeSheet();syncFromCanvas();setHint("削除: "+id);
+    delete layout()[id];setSize(id,null);Ed.sel=null;closeSheet();syncFromCanvas();setHint("削除: "+id);
   };
 }
 function renameNode(oldId,newId){
@@ -3120,6 +3214,7 @@ function renameNode(oldId,newId){
   const n=nodeById(oldId);if(!n)return;n.id=newId;
   (Ed.spec.edges||[]).forEach(e=>{if(e.from.node===oldId)e.from.node=newId;if(e.to.node===oldId)e.to.node=newId;});
   const L=layout();if(L[oldId]){L[newId]=L[oldId];delete L[oldId];}
+  {const q=sizeOf(oldId);if(q.set){setSize(newId,{w:q.w,h:q.h});setSize(oldId,null);}}
   if(Ed.sel&&Ed.sel.kind==="node"&&Ed.sel.id===oldId)Ed.sel.id=newId;
 }
 /* 辺の編集 */
@@ -3401,7 +3496,7 @@ function setRunUI(running){
 }
 let cur=null,ctl=null;
 function parseSpec(){let spec;try{spec=JSON.parse($("#spec").value);}catch(e){log("err","JSON: "+e.message);return null;}
-  if(normalizeInputOrder(spec))log("dim","入口に2本以上入っている所に、つないだ順で番号を振った（順番はノード編集で変えられる）");
+  if(normalizeSpec(spec))log("dim","入口の順番と出口の流し方を決めてから実行する（順番はノード編集の「入力の順番」、流し方は「出口の扱い」で変えられる）");
   const errs=validate(spec);if(errs.length){errs.forEach(e=>log("err","VALIDATE: "+e));return null;}return spec;}
 function updateResume(){const cp=store.load();$("#resume").disabled=!(cp&&cp.status!=="success"&&cp.resumable);
   $("#retry").disabled=!(cur&&Object.values(cur.executions||{}).some(e=>e.status==="failed"));}
@@ -3435,7 +3530,29 @@ function newCtl(){return makeController({
   onProgress:()=>renderProvState(),
   onStep:run=>{edStatus(run);renderTotals();renderIO();}});}
 /* ---- 入出力パネル（入力ノード・出力ノードに連動する） ---- */
-const DEFAULT_INPUT="ローカルLLMで動くか、1つだけ確かめたい。";
+/* 入力の例。端末の中の小さいモデルでも答えられる短い質問にしてある。
+   「別の例にする」で入れ替わる（読み込み直さなくてよい）。 */
+const SAMPLE_INPUTS=[
+ "HTTPとは何ですか。3行で説明して。",
+ "自己紹介を2文で書いて。",
+ "カレーの材料を5つ挙げて。",
+ "犬と猫のちがいを3つ挙げて。",
+ "小学生にインターネットを説明して。2文で。",
+ "旅行の持ち物を5つ挙げて。",
+ "朝ごはんの献立を1つ提案して。",
+ "コーヒーと紅茶のちがいを2文で。",
+ "会議の議事録に付ける見出しを3つ挙げて。",
+ "パスワードを安全にするコツを3つ挙げて。",
+ "「お世話になっております」で始まるメールの書き出しを1文で。",
+ "雨の日に家でできることを3つ挙げて。"];
+let sampleNow=[];
+function rollSamples(){
+  const a=SAMPLE_INPUTS.slice();
+  for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));const t=a[i];a[i]=a[j];a[j]=t;}
+  sampleNow=a.slice(0,3);
+}
+rollSamples();
+let DEFAULT_INPUT=sampleNow[0];
 const runInput={};
 let ioSig="";
 function ioNodes(){const ns=(Ed.spec&&Ed.spec.nodes)||[];
@@ -3498,6 +3615,32 @@ function renderIO(){
       el.style.color="var(--err)";
     }
   }
+}
+/* 例の並び。押すとその質問が入力欄に入る。「別の例にする」で3つとも入れ替える。 */
+function renderSamples(){
+  const el=$("#ioSamples");if(!el)return;
+  el.innerHTML=`<span class="mini">例:</span>`
+    +sampleNow.map((t,i)=>`<button class="chip" data-smp="${i}">${esc(t)}</button>`).join("")
+    +`<button id="ioReroll">別の例にする</button>`;
+  el.querySelectorAll("[data-smp]").forEach(b=>{b.onclick=()=>{
+    const t=sampleNow[+b.dataset.smp];const{ins}=ioNodes();if(!ins.length)return;
+    putInput(ins[0].id,t);setHint("入力欄に例を入れた");};});
+  $("#ioReroll").onclick=()=>{
+    const before=DEFAULT_INPUT;
+    rollSamples();DEFAULT_INPUT=sampleNow[0];
+    // まだ触っていない欄（＝前の例のままの欄）だけ入れ替える。書いた文は消さない
+    const{ins}=ioNodes();
+    for(const n of ins){
+      if(n.default!=null)continue;
+      if(runInput[n.id]===undefined||runInput[n.id]===before||runInput[n.id]==="")putInput(n.id,DEFAULT_INPUT);
+      ioDefault[n.id]=DEFAULT_INPUT;
+    }
+    renderSamples();setHint("別の例にした");};
+}
+function putInput(id,t){
+  runInput[id]=t;
+  const ta=$("#ioIn").querySelector(`[data-in="${CSS.escape(id)}"]`);
+  if(ta)ta.value=t;
 }
 function inputForRun(){
   const{ins}=ioNodes();const o={};
@@ -3958,7 +4101,7 @@ const doCancel=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要
 $("#cancel").onclick=doCancel;$("#cancelTop").onclick=doCancel;$("#estop").onclick=doCancel;
 $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
-setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("webllm");loadEx("exW1");loadFromHash();fitView();renderTotals();renderIO();renderModels();renderGguf();updateStorageInfo();
+setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("webllm");loadEx("exW1");loadFromHash();fitView();renderTotals();renderIO();renderSamples();renderModels();renderGguf();updateStorageInfo();
 loadSiteModels().then(scanModels);        // 何が端末にあるかを最初に調べる（押さなくても分かるように）
 webgpuDiagnostics().then(d=>{lastDiag=d;}).catch(()=>{});   // 端末の対応状況（調査用メモに載せる）
 checkVersion();                                             // 古い版を握っていないか

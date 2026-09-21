@@ -113,6 +113,58 @@ R['⑥ 図のモデル表示'] = { A: await p.textContent('.nd[data-id="A"] .ndm
 ok.modelOnCanvas = R['⑥ 図のモデル表示'].A === 'SmolLM2-360M-q4f16_1' && R['⑥ 図のモデル表示'].B === 'Qwen2.5-0.5B-q4f16_1'
   && R['⑥ 図のモデル表示'].Aの吹き出し.includes('providerの既定');
 
+// ⑦ 入力の例が毎回ちがう。押すと入り、「別の例にする」で入れ替わる
+await paste(mk([{ id: "in", type: "input" }, { id: "A", type: "llm", provider: "m", mock: { tag: "A" } }, { id: "out", type: "output" }],
+  [{ from: { node: "in", port: "out" }, to: { node: "A", port: "in" } }, { from: { node: "A", port: "out" }, to: { node: "out", port: "in" } }]));
+const chips = () => p.locator('#ioSamples [data-smp]').allTextContents();
+const c1 = await chips();
+const v1 = await p.inputValue('#ioIn [data-in="in"]');
+R['⑦ 例'] = c1;
+ok.samples = c1.length === 3 && c1.every(t => t.length > 4) && v1 === c1[0];
+await p.locator('#ioSamples [data-smp]').nth(2).tap(); await p.waitForTimeout(150);
+R['⑦ 押した例が入る'] = await p.inputValue('#ioIn [data-in="in"]');
+ok.sampleTap = R['⑦ 押した例が入る'] === c1[2];
+await tap('#ioReroll');
+const c2 = await chips();
+R['⑦ 別の例'] = c2;
+ok.reroll = c2.join() !== c1.join() && c2.length === 3;
+// 書いた文は消さない（押した例＝自分で入れた文は残る）
+ok.rerollKeeps = (await p.inputValue('#ioIn [data-in="in"]')) === c1[2];
+
+// ⑧ ノードの大きさを手で変えられる
+const box = async sel => { await p.locator(sel).first().scrollIntoViewIfNeeded(); return await p.locator(sel).first().boundingBox(); };
+const dragBy = async (sel, dx, dy) => { const r = await box(sel); const x = r.x + r.width / 2, y = r.y + r.height / 2;
+  await p.mouse.move(x, y); await p.mouse.down(); await p.mouse.move(x + dx / 2, y + dy / 2, { steps: 4 });
+  await p.mouse.move(x + dx, y + dy, { steps: 4 }); await p.mouse.up(); await p.waitForTimeout(150); };
+const b0 = await box('.nd[data-id="A"]');
+await dragBy('.nd[data-id="A"] .ndrz', 60, 40);
+const b1 = await box('.nd[data-id="A"]');
+R['⑧ 大きさ'] = { before: [Math.round(b0.width), Math.round(b0.height)], after: [Math.round(b1.width), Math.round(b1.height)],
+  spec: (await spec()).metadata.sizes };
+ok.resize = b1.width > b0.width + 30 && b1.height > b0.height + 10 && !!R['⑧ 大きさ'].spec.A;
+// 出口の丸も大きさに付いてくる（線がずれない）
+const pOut = await box('.nd[data-id="A"] .port.pout');
+ok.portFollows = Math.abs((pOut.y + pOut.height / 2) - (b1.y + b1.height)) < 3;
+await tap('.nd[data-id="A"]');
+await tap('#nSz');
+R['⑧ 戻した'] = { w: Math.round((await box('.nd[data-id="A"]')).width), もどり先: Math.round(b0.width),
+  sizes: (await spec()).metadata.sizes === undefined ? '（書かれていない）' : (await spec()).metadata.sizes };
+ok.resizeReset = R['⑧ 戻した'].w === Math.round(b0.width) && R['⑧ 戻した'].sizes === '（書かれていない）';
+
+// ⑨ ループノードだけ入口と出口が上下逆（戻ってくる線が上から入る）
+await paste(mk(
+  [{ id: "in", type: "input" }, { id: "lp", type: "loop", loop: { id: "lp", max: 2 } },
+   { id: "A", type: "llm", provider: "m", mock: { tag: "A" } }, { id: "out", type: "output" }],
+  [{ from: { node: "in", port: "out" }, to: { node: "lp", port: "in" } },
+   { from: { node: "lp", port: "out" }, to: { node: "A", port: "in" } },
+   { from: { node: "lp", port: "out" }, to: { node: "out", port: "in" }, loopRole: "done" },
+   { from: { node: "A", port: "out" }, to: { node: "lp", port: "in" }, loop: { id: "lp" } }]));
+const geo = async id => { const n = await box(`.nd[data-id="${id}"]`), i = await box(`.nd[data-id="${id}"] .port.pin`), o = await box(`.nd[data-id="${id}"] .port.pout`);
+  return { in: Math.round(i.y + i.height / 2 - n.y), out: Math.round(o.y + o.height / 2 - n.y), h: Math.round(n.height) }; };
+R['⑨ ポートの位置'] = { ループ: await geo('lp'), ふつう: await geo('A') };
+ok.loopPortsFlipped = R['⑨ ポートの位置'].ループ.in > R['⑨ ポートの位置'].ループ.out
+  && R['⑨ ポートの位置'].ふつう.in < R['⑨ ポートの位置'].ふつう.out;
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

@@ -83,13 +83,22 @@ await paste({ metadata: { name: "分岐", version: "1" }, providers: { m: { adap
   edges: [{ from: { node: "in", port: "out" }, to: { node: "A", port: "in" } },
           { from: { node: "in", port: "out" }, to: { node: "B", port: "in" } },
           { from: { node: "A", port: "out" }, to: { node: "out", port: "in" } }] });
-R['③ 取り込み直後'] = (await vErr()).slice(0, 60);
-const rb = p.locator('#vErr button').filter({ hasText: '流し方' });
-ok.routeFixOffered = (await rb.count()) === 1;
-await rb.first().tap(); await p.waitForTimeout(150);
-await tap('#rPar');
-R['③ 決めた後'] = { routing: (await spec()).nodes.find(n => n.id === 'in').routing, 検証: (await vErr()).trim() || '（エラーなし）' };
-ok.routeFixed = R['③ 決めた後'].routing.mode === 'parallel' && R['③ 決めた後'].検証 === '（エラーなし）';
+R['③ 取り込み直後'] = { 検証: (await vErr()).trim() || '（エラーなし）',
+  routing: (await spec()).nodes.find(n => n.id === 'in').routing };
+// 流し方が書いていなければ「並列（fail_fast）」で埋める。押すボタンは要らない
+ok.routeFixOffered = (await p.locator('#vErr button').filter({ hasText: '流し方' }).count()) === 0;
+ok.routeFixed = R['③ 取り込み直後'].検証 === '（エラーなし）'
+  && JSON.stringify(R['③ 取り込み直後'].routing) === '{"mode":"parallel","failurePolicy":"fail_fast"}';
+// 条件で1本だけ選ぶ形にも、ノード編集から切り替えられる（if/else の骨組みも入る）
+await tap('.nd[data-id="in"]');
+await p.selectOption('[data-f="routing.mode"]', 'first_match'); await p.waitForTimeout(250);
+const s3 = await spec();
+R['③ 条件に変えた'] = { routing: s3.nodes.find(n => n.id === 'in').routing,
+  線: s3.edges.filter(e => e.from.node === 'in').map(e => e.if ? 'if' : e.else ? 'else' : 'plain'),
+  検証: (await vErr()).trim() || '（エラーなし）' };
+ok.firstMatch = R['③ 条件に変えた'].routing.mode === 'first_match'
+  && R['③ 条件に変えた'].線.join() === 'if,else' && R['③ 条件に変えた'].検証 === '（エラーなし）';
+await tap('#shClose');
 
 // ④ Join: まとめ方を選び、追加文言を入れて、実際にその形で下流に届く
 await paste({ metadata: { name: "Join", version: "1" }, providers: { m: { adapter: "mock" } },
