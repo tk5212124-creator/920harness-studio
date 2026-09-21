@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — ループの出口と条件を直す v0.21.0</title>
+<title>Harness Studio — 動き出す条件を決める v0.22.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -112,7 +112,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.21.0 · ループの出口と条件を直す</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.22.0 · 動き出す条件を決める</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -626,6 +626,8 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
         1つの入口に複数の線が入る llm ノードで、それらをどう1つの文にするか。
         op は concat（改行でつなぐ・既定）| numbered（1. 2. …）| markdown（見出し付き）| csv | json_array
     mock {"text":"…"}                     （adapter が mock のとき）
+    set start {"mode":"any"}              （入口が2本以上あるノード。all=全部そろったら（既定）/ any=どれか来たら
+                                           / custom は {"mode":"custom","op":"or","groups":[{"op":"and","from":["in","点検"]}]}）
     set label "直したい文章を貼る"        （input。実行画面の入力欄に出す文言）
     set default "…"                      （input。最初から入れておく文）
     set loop {"id":"rev","max":5,"until":"critic.out.score >= 8"}
@@ -672,6 +674,8 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
 - <node>.out.<フィールド> を見るなら、その node に schema を書く（**書かないとエラーになる**。
   schema が無いとLLMは文章で返すので、.score のような項目は読めない）。
 - 条件分岐(cond)は最後の出口を {"else":true} にする（当たらないと失敗になる）。出口ごとに線を出す。
+- ループの本体が外からの線も受けるときは、そのノードに set start {"mode":"any"} を書く
+  （書かないと「全部そろうまで待つ」ので、ループが始まらず止まる）。
 - 計算(calc)には set code が必須。入ってくる線に as で名前を付けると、その名前で使える（inputs と iteration も使える）。
 - 出力の項目を決めるときは schema を書く。数値は {"type":"number","minimum":0,"maximum":10}、整数は "integer"。
 - ノード名に日本語も使える。その場合は "…" で囲む（例: node "検証": llm local / write -> "検証"）。
@@ -1595,6 +1599,8 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
 function deliveryOrigin(spec,edge,seen){
   seen=seen||new Set();
   const from=edge.from.node;
+  // 手前が合流ノードなら、そこで実行が1つにまとめ直されるので、そのノード自身が起点になる
+  if(isConfluenceNode(spec,from))return "合流: "+from;
   const outs=(spec.edges||[]).filter(e=>e.from.node===from&&!e.loop);
   if(outs.length>1)return "分岐: "+from;                 // ここで新しい分岐グループが始まる
   const ins=(spec.edges||[]).filter(e=>e.to.node===from&&!e.loop);
@@ -1774,6 +1780,12 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
       else seen.add(q.id);
       if(q&&q.pick){try{parsePick(q.pick);}catch(_){errs.push(`出口の取り出し方が読めない: ${n.id}.${q.id} = ${q.pick}`);}}});});
   spec.nodes.forEach(n=>{
+    const st=n.start;
+    if(st){
+      if(!["all","any","custom"].includes(st.mode||"all"))errs.push("動き出す条件の指定が不正: "+n.id);
+      if((st.mode==="custom")&&!((st.groups||[]).length))errs.push("動き出す条件が空（条件を1つ足す）: "+n.id);
+      for(const g of st.groups||[])if(!g||!((g.from||[]).length))errs.push("条件に入力が選ばれていない: "+n.id);
+    }
     if(n.type==="calc"){
       if(n.lang&&!["expr","js"].includes(n.lang))errs.push(`計算のしかたが不正（式か JavaScript）: ${n.id}`);
       if(!String(n.code||"").trim())errs.push("計算の中身が空: "+n.id);
@@ -1791,6 +1803,14 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     }
     if(n.type!=="loop")return;
     const cfg=n.loop||{};
+    if(!(spec.edges||[]).some(e=>e.to.node===n.id&&!e.loop)){
+      // 入口の線が無いループ。本体のどれかが自分で動き出せるなら回る
+      const body=[...((loopBodySets(spec)[n.id])||[])];
+      const byId2={};(spec.nodes||[]).forEach(x=>byId2[x.id]=x);
+      if(!body.some(id=>startModeOf(byId2[id])!=="all"))
+        errs.push(`ループ "${n.id}" に入る線が無いので始まらない`
+          +`（入力からこのノードへ線を引くか、本体のノードの「動き出す条件」を「どれか来たら動く」にする）`);
+    }
     if(cfg.max!=null&&cfg.max!==""&&!(Number(cfg.max)>=1))errs.push("ループの最大回数が1以上でない: "+n.id);
     if(cfg.lang&&!["expr","js"].includes(cfg.lang))errs.push("ループの条件の書き方が不正（式か JavaScript）: "+n.id);
     if(cfg.until&&cfg.lang!=="js"){try{compileExpr(cfg.until);}catch(_){errs.push("ループの打ち切り条件が読めない: "+n.id+" — "+cfg.until);}}
@@ -1863,15 +1883,23 @@ function deliveryPool(node,ex,ds){
 /* 「別々の分岐から来た線が1つの入口に入る」ノード。
    ここだけは分岐グループをまたいで1つの実行に揃える（揃えないと永久に待つ＝DEADLOCK）。
    ループの回や、どの繰り返しかは引き続き区別する（混ざらない）。 */
+/* 同じ Spec の中では答えが変わらないので覚えておく（再帰も1回で止まる） */
+const _confMemo=typeof WeakMap!=="undefined"?new WeakMap():null;
 function isConfluenceNode(spec,nodeId){
+  let m=_confMemo&&_confMemo.get(spec);
+  if(_confMemo&&!m){m=new Map();_confMemo.set(spec,m);}
+  if(m&&m.has(nodeId))return m.get(nodeId);
+  if(m)m.set(nodeId,false);                              // 計算中は false（輪になっても止まる）
   const byPort={};
   for(const e of spec.edges||[]){if(e.loop||e.to.node!==nodeId)continue;
     (byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);}
+  let r=false;
   for(const es of Object.values(byPort)){
     if(es.length<2)continue;
-    if(new Set(es.map(e=>deliveryOrigin(spec,e))).size>1)return true;
+    if(new Set(es.map(e=>deliveryOrigin(spec,e))).size>1){r=true;break;}
   }
-  return false;
+  if(m)m.set(nodeId,r);
+  return r;
 }
 const MERGE_ACT=nodeId=>"merge#"+nodeId;
 function applyEdgeAndValidate(rv,edge,toNode,toPort){
@@ -1936,11 +1964,31 @@ function calcScope(run,spec,ex,node){
   scope.inputs=list;scope.iteration=ex.iteration||1;
   return scope;
 }
+/* そのノードが「いつ動き出すか」。
+     all（既定）… 入力が全部そろったら動く（これまでの動き）
+     any        … どれか1つでも入力が来たら動く（届くたびに動く）
+     custom     … 条件1・条件2… を and / or で組む。条件の中も and / or で選べる
+   start が無いノードは all。ここで true を返しても、渡る値は届いている分だけ。 */
+const startModeOf=n=>((n&&n.start&&n.start.mode)||"all");
+function startReady(run,spec,ex,node){
+  const mode=startModeOf(node);
+  if(mode==="all")return null;                       // これまで通りの判定に任せる
+  const conf=isConfluenceNode(spec,ex.nodeId);
+  const mine=d=>d.toNodeId===ex.nodeId&&deliveryMatchesExec(d,ex,conf);
+  if(mode==="any")return run.deliveries.some(mine);
+  const has=src=>run.deliveries.some(d=>mine(d)&&d.fromNodeId===src);
+  const gs=(node.start&&node.start.groups)||[];
+  if(!gs.length)return false;
+  const one=g=>{const fs=(g&&g.from)||[];if(!fs.length)return false;
+    return (g.op==="and")?fs.every(has):fs.some(has);};
+  return ((node.start&&node.start.op)==="and")?gs.every(one):gs.some(one);
+}
 function execInputsReady(run,spec,ex){const node=spec.nodes.find(n=>n.id===ex.nodeId);
   const conf=isConfluenceNode(spec,ex.nodeId);
   // ループノードの2周目以降は、戻り線が1本届けば回る（最初の入力を毎周待たない）
   if(isLoopNode(node)&&NN(ex.loopInstanceId)!==null)
     return run.deliveries.some(d=>d.toNodeId===ex.nodeId&&NN(d.loopInstanceId)===NN(ex.loopInstanceId)&&NN(d.iteration)===NN(ex.iteration));
+  {const s=startReady(run,spec,ex,node);if(s!==null)return s;}
   const inE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId);if(inE.length===0)return true;
   const byPort={};for(const e of inE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
   for(const[port,es]of Object.entries(byPort)){const card=node&&node.inputs&&node.inputs[port]&&node.inputs[port].cardinality;
@@ -1969,7 +2017,10 @@ function makeExec(run,nodeId,ctx){const execId=`${nodeId}@${ctx.loopInstanceId||
   run.executions[execId]=ex;run.workQueue.push({execId,phase:"execute"});return ex;}
 function resolveTargetContext(run,spec,fromExec,edge,loopEntries){
   const toNode=edge.to.node;const entry=loopEntries[toNode];
-  if(edge.loop){const inst=fromExec.loopInstanceId;return{activationId:fromExec.activationId,loopInstanceId:inst,iteration:run.loopInstances[inst].iteration};}
+  if(edge.loop){const inst=fromExec.loopInstanceId;const li=inst?run.loopInstances[inst]:null;
+    // まだ一度もループに入っていない（本体が先に動いた）ときは、ふつうの入口として渡す
+    if(!li)return{activationId:fromExec.activationId,loopInstanceId:null,iteration:null};
+    return{activationId:fromExec.activationId,loopInstanceId:inst,iteration:li.iteration};}
   if(entry){
     const act=NN(fromExec.activationId);
     let iid=Object.keys(run.loopInstances).find(k=>{const x=run.loopInstances[k];return x.loopId===entry.loopId&&NN(x.activationId)===act&&x.active;});
@@ -1997,7 +2048,8 @@ function fromOutsideLoopBody(spec,edge){
 function enqueueTo(run,spec,edge,ctx){
   // ループの中のノードへ外から入ってきた値は、届けるだけにする（実行を作るのはループが回すとき）。
   // ここで実行を作ると「周回の値をいつまでも待つ実行」が残って必ず DEADLOCK になる。
-  if(NN(ctx.loopInstanceId)===null&&fromOutsideLoopBody(spec,edge))return null;
+  if(NN(ctx.loopInstanceId)===null&&fromOutsideLoopBody(spec,edge)
+     &&startModeOf((spec.nodes||[]).find(n=>n.id===edge.to.node))==="all")return null;
   // 別々の分岐から来る合流ノードは、分岐ごとに実行を作らず1つにまとめる
   const c=isConfluenceNode(spec,edge.to.node)?Object.assign({},ctx,{activationId:MERGE_ACT(edge.to.node)}):ctx;
   const dup=Object.values(run.executions).find(x=>x.nodeId===edge.to.node&&x.status==="ready"&&NN(x.activationId)===NN(c.activationId)&&NN(x.loopInstanceId)===NN(c.loopInstanceId)&&NN(x.iteration)===NN(c.iteration));
@@ -2378,7 +2430,11 @@ async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
       const outputNodes=spec.nodes.filter(n=>n.type==="output");
       const anyOutputDone=outputNodes.length===0||outputNodes.some(n=>(run.nodeRuns[n.id]||[]).some(h=>h.status==="success"));
       if(anyOutputDone){run.status="success";run.resumable=false;if(store)store.save(run);}
-      else{failRun(run,outputNodes[0]&&outputNodes[0].id,{code:"UNSATISFIED_INPUT",message:"Outputに到達せず終了"},store,false);}
+      else{
+        const waited=[...new Set(run.deliveries.map(d=>d.toNodeId))].filter(id=>!((run.nodeRuns[id]||[]).length));
+        failRun(run,outputNodes[0]&&outputNodes[0].id,{code:"UNSATISFIED_INPUT",
+          message:"Outputに到達せず終了"+(waited.length
+            ?`（入力は届いたのに動かなかった: ${waited.join(", ")}。そのノードの「動き出す条件」を見る）`:"")},store,false);}
     }
   }
   return run;}
@@ -2999,19 +3055,21 @@ function nodeFullText(n){
   return [n.id,TYPE_LABEL[n.type||"llm"]||n.type,m?("モデル: "+m+(n.model?"":"（providerの既定）")):"",
     n.type==="loop"&&n.loop&&n.loop.until?("抜ける条件: "+n.loop.until):"",
     n.type==="calc"?("計算: "+String(n.code||"")):"",
-    n.type==="cond"?("条件: "+(n.ports||[]).map(c=>(c.label||c.id)+"="+(c.else?"それ以外":c.expr)).join(" / ")):""
+    n.type==="cond"?("条件: "+(n.ports||[]).map(c=>(c.label||c.id)+"="+(c.else?"それ以外":c.expr)).join(" / ")):"",
+    startModeOf(n)!=="all"?("動き出す条件: "+startText(n)):""
     ].filter(Boolean).join(" / ");
 }
 function nodeSub(n){
+  const st=startModeOf(n)!=="all"?(startModeOf(n)==="any"?" / どれかで開始":" / 条件で開始"):"";
   if(n.type==="input")return "入力";
   if(n.type==="output")return "出力";
   if(n.type==="loop")return "ループ";
-  if(n.type==="cond")return "条件分岐";
-  if(n.type==="calc")return "計算";
-  if(n.type==="join")return "Join・"+(n.op||"(op未設定)");
+  if(n.type==="cond")return "条件分岐"+st;
+  if(n.type==="calc")return "計算"+st;
+  if(n.type==="join")return "Join・"+(n.op||"(op未設定)")+st;
   const pv=n.provider?n.provider:(n.mock?"mock":"(provider未設定)");
   const r=n.routing&&n.routing.mode?" / "+n.routing.mode:"";
-  return pv+r;
+  return pv+r+st;
 }
 function edgeLabel(e){
   if(e.loop&&isLoopNode(nodeById(e.to.node)))return "戻る";
@@ -3366,6 +3424,43 @@ function parsePickSafe(pick){
   const take=q.from==null?"all":(q.range?(q.to==null?q.from+"..":q.from+".."+q.to):String(q.from));
   return{key:q.key||"",take};
 }
+/* このノードが動き出す条件。入力が2本以上あるときだけ出す（1本なら来たら動くだけ）。 */
+const startSrcs=n=>[...new Set((Ed.spec.edges||[]).filter(e=>e.to.node===n.id).map(e=>e.from.node))];
+function startText(n){
+  const st=n.start||{};const mode=st.mode||"all";
+  if(mode==="all")return "入力が全部そろったら動く";
+  if(mode==="any")return "どれか1つでも入力が来たら動く";
+  const gs=(st.groups||[]).map(g=>"（"+((g.from||[]).join(g.op==="and"?" かつ ":" または ")||"未選択")+"）");
+  return gs.join(st.op==="and"?" かつ ":" または ")||"（条件が空）";
+}
+function startFields(n){
+  const srcs=startSrcs(n);
+  const st=n.start||{};const mode=st.mode||"all";
+  if(srcs.length<2&&mode==="all")return "";
+  let h=fld("このノードが動き出す条件",sel("__start",mode,[
+    {v:"all",t:"入力が全部そろったら動く（既定）"},
+    {v:"any",t:"どれか1つでも入力が来たら動く"},
+    {v:"custom",t:"自分で決める（条件を組み合わせる）"}]));
+  if(mode==="any")h+=`<div class="mini">入力が届くたびに動く。そのとき届いていない入力は渡らない。`
+    +`ループの中のノードを「最初の入力でも、周ってきた入力でも動かす」ときはこれ。</div>`;
+  if(mode==="custom"){
+    h+=fld("条件どうしのつなぎ方",sel("__startop",st.op||"or",[
+      {v:"or",t:"どれかの条件が当てはまれば動く（OR）"},
+      {v:"and",t:"全部の条件が当てはまれば動く（AND）"}]));
+    (st.groups||[]).forEach((g,i)=>{
+      h+=`<div class="fld"><span>条件${i+1}</span><div>`
+        +`<div class="ordrow"><select data-sg="op" data-i="${i}" style="flex:1">`
+        +[["or","選んだうち どれか1つでも来たら"],["and","選んだ入力が 全部来たら"]]
+          .map(([v,t])=>`<option value="${v}"${(g.op||"or")===v?" selected":""}>${t}</option>`).join("")
+        +`</select><button data-sgdel="${i}">削除</button></div>`
+        +srcs.map(src=>`<label class="ck" style="padding:3px 0"><input type="checkbox" data-sgf="${i}" value="${esc(src)}"`
+          +`${((g.from||[]).includes(src))?" checked":""}> ${esc(src)} からの入力</label>`).join("")
+        +`</div></div>`;
+    });
+    h+=`<div class="mini"><button id="sgAdd">＋ 条件を足す</button> いまの条件: <code>${esc(startText(n))}</code></div>`;
+  }
+  return h;
+}
 /* 入ってくる値の項目名（上流のノードが宣言しているもの） */
 function incomingKeys(n){
   const out=[];
@@ -3482,6 +3577,7 @@ function mergeFields(n){
   const mop=(n.merge&&n.merge.op)||"concat";
   let h=fld("複数の入力が来たときの受け取り方",sel("__merge",mop,MERGE_OPTS));
   h+=`<div class="mini">${srcs.length>1?`いま ${esc(srcs.join(" / "))} の ${srcs.length}本が入っている。`:"いまは1本だけ。線を足したときにこの決め方で渡る。"}</div>`;
+  h+=startFields(n);
   if(["numbered","markdown","csv"].includes(mop)){
     h+=fld("それぞれの名前（つないだ順・カンマ区切り）",
       txt("__mlabels",((n.merge&&n.merge.labels)||[]).join(", "),srcs.join(", ")));
@@ -3662,6 +3758,7 @@ function openNodeSheet(id){
     if(JOIN_TEXT_OPS.includes(n.op))
       h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prefix",n.prefix))}${fld("必ず後ろに付ける文",txt("suffix",n.suffix))}</div>`;
   }
+  if(!["llm",undefined,"tool","output","cond","loop"].includes(n.type))h+=startFields(n);
   if(n.type!=="output"&&n.type!=="cond"&&n.type!=="loop")h+=splitFields(n);
   if(n.type==="loop"&&n.ports&&n.ports.length)
     h+=`<div class="mini">この ループに出口の取り出し設定が残っている: `
@@ -3944,6 +4041,33 @@ function openNodeSheet(id){
   // 式 / JavaScript の切り替え（中身は書き換えない）
   {const lg=$("#sheetBody").querySelector('select[data-f="lang"]');
    if(lg)lg.onchange=()=>{n.lang=lg.value;syncFromCanvas();openNodeSheet(n.id);};}
+  // 動き出す条件
+  {const ss=$("#sheetBody").querySelector('select[data-f="__start"]');
+   if(ss)ss.onchange=()=>{
+     const v=ss.value;
+     if(v==="all")delete n.start;
+     else if(v==="any")n.start={mode:"any"};
+     else n.start={mode:"custom",op:"or",groups:[{op:"or",from:startSrcs(n).slice(0,1)}]};
+     syncFromCanvas();openNodeSheet(n.id);};}
+  {const so=$("#sheetBody").querySelector('select[data-f="__startop"]');
+   if(so)so.onchange=()=>{n.start=Object.assign({},n.start,{op:so.value});syncFromCanvas();openNodeSheet(n.id);};}
+  $("#sheetBody").querySelectorAll("[data-sg]").forEach(sl=>{sl.onchange=()=>{
+    const g=((n.start||{}).groups||[])[+sl.dataset.i];if(!g)return;
+    g.op=sl.value;syncFromCanvas();openNodeSheet(n.id);};});
+  $("#sheetBody").querySelectorAll("[data-sgf]").forEach(cb=>{cb.onchange=()=>{
+    const g=((n.start||{}).groups||[])[+cb.dataset.sgf];if(!g)return;
+    g.from=g.from||[];
+    if(cb.checked){if(!g.from.includes(cb.value))g.from.push(cb.value);}
+    else g.from=g.from.filter(x=>x!==cb.value);
+    syncFromCanvas();openNodeSheet(n.id);};});
+  $("#sheetBody").querySelectorAll("[data-sgdel]").forEach(b=>{b.onclick=()=>{
+    const gs=(n.start||{}).groups||[];gs.splice(+b.dataset.sgdel,1);
+    if(!gs.length)delete n.start;
+    syncFromCanvas();openNodeSheet(n.id);};});
+  {const ad=$("#sgAdd");if(ad)ad.onclick=()=>{
+    n.start=n.start||{mode:"custom",op:"or",groups:[]};
+    n.start.groups=(n.start.groups||[]).concat([{op:"or",from:[]}]);
+    syncFromCanvas();openNodeSheet(n.id);};}
   // 入ってきた値のどれを使うか
   $("#sheetBody").querySelectorAll("[data-ip]").forEach(sl=>{sl.onchange=()=>{
     const e=(Ed.spec.edges||[])[+sl.dataset.ip];if(!e)return;
@@ -4935,6 +5059,19 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - まとめ方はノードをタップ →「複数の入力が来たときの受け取り方」: 改行でつなぐ（既定）／番号を振る／見出しを付ける／CSV／JSON配列。
 - LLM だけでなく **出力・ループ・条件分岐**でも同じように決められる。
 
+## 6.5 いつ動き出すか（入力が2本以上あるとき）
+ノードをタップ → 「複数の入力が来たときの受け取り方」のすぐ下。
+- **入力が全部そろったら動く（既定）**: これまで通り。1つでも来ていなければ待つ。
+- **どれか1つでも入力が来たら動く**: 入力が届くたびに動く。届いていない入力はそのとき渡らない。
+  ループの中のノードを「最初の入力でも、周ってきた入力でも動かす」ときはこれ。
+- **自分で決める**: 条件1・条件2… を足して組む。
+  条件の中は「選んだうちどれか1つでも来たら（OR）」「選んだ入力が全部来たら（AND）」、
+  条件どうしも OR / AND でつなげる（例: （in または lp）かつ（点検））。
+
+**ループが始まらないとき**はここを見る。ループノードに入る線が無く、本体のノードが
+「全部そろったら動く」のままだと、誰も動き出せないので実行前に止めて名前を出す。
+入力からループノードへ線を引くか、本体のノードを「どれか来たら動く」にする。
+
 ## 7. ループ
 ループノードを置き、**本体の最後のノードからループノードへつなぐ**と輪が閉じる（自動で戻り線になる）。
 - ループノードは丸が4つ。**上** = 入口(●)と**本体**(○ もう一周させる先)、**下** = 戻り(●)と**抜けたあと**(○ 下へ流れる)。
@@ -5668,6 +5805,57 @@ export async function CreateMLCEngine(model,opt){
     validate(sp).length===0&&r.status==="success"&&r.iterationTotal===2
     &&refs.join()==="点数評価,書く"
     &&validate(cd).length===0&&rc.status==="success"&&(rc.nodeRuns.o1||[]).length===1);}
+ // 58 動き出す条件: ループの外からの入力でも動き出せる（全部そろうのを待たない）
+ {const mk=start=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"lp",type:"loop",loop:{id:"lp",max:3,lang:"js",until:"return ok === true;"},routing:{failurePolicy:"fail_fast"}},
+    ...["fun","make","rest"].map(id=>Object.assign({id,type:"llm",mock:{tag:id},
+      inputs:{in:{type:"any",cardinality:"many"}}},start?{start}:{})),
+    {id:"bundle",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}},
+    {id:"validate",type:"calc",lang:"js",code:"const items=Array.isArray(inputs[0])?inputs[0]:[];return {items, ok: iteration>=2};"},
+    {id:"check",type:"cond",lang:"js",routing:{onNoMatch:"error"},
+     ports:[{id:"pass",label:"通過",expr:"return ok === true;",pick:"items"},{id:"fail",label:"不合格",else:true}]},
+    {id:"out",type:"output"},{id:"failed",type:"output"}],
+   edges:[
+    ...["fun","make","rest"].map(id=>({from:{node:"lp",port:"out"},to:{node:id,port:"in"},loopRole:"body",position:0})),
+    ...["fun","make","rest"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"bundle",port:"items"},position:i})),
+    {from:{node:"bundle",port:"out"},to:{node:"validate",port:"in"}},
+    {from:{node:"validate",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}},
+    {from:{node:"lp",port:"out"},to:{node:"check",port:"in"},loopRole:"done"},
+    {from:{node:"check",port:"pass"},to:{node:"out",port:"in"}},
+    {from:{node:"check",port:"fail"},to:{node:"failed",port:"in"}},
+    ...["fun","make","rest"].map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"},position:1}))]});
+  const stuck=validate(mk(null));
+  const sp=mk({mode:"any"});
+  const r=await fullRun(sp,{in:"Q"});
+  ok("58 動き出す条件: どれか来たら動く／入口の無いループは実行前に名指しで止める",
+    stuck.some(x=>/ループ "lp" に入る線が無い/.test(x))
+    &&validate(sp).length===0&&r.status==="success"
+    &&(r.nodeRuns.fun||[]).length===3&&(r.nodeRuns.out||[]).length===1
+    &&JSON.stringify(r.result.value)===JSON.stringify(["fun2","make2","rest2"]));}
+ // 59 動き出す条件（自分で決める）: 条件の中は and/or、条件どうしも and/or
+ {const sp={metadata:{version:"1"},nodes:[
+    {id:"A",type:"llm",mock:{tag:"a"}},{id:"B",type:"llm",mock:{tag:"b"}},{id:"C",type:"llm",mock:{tag:"c"}},
+    {id:"X",type:"llm",mock:{tag:"x"},inputs:{in:{type:"any",cardinality:"many"}}}],
+   edges:[{from:{node:"A",port:"out"},to:{node:"X",port:"in"},position:0},
+     {from:{node:"B",port:"out"},to:{node:"X",port:"in"},position:1},
+     {from:{node:"C",port:"out"},to:{node:"X",port:"in"},position:2}]};
+  const ex={execId:"x",nodeId:"X",activationId:null,loopInstanceId:null,iteration:null};
+  const tryStart=(start,srcs)=>{
+    const node=Object.assign({},sp.nodes[3],{start});
+    const sp2=Object.assign({},sp,{nodes:[sp.nodes[0],sp.nodes[1],sp.nodes[2],node]});
+    const run=makeRun(sp2,{});
+    srcs.forEach((s2,i)=>run.deliveries.push({deliveryId:"d"+(i+1),edgeId:"e"+i,fromNodeId:s2,toNodeId:"X",toPort:"in",
+      position:i,runtimeValue:{type:"text",value:s2},activationId:null,loopInstanceId:null,iteration:null,arrival:1}));
+    return startReady(run,sp2,ex,node);};
+  const or_=(a,b)=>({mode:"custom",op:"or",groups:[a,b]});
+  const and_=(a,b)=>({mode:"custom",op:"and",groups:[a,b]});
+  const gAB={op:"and",from:["A","B"]},gC={op:"or",from:["C"]},gAorB={op:"or",from:["A","B"]};
+  ok("59 動き出す条件（自分で決める）: (A かつ B) または C ／ 条件どうしの and も効く",
+    tryStart(or_(gAB,gC),[])===false&&tryStart(or_(gAB,gC),["A"])===false
+    &&tryStart(or_(gAB,gC),["A","B"])===true&&tryStart(or_(gAB,gC),["C"])===true
+    &&tryStart(and_(gAorB,gC),["A"])===false&&tryStart(and_(gAorB,gC),["A","C"])===true
+    &&tryStart({mode:"any"},["B"])===true&&tryStart({mode:"all"},["B"])===null);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

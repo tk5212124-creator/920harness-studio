@@ -233,6 +233,38 @@ R['⑩ 出力'] = (await p.textContent('#ioOut [data-out="out"]')).replace(/\s+/
 ok.condRun2 = R['⑩ 実行'].includes('success') && R['⑩ 実行'].includes('iterTotal=1')
   && R['⑩ 出力'].includes('点数');
 
+// ⑪ 動き出す条件: 入力が2本ある所で「どれか来たら動く」「自分で決める」を選べる
+await paste(mk([{ id: "in", type: "input", routing: { mode: "parallel", failurePolicy: "fail_fast" } },
+  { id: "lp", type: "loop", loop: { id: "lp", max: 2 } },
+  { id: "fun", type: "llm", provider: "m", mock: { tag: "f" }, inputs: { in: { type: "any", cardinality: "many" } } },
+  { id: "out", type: "output" }],
+  [{ from: { node: "in", port: "out" }, to: { node: "fun", port: "in" }, position: 1 },
+   { from: { node: "lp", port: "out" }, to: { node: "fun", port: "in" }, loopRole: "body", position: 0 },
+   { from: { node: "fun", port: "out" }, to: { node: "lp", port: "in" }, loop: { id: "lp" } },
+   { from: { node: "lp", port: "out" }, to: { node: "out", port: "in" }, loopRole: "done" }]));
+R['⑪ 貼った直後'] = (await vErr()).slice(0, 40);
+ok.loopNoEntry = R['⑪ 貼った直後'].includes('入る線が無いので始まらない');
+await tap('.nd[data-id="fun"]');
+R['⑪ 条件の選択肢'] = await p.locator('[data-f="__start"] option').allTextContents();
+await p.selectOption('[data-f="__start"]', 'any'); await p.waitForTimeout(250);
+R['⑪ any'] = { start: (await spec()).nodes.find(n => n.id === 'fun').start,
+  図: await p.textContent('.nd[data-id="fun"] .ndb'), 検証: (await vErr()) || '（エラーなし）' };
+ok.startAny = R['⑪ 条件の選択肢'].length === 3 && R['⑪ any'].start.mode === 'any'
+  && R['⑪ any'].図.includes('どれかで開始') && R['⑪ any'].検証 === '（エラーなし）';
+await p.selectOption('[data-f="__start"]', 'custom'); await p.waitForTimeout(300);
+await p.locator('[data-sgf="0"][value="lp"]').check(); await p.waitForTimeout(250);
+await p.locator('#sgAdd').dispatchEvent('click'); await p.waitForTimeout(250);
+await p.locator('[data-sgf="1"][value="lp"]').check(); await p.waitForTimeout(250);
+await p.selectOption('[data-sg="op"][data-i="1"]', 'and'); await p.waitForTimeout(250);
+R['⑪ 自分で決める'] = (await spec()).nodes.find(n => n.id === 'fun').start;
+ok.startCustom = R['⑪ 自分で決める'].mode === 'custom' && R['⑪ 自分で決める'].groups.length === 2
+  && R['⑪ 自分で決める'].groups[0].from.join() === 'in,lp' && R['⑪ 自分で決める'].groups[1].op === 'and';
+await p.selectOption('[data-f="__start"]', 'any'); await p.waitForTimeout(250);
+await tap('#shClose');
+await tap('#runTop');
+R['⑪ 実行'] = await state();
+ok.startRun = R['⑪ 実行'].includes('success') && R['⑪ 実行'].includes('iterTotal=2');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;
