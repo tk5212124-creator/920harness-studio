@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 先着（早く決める） v0.29.0</title>
+<title>Harness Studio — 記憶（ためる・入れ替える） v0.30.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -52,7 +52,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .nd.t-input{border-color:#8fb4d8}.nd.t-output{border-color:#8fc8a8}.nd.t-join{border-color:#d8c08f}.nd.t-llm{border-color:#b8a6d8}
 .nd.t-loop{border-color:#e0a06c}.nd.t-cond{border-color:#c9a227}.nd.t-calc{border-color:#6fb3a8}
 .nd.t-reduce{border-color:#6fa3b3}.nd.t-quorum{border-color:#b38f6f}.nd.t-assert{border-color:#9ab36f}
-.nd.t-race{border-color:#c07fa8}
+.nd.t-race{border-color:#c07fa8}.nd.t-memory{border-color:#7f8fc0}
 .nd.t-module{border-color:#8f8fd8;border-width:2px}.nd.t-pass{border-color:#c0c6cf}
 .nd.t-map{border-color:#d88fae;border-width:2px}
 .nd .ndm{font-size:9px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;font-family:ui-monospace,monospace}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.29.0 · 先着</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.30.0 · 記憶</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -905,6 +905,20 @@ function reviewSpec(spec){
       if(!ins.length)add("warn","入ってくる線が無いので、計算に使う値が無い",n.id);
     }
   }
+  // Runtime が読まないキーを名指しする（書いたのに効かないキーに気づけるように）。
+  // わざと「どれかの種類で読むキー」を全部まとめた一覧にしてある（＝出す警告は控えめ側に外す）。
+  {const KNOWN=new Set(["id","type","label","default","provider","model","prompt","generation","schema",
+    "routing","ports","inputs","start","merge","mock","lang","code",
+    "onError","onErrorValue","onTruncate","onBadOutput","onBadItem","onFail",
+    "onItemError","onItemErrorValue","onNone","onNoneValue",
+    "op","path","skipMissing","sep","labels","keys","prefix","suffix","template",
+    "condition","required","requiredRatio","total","asserts","module","loop","map","order",
+    "rules","emit","when","initial","unique","max","scope","out","cancel",
+    "overrides","contextSize","url"]);
+   for(const n of nodes){
+     const bad=Object.keys(n).filter(k=>!KNOWN.has(k));
+     if(bad.length)add("warn",`Runtime が読まないキーがある: ${bad.join(", ")}`
+       +"（書いても効かない。綴りちがいでないか確かめる）",n.id);}}
   // 使われていない provider
   const used=new Set(nodes.map(n=>n.provider).filter(Boolean));
   for(const pid of Object.keys(spec.providers||{}))if(!used.has(pid))add("info",`provider "${pid}" はどのノードからも使われていない`);
@@ -2664,6 +2678,8 @@ const MEM_OPS=["append","replace","clear","read"];
 const MEM_EMITS=["always","when","never"];
 const MEM_OUTS=["items","last","first","count"];
 const MEM_SCOPES=["run","scope"];
+const MEM_OP_LABEL={append:"ためる（足す）",replace:"入れ替える",clear:"消す",read:"読むだけ（変えない）"};
+const MEM_OP_SHORT={append:"ためる",replace:"入れ替え",clear:"消す",read:"読むだけ"};
 const isMemoryNode=n=>!!n&&n.type==="memory";
 const memScopeOf=n=>((n&&n.scope)||"run");
 const memRuleOf=(node,port)=>((node.rules||[]).find(r=>r&&(r.port||"in")===port)||null);
@@ -4000,11 +4016,12 @@ const NODE_KINDS=[
   {type:"reduce",label:"まとめる",desc:"並んだ値を合計・平均・いちばん良いもの…にする"},
   {type:"quorum",label:"多数決",desc:"何人が条件を満たしたら合格かを決める"},
   {type:"race",label:"先着",desc:"先に条件を満たしたものを採り、残りの候補を止める"},
+  {type:"memory",label:"記憶",desc:"値をためる・入れ替える・消す。出すときの条件も決められる"},
   {type:"assert",label:"点検",desc:"条件が成り立っているかを調べる（テスト用）"},
   {type:"output",label:"出力",desc:"最終結果を受け取る"}
 ];
 const TYPE_LABEL={input:"入力",llm:"LLM",join:"Join",loop:"ループ",cond:"条件分岐",calc:"計算",
-  reduce:"まとめる",quorum:"多数決",race:"先着",assert:"点検",module:"モジュール",pass:"そのまま通す",
+  reduce:"まとめる",quorum:"多数決",race:"先着",memory:"記憶",assert:"点検",module:"モジュール",pass:"そのまま通す",
   map:"1件ずつ",output:"出力",tool:"ツール"};
 const LANGS=[{v:"expr",t:"かんたんな式（+ - * / と比較）"},{v:"js",t:"JavaScript（この端末で動く）"}];
 const LANG_LABEL={expr:"式",js:"JavaScript"};
@@ -4376,6 +4393,8 @@ function nodeSub(n){
   if(n.type==="reduce")return "まとめる・"+(n.op||"sum")+(n.path?"("+n.path+")":"")+st;
   if(n.type==="quorum")return "多数決"+st;
   if(n.type==="race")return "先着"+((n.cancel||"pending")==="none"?"・止めない":"")+st;
+  if(n.type==="memory")return "記憶・"+((n.rules||[]).map(r=>MEM_OP_SHORT[r&&r.op]||"?").join("/")||"?")
+    +(memScopeOf(n)==="run"?"":"（場ごと）")+st;
   if(n.type==="assert")return "点検×"+((n.asserts||[]).length)+st;
   if(n.type==="module")return "モジュール "+(n.module||"(未選択)")+st;
   if(n.type==="pass")return "そのまま通す"+st;
@@ -5085,6 +5104,50 @@ function openNodeSheet(id){
     h+=fld("条件が読めない要素があったとき",sel("__onBadItem",n.onBadItem==="false"?"false":"",
       [{v:"",t:"エラーにして止める（既定）"},{v:"false",t:"反対票として数える"}]));
   }
+  if(n.type==="memory"){
+    const rs=Array.isArray(n.rules)?n.rules:[];
+    const inPorts=[...new Set((Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop&&!e.map)
+      .map(e=>e.to.port||"in"))];
+    h+=fld("記憶をどこで持つか",sel("scope",memScopeOf(n),[
+      {v:"run",t:"Run 全体で1つ（ループをまわっても続く）"},
+      {v:"scope",t:"ループの場や Map の1件ごとに1つ"}]));
+    h+=`<div class="fld"><span>入口ごとに何をするか</span><div>`;
+    if(!rs.length)h+=`<div class="mini">まだ1つも無い。下の「＋ 入口を足す」で足す。</div>`;
+    rs.forEach((r,i)=>{
+      const q=(r&&r.port)||"in";
+      h+=`<div class="ordrow"><b>${i+1}</b>`
+        +`<input type="text" data-mr-port="${i}" value="${esc(q)}" placeholder="入口の名前" style="flex:1;min-width:70px">`
+        +`<select data-mr-op="${i}">`+MEM_OPS.map(v=>
+          `<option value="${v}"${(r&&r.op)===v?" selected":""}>${esc(MEM_OP_LABEL[v])}</option>`).join("")+`</select>`
+        +`<button data-mrdel="${i}">削除</button></div>`;
+      if(!inPorts.includes(q))h+=`<div class="ordrow"><b></b><span class="mini" style="color:var(--warn)">`
+        +`この入口に線が入っていない</span></div>`;});
+    h+=`</div></div><div class="mini"><button id="mrAdd">＋ 入口を足す</button>`
+      +(inPorts.length?` いま線が入っている入口: <code>${esc(inPorts.join(", "))}</code>`
+        :` まだ線が入っていない`)
+      +`。線を引くときに<b>入口の名前</b>を決めると、その名前で受けられる。</div>`;
+    h+=`<div class="fld2">${fld("出すときの形",sel("out",n.out||"items",[
+        {v:"items",t:"ためた全部（配列）"},{v:"last",t:"いちばん新しい1つ"},
+        {v:"first",t:"いちばん古い1つ"},{v:"count",t:"何件あるか（数）"}]))}`
+      +`${fld("いくつまで持つか（空なら無制限）",num("max",n.max,"空でよい"))}</div>`;
+    h+=fld("いつ先へ流すか",sel("emit",n.emit||"always",[
+      {v:"always",t:"届いたら毎回流す（既定）"},
+      {v:"when",t:"条件が真のときだけ流す"},
+      {v:"never",t:"流さない（ためるだけ・他から 記憶.out で読む）"}]));
+    if((n.emit||"always")==="when"){
+      h+=fld("条件の書き方",sel("lang",n.lang||"expr",LANGS));
+      h+=fld("流す条件",txt("when",n.when,"count >= 3"));
+      h+=`<div class="mini">ためた件数は <code>count</code>、中身の配列は <code>memory</code>、`
+        +`出すときの形そのものは <code>value</code>。他のノードは <code>ノード名.out.項目</code>。</div>`;}
+    h+=fld("同じ値が来たとき",sel("__unique",n.unique?"1":"",
+      [{v:"",t:"そのまま足す（既定）"},{v:"1",t:"同じものは足さない"}]));
+    h+=fld("最初の中身（JSONの配列）",txt("__initial",
+      n.initial===undefined?"":JSON.stringify(n.initial),'[] / ["はじめの1件"]'));
+    h+=`<div class="mini"><b>このノードだけは「前に何が届いたか」で出る値が変わる。</b>`
+      +`中身は実行の記録の <code>memories</code> にそのまま残るので、あとから追える`
+      +`（Resume でも続く）。<br>届いた線は<b>1回しか使わない</b>ので、同じ値が二重に入ることはない。`
+      +`<br>「ためる」に上限を入れると、超えたぶんは<b>古いものから捨てる</b>。</div>`;
+  }
   if(n.type==="race"){
     const ins=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop&&!e.map);
     const cnt=ins.length;
@@ -5659,6 +5722,35 @@ function openNodeSheet(id){
    if(sm)sm.onchange=()=>{if(sm.value)n.skipMissing=true;else delete n.skipMissing;syncFromCanvas();};}
   {const bi=$("#sheetBody").querySelector('select[data-f="__onBadItem"]');
    if(bi)bi.onchange=()=>{if(bi.value)n.onBadItem="false";else delete n.onBadItem;syncFromCanvas();};}
+  // 記憶: 入口ごとの扱い
+  {const writeRules=()=>{
+     const rows=[];
+     $("#sheetBody").querySelectorAll("[data-mr-port]").forEach(el=>{
+       const i=+el.dataset.mrPort;
+       const op=$("#sheetBody").querySelector(`[data-mr-op="${i}"]`);
+       rows[i]={port:el.value.trim()||"in",op:(op&&op.value)||"append"};});
+     n.rules=rows.filter(Boolean);syncFromCanvas();};
+   $("#sheetBody").querySelectorAll("[data-mr-port]").forEach(el=>el.oninput=writeRules);
+   $("#sheetBody").querySelectorAll("[data-mr-op]").forEach(el=>el.onchange=()=>{writeRules();openNodeSheet(n.id);});
+   $("#sheetBody").querySelectorAll("[data-mrdel]").forEach(el=>el.onclick=()=>{
+     n.rules=(n.rules||[]).filter((_,i)=>i!==+el.dataset.mrdel);syncFromCanvas();openNodeSheet(n.id);});
+   const ma=$("#mrAdd");
+   if(ma)ma.onclick=()=>{n.rules=(n.rules||[]).concat([{port:"in"+((n.rules||[]).length+1),op:"append"}]);
+     syncFromCanvas();openNodeSheet(n.id);};}
+  // 記憶: 同じ値が来たとき／最初の中身／いつ流すか
+  {const uq=$("#sheetBody").querySelector('select[data-f="__unique"]');
+   if(uq)uq.onchange=()=>{if(uq.value)n.unique=true;else delete n.unique;syncFromCanvas();};}
+  {const iv=$("#sheetBody").querySelector('[data-f="__initial"]');
+   if(iv)iv.oninput=()=>{
+     const t=iv.value.trim();
+     if(!t){delete n.initial;iv.style.borderColor="";syncFromCanvas();return;}
+     let v;try{v=JSON.parse(t);}catch(_){iv.style.borderColor="var(--err)";return;}
+     if(!Array.isArray(v)){iv.style.borderColor="var(--err)";return;}
+     n.initial=v;iv.style.borderColor="";syncFromCanvas();};}
+  {const em=$("#sheetBody").querySelector('select[data-f="emit"]');
+   if(em&&n.type==="memory")em.onchange=()=>{n.emit=em.value;
+     if(n.emit!=="when"){delete n.when;}
+     syncFromCanvas();openNodeSheet(n.id);};}
   // 先着で「どれも通らなかったとき」に流す値。JSON として読めないものは受け取らない（黙って文字にしない）
   {const nv=$("#sheetBody").querySelector('[data-f="__onNoneValue"]');
    if(nv)nv.oninput=()=>{
@@ -5789,7 +5881,7 @@ function openAddSheet(){
 }
 function addNode(type){
   const base={input:"in",llm:"llm",join:"jn",loop:"lp",cond:"cd",calc:"cl",
-    reduce:"rd",quorum:"qm",race:"rc",assert:"chk",module:"mod",pass:"ps",map:"mp",output:"out"}[type]||"n";
+    reduce:"rd",quorum:"qm",race:"rc",memory:"mem",assert:"chk",module:"mod",pass:"ps",map:"mp",output:"out"}[type]||"n";
   const id=newId(base);
   const n={id,type};
   if(type==="llm"){const provs=Object.keys(Ed.spec.providers||{});
@@ -5806,6 +5898,8 @@ function addNode(type){
     n.inputs={in:{type:"any",cardinality:"many"}};n.start={mode:"all"};}
   if(type==="race"){n.lang="expr";n.condition="value.score >= 80";n.onNone="error";n.cancel="pending";
     n.inputs={in:{type:"any",cardinality:"many"}};n.start={mode:"any"};}
+  if(type==="memory"){n.scope="run";n.rules=[{port:"in",op:"append"}];
+    n.emit="always";n.out="items";n.lang="expr";n.start={mode:"any"};}
   if(type==="module")n.module=Object.keys(Ed.spec.modules||{})[0]||"";
   if(type==="map"){n.map={id};n.order="input";n.onItemError="error";
     n.inputs={in:{type:"any",cardinality:"many"}};}
@@ -6061,8 +6155,20 @@ function expStats(rows){
     for(const q of picks){
       const st=statsOf(rs.map(r=>{const v=(r.picked||{})[q];return typeof v==="number"?v:Number(v);}));
       if(st)metrics["result."+q]=st;}
+    const kindCount={};
+    for(const r of rs)for(const k of (r.errorKinds||[]))kindCount[k]=(kindCount[k]||0)+1;
+    const schemaRuns=rs.filter(r=>(r.errorKinds||[]).includes("SCHEMA_VALIDATION_ERROR")).length;
+    const recRuns=rs.filter(r=>(r.recoveredErrors||0)>0).length;
+    const stopRuns=rs.filter(r=>(r.stoppedNodes||0)>0).length;
     return{variant,input:JSON.parse(inputJSON),runs:rs.length,
       success:ok,failure:rs.length-ok,successRate:ok/rs.length,
+      schemaErrorRuns:schemaRuns,schemaErrorRate:schemaRuns/rs.length,
+      recoveredRuns:recRuns,recoveredRate:recRuns/rs.length,
+      recoveredTotal:rs.reduce((a,r)=>a+(r.recoveredErrors||0),0),
+      stoppedRuns:stopRuns,stoppedTotal:rs.reduce((a,r)=>a+(r.stoppedNodes||0),0),
+      truncateRetriesTotal:rs.reduce((a,r)=>a+(r.truncateRetries||0),0),
+      badOutputRetriesTotal:rs.reduce((a,r)=>a+(r.badOutputRetries||0),0),
+      errorKindCount:kindCount,
       assertTotal:asr.t,assertPassed:asr.p,assertPassRate:asr.t?asr.p/asr.t:null,
       errorRuns:rs.filter(r=>r.errors>0).length,errorRate:rs.filter(r=>r.errors>0).length/rs.length,
       errorsTotal:rs.reduce((a,r)=>a+(r.errors||0),0),
@@ -6078,11 +6184,16 @@ function expStatsTable(){
   const gs=expStats(EXP.rows);
   if(!gs.length)return "";
   const mkeys=[...new Set(gs.flatMap(g=>Object.keys(g.metrics)))];
-  const head=["変種","入力","runs","成功","失敗","成功率","点検","エラー率","再試行率"]
+  const head=["変種","入力","runs","成功","失敗","成功率","点検","エラー率","再試行率",
+    "形エラー率","切れて再試行","形違いで再試行","代わりの値で通した率","止めたノード","エラーの種類"]
     .concat(mkeys.flatMap(k=>[k+" 平均",k+" 中央",k+" 最小",k+" 最大",k+" ばらつき"]));
   const row=g=>[esc(g.variant),esc(capStr(JSON.stringify(g.input),24)),g.runs,g.success,g.failure,
     pct(g.successRate),g.assertTotal?`${g.assertPassed}/${g.assertTotal}（${pct(g.assertPassRate)}）`:"",
-    pct(g.errorRate),pct(g.retryRate)]
+    pct(g.errorRate),pct(g.retryRate),
+    pct(g.schemaErrorRate),g.truncateRetriesTotal||"",g.badOutputRetriesTotal||"",
+    g.recoveredTotal?`${pct(g.recoveredRate)}（計${g.recoveredTotal}）`:pct(g.recoveredRate),
+    g.stoppedTotal||"",
+    esc(Object.entries(g.errorKindCount).map(([k,v])=>`${k}×${v}`).join(" / "))]
     .concat(mkeys.flatMap(k=>{const m=g.metrics[k];
       return m?[fx(m.mean),fx(m.median),fx(m.min),fx(m.max),fx(m.stddev)]:["","","","",""];}));
   return `<div class="mini" style="margin-top:10px"><b>集計（変種 × 入力ごと）</b>`
@@ -7074,6 +7185,19 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 「最初に届いたものでよい」なら条件に \`has(value)\` と書く。
 - **先着以外にも線を出している候補は止めない**（止めるとその先も道連れになるため）。図の⚠がその旨を出す。
 
+**記憶（memory）** — 値を**持ち続ける**。ループを何周してもたまる。
+- 入口ごとに **ためる（足す）／入れ替える／消す／読むだけ** を決める。
+  線を引くときに入口の名前を決めれば、「この口から来たら足す、この口から来たら消す」と分けられる。
+- **記憶をどこで持つか**を選ぶ。**Run 全体で1つ**（ループをまわっても続く）か、
+  **ループの場や Map の1件ごとに1つ**（件ごとに混ざらない）か。
+- 出すときの形を選ぶ（ためた全部／いちばん新しい1つ／いちばん古い1つ／何件あるか）。
+- **いつ先へ流すか**も選べる（毎回／条件が真のときだけ／流さない）。
+  「流さない」にすると**ためるだけ**のノードになり、他のノードから \`記憶.out\` で読む。
+- いくつまで持つかを決めると、超えたぶんは**古いものから捨てる**。同じ値を足さないようにもできる。
+- **このノードだけは「前に何が届いたか」で出る値が変わる。** 中身は「実行の記録」にそのまま残るので、
+  あとから何をいつ足したか追える（前回の続きから再開しても続く）。
+- 届いた線は**1回しか使わない**ので、同じ値が二重に入ることはない。
+
 **点検（assert）** — 条件を並べて、成り立っているかを数える（テスト用）。
 - 1行が1つの点検。名前・式・重さ（落ちたら不合格／注意／参考）を決める。
 - 結果は \`{"total":3,"passed":2,"failed":1,"tests":[…]}\`。
@@ -7108,9 +7232,19 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 並ぶのは 状態・呼出回数・入出力トークン・かかった時間・周回・エラー数・やり直し回数・点検の結果・result。
 - 「result から見たい値」に \`score\` や \`best.score\` と書くと、その値が列になる。
 - 結果は **JSON でも CSV でもコピー／保存**できる。途中で閉じても残る。
-- **集計表**が上に出る。変種 × 入力ごとに runs・成功率・点検の通過率・エラー率・再試行率と、
-  呼び出し回数・トークン・時間・周回・取り出した値の **平均／中央／最小／最大／ばらつき**。
+- **集計表**が上に出る。変種 × 入力ごとに:
+  - runs・成功・失敗・**成功率**
+  - **点検の通過率**（assert）・**エラー率**・**再試行率**
+  - **形エラー率**（\`SCHEMA_VALIDATION_ERROR\` が出た Run の割合）
+  - **切れて再試行**した回数（\`onTruncate:"retry"\`）・**形違いで再試行**した回数（\`onBadOutput:"retry"\`）
+  - **代わりの値で通した率**（\`onError:"value"\` / \`"null"\` で助かった Run の割合と回数）
+  - **止めたノード**の数（\`onError:"skip"\`）
+  - **エラーの種類**（どの code が何回出たか）
+  - 呼び出し回数・トークン・時間・周回・取り出した値の **平均／中央／最小／最大／ばらつき**
   生の1回ずつの記録は下にそのまま残る（**平均だけ見て個々の失敗を見落とさない**ため）。
+- 「どの組み方が向いているか」を比べるときは、**巨大な1本のハーネスに全部詰めるより、
+  変種を別々のハーネスにして同じ入力で何回も回す**方が結果が読みやすい
+  （失敗が1か所に波及しないので、変種ごとの成否がそのまま出る）。
 
 ## 9. 出力ノード
 最後の結果を受け取る。いくつ置いてもよい（条件分岐で「合格」「不合格」を別々の出力に出せる）。
@@ -7138,6 +7272,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 ## 13. うまくいかないとき
 - 赤い ⚠ は**実行前に分かった直すところ**。その場で直せるものはボタンが出る（「schema を付ける」「出口の流し方を決める」「条件の見る先を変える」など）。
 - 「診断する」で、機械で確実に分かることだけを一覧にする（LLMの意見ではない）。
+  **書いたのに Runtime が読まないキー**（綴りちがい）もここで名指しする。
 - 「実行ログ」→ **まとめてコピー**（Spec・ログ・失敗の理由・端末の対応状況・実行の記録が1つに入る）。そのまま相談先に貼れる。
 - 「**実行の記録をコピー**」は機械が読む用の全部入り。**画面のログに出た行もそのまま入っている**ので、記録だけ渡せば足りる（どのノードが何を受け取って何を返したか・掛かった時間・トークン・どの枝の何周目か・モデルへ送った文・動かなかったノードが何を待っていたか）。直させたいLLMにはこれを渡すのがいちばん早い。
 - ログの「**詳しく**」に印を付けると、次の実行からモデルへ送った文と値の全文もログに出る。
@@ -7269,7 +7404,7 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 
 - **id** … 必須。かぶらない名前。日本語でよい。
 - **type** … \`input\` \`llm\` \`join\` \`loop\` \`cond\` \`calc\` \`output\` \`tool\`
-  \`reduce\` \`quorum\` \`race\` \`assert\` \`module\` \`pass\` \`map\`。書かないと \`llm\`。
+  \`reduce\` \`quorum\` \`race\` \`memory\` \`assert\` \`module\` \`pass\` \`map\`。書かないと \`llm\`。
 - **merge** … 1つの入口に線が2本以上入ったとき、どう1つにするか。
   - \`op\`: \`concat\`（改行でつなぐ・既定）/ \`numbered\`（1. 2. …）/ \`markdown\`（## 名前）/ \`csv\` / \`json_array\`
   - \`labels\`: つないだ順の名前（numbered / markdown / csv で使う）
@@ -7457,6 +7592,31 @@ const HELP_JSON=`# JSONで書く（設定の全部）
   \`"all"\` にすると候補が全部動いてから選ぶ（止める意味が無くなる）。
 - 止めた候補は \`nodeRuns\` に \`status:"cancelled"\` / \`cancelReason:"race_decided"\` で残る。
   1回ぶんの中身は実行の記録の \`races\` に入る。
+
+## memory（記憶）
+~~~
+{"id":"記憶","type":"memory","scope":"run",
+ "rules":[{"port":"追加","op":"append"},
+          {"port":"置換","op":"replace"},
+          {"port":"消す","op":"clear"},
+          {"port":"見る","op":"read"}],
+ "out":"items", "max":10, "unique":false, "initial":[],
+ "emit":"when", "lang":"expr", "when":"count >= 3",
+ "start":{"mode":"any"}}
+~~~
+- \`scope\` … \`"run"\`（既定・Run 全体で1つ）/ \`"scope"\`（ループの場や Map の1件ごとに1つ）。
+- \`rules\` … 入口ごとに何をするか。**線が入っている入口はぜんぶ書く**（書いていないと検証で落ちる）。
+  \`op\` は \`"append"\`（足す）/ \`"replace"\`（入れ替える）/ \`"clear"\`（消す）/ \`"read"\`（変えない）。
+- \`out\` … 出すときの形。\`"items"\`（既定・配列）/ \`"last"\` / \`"first"\` / \`"count"\`。
+- \`max\` … いくつまで持つか。超えたぶんは**古いものから捨てる**。
+- \`unique\` … \`true\` で同じ値は足さない（\`JSON.stringify\` が同じなら同じとみなす）。
+- \`initial\` … 最初の中身（**配列**で書く）。
+- \`emit\` … \`"always"\`（既定）/ \`"when"\`（\`when\` が真のときだけ流す）/ \`"never"\`（流さない）。
+  \`when\` の中では \`count\`（件数）\`memory\`（配列）\`value\`（出す形そのもの）が使える。
+- \`start\` は \`{"mode":"any"}\` にする（\`normalizeSpec\` が書いていなければ埋める）。
+- **届いた線は1回しか使わない**ので、Delivery が残っていても二重に足さない。
+- 中身は \`run.memories\` に入り、実行の記録にも出る。**Checkpoint に入るので Resume でも続く。**
+- \`"never"\` にしたときは線を出さず、他のノードから \`記憶.out\` で読む。
 
 ## assert（点検）
 ~~~
@@ -7874,7 +8034,38 @@ const DEEP_EXAMPLES=[
   [...[1,2,3].map(i=>({from:{node:"in",port:"out"},to:{node:"C"+i,port:"in"}})),
    ...[1,2,3].map((i,ix)=>({from:{node:"C"+i,port:"out"},to:{node:"先着",port:"in"},position:ix})),
    {from:{node:"先着",port:"out"},to:{node:"out",port:"in"}}])},
-{name:"17. 総合（ループ＋3Judge＋quorum＋点検＋条件分岐＋2つのOutput）",
+{name:"17. 記憶（毎周の草稿と点数を全部ためて最後に出す）",
+ note:"many は「線ごとに最新1つ」なので履歴は残らない。記憶ノードなら毎周ためられる。"
+   +"届いた線は1回しか使わないので、同じ値が二重に入らない。",
+ spec:BASE([{id:"in",type:"input"},
+   {id:"lp",type:"loop",loop:{id:"lp",max:3,until:"評価.out.score >= 9"}},
+   M("書く",{tag:"案"},{inputs:MANY,start:{mode:"any"}}),
+   M("評価",{scoreByIteration:[5,7,9]},{schema:{type:"object",required:["score"],
+     properties:{score:{type:"integer",minimum:0,maximum:10}}}}),
+   {id:"履歴",type:"memory",scope:"run",rules:[{port:"in",op:"append"}],
+    out:"items",max:10,emit:"always",start:{mode:"any"}},
+   {id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+   {from:{node:"lp",port:"out"},to:{node:"書く",port:"in"},loopRole:"body",position:1},
+   {from:{node:"書く",port:"out"},to:{node:"評価",port:"in"}},
+   {from:{node:"評価",port:"out"},to:{node:"履歴",port:"in"}},
+   {from:{node:"履歴",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+   {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}])},
+{name:"18. 記憶（入口で分ける: ためる／入れ替える／消す）",
+ note:"線を引くときに入口の名前を決めると、口ごとに扱いを分けられる。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},
+   {id:"A",type:"calc",lang:"js",code:'return "a";'},
+   {id:"B",type:"calc",lang:"js",code:'return "b";'},
+   {id:"記憶",type:"memory",scope:"run",
+    rules:[{port:"追加",op:"append"},{port:"入れ替え",op:"replace"}],
+    out:"items",emit:"always",start:{mode:"any"}},
+   {id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+   {from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+   {from:{node:"A",port:"out"},to:{node:"記憶",port:"追加"},position:0},
+   {from:{node:"B",port:"out"},to:{node:"記憶",port:"入れ替え"},position:1},
+   {from:{node:"記憶",port:"out"},to:{node:"out",port:"in"}}])},
+{name:"19. 総合（ループ＋3Judge＋quorum＋点検＋条件分岐＋2つのOutput）",
  note:"1つは onError:value、1つは onError:skip。quorum は「どれか来たら」で数え直し、"
    +"点検は Run の成否とは別に数える。Retry と Resume がそのまま効く形。",
  spec:BASE([{id:"in",type:"input"},
@@ -8059,6 +8250,7 @@ X はちょうど1回動いて両方を読む。
 
 - **\`many\`** … その入口に入る**線ごとに1つずつ**値が並ぶ。\`position\` の小さい順。
   「届いたイベントを全部ためる」のではない。同じ線から何度も届いたら**最後の1つ**が使われる。
+  **履歴が欲しいときは 43.7章の記憶（memory）ノードを使う。**
 - **\`one\`**（書かないときの既定） … 合う Delivery の**最初の1つ**だけ。
 - 1つの入口に線を2本以上つないだのに \`many\` でないと、**検証エラー**（\`many以外への複数incoming\`）。
   画面でつなぐと自動で \`many\` が入る。
@@ -8989,6 +9181,118 @@ in → C1 → 先着（C1 は不合格 → 待つ）
 - 先着にしかできないのは「**残りの候補を止めてモデルを呼ばないこと**」。それが要らないなら
   \`cancel:"none"\` ではなく、素直に \`reduce\` か \`quorum\` を使う方が図が分かりやすい。
 
+## 43.7 記憶（memory）
+
+~~~
+{"id":"記憶","type":"memory","scope":"run",
+ "rules":[{"port":"追加","op":"append"},{"port":"消す","op":"clear"}],
+ "out":"items","max":10,"unique":false,"initial":[],
+ "emit":"always","start":{"mode":"any"}}
+~~~
+
+**Runtime の中で、これだけが「それまでに何が届いたか」で出る値が変わるノード。**
+だから中身は隠さない。\`run.memories\` にそのまま入り、実行の記録にも出て、Checkpoint にも入る。
+
+### なぜ必要か（既存の機能では足りないところ）
+
+\`cardinality:"many"\` は「**入ってくる線ごとに最新の1つ**」であって、履歴ではない。
+同じ線から10回届いても10件たまらない。
+だからループの中で「毎周の結果を全部ためる」ことは、これまで
+**ループの戻り線に配列を載せて \`calc\` で自分で組み立てる**しかなかった。
+記憶ノードはそれを1ノードにする。
+
+### 届いた線を二度使わない仕組み
+
+Delivery は**消えない**（32章）。だから「届いている分を毎回ぜんぶ足す」と同じ値が何度も増える。
+記憶ノードは **使った Delivery の id を覚えておく**（\`memories[*].applied\`）。
+2回目に動いたときは、前に使った分を飛ばして**新しく届いた分だけ**を足す。
+
+~~~
+1周目: 書く#1 が届く → applied に d3 を入れて items=["案1"]
+2周目: d3 と 書く#2(d7) が見えるが、d3 は済みなので d7 だけ足す → items=["案1","案2"]
+~~~
+
+**並列で同時に届いたときも取りこぼさない。**
+\`start:any\` は「まだ動いていない \`ready\` の実行があれば、そこへ相乗りする」（4章）。
+だから3本が同時に届くと**実行は1回**になる。記憶ノードはその1回で
+**まだ使っていない Delivery を届いた順にぜんぶ**足すので、3件そろう。
+実測: 並列3本 → \`items:["A","B","C"]\` ／ \`applied\` 3件 ／ 記憶ノードの実行は1回。
+
+### 入口ごとの扱い（\`rules\`）
+
+| \`op\` | 何をするか |
+|---|---|
+| \`"append"\` | いちばん後ろに足す |
+| \`"replace"\` | 中身を捨てて、その値だけにする（＝1件になる） |
+| \`"clear"\` | 空にする（届いた値は入れない） |
+| \`"read"\` | 中身を変えない（出すだけ） |
+
+- **線が入っている入口はぜんぶ \`rules\` に書く。** 書いていない入口から届くと
+  検証エラー（実行前）、実行時なら \`MEMORY_NO_RULE\`。黙って無視はしない。
+- 入口の名前は線の \`to.port\` で決める。\`"in"\` 以外も自由に付けられる（日本語でよい）。
+- 中身はいつも**配列**。\`"replace"\` は「1件だけの配列にする」という意味。
+
+### どこで持つか（\`scope\`）
+
+| 値 | 記憶の数 |
+|---|---|
+| \`"run"\`（既定） | **Run に1つ**。ループを何周しても、Map の何件目でも同じ記憶 |
+| \`"scope"\` | **その場ごとに1つ**（\`loopInstanceId\` ごと。Map なら1件ごと・入れ子なら入れ子ごと） |
+
+実測: Map の2件に \`append\` するハーネスで、
+\`"scope"\` なら \`[["a"],["b"]]\`、\`"run"\` なら \`[["a"],["a","b"]]\` になる。
+Map の中で \`"run"\` にすると全件が同じ記憶を共有するので、図の⚠が警告する。
+
+### 出すときの形（\`out\`）と上限
+
+| \`out\` | 流れる値 |
+|---|---|
+| \`"items"\`（既定） | ためた全部（配列のコピー） |
+| \`"last"\` | いちばん新しい1つ（空なら \`null\`） |
+| \`"first"\` | いちばん古い1つ（空なら \`null\`） |
+| \`"count"\` | 何件あるか（数） |
+
+- \`max\` を入れると、超えたぶんを**古いものから捨てる**。捨てた数は記録の \`ops[].dropped\` に残る。
+- \`unique:true\` は \`JSON.stringify\` が同じ値を足さない（足さなかったことは \`ops[].skipped\` に残る）。
+- \`initial\` は最初の中身。**配列でないと検証エラー**（空なら \`[]\`）。
+
+### いつ流すか（\`emit\`）
+
+| 値 | 動き |
+|---|---|
+| \`"always"\`（既定） | 届いたら毎回、出口へ流す |
+| \`"when"\` | \`when\` が真のときだけ流す。偽のときは**記憶に入れるだけで先へ流さない** |
+| \`"never"\` | いつも流さない（ためるだけ） |
+
+- 流さなかったときも**そのノードは成功**として記録される。だから \`記憶.out\` からは読める。
+  ログには「先へは流さない」と出る。
+- \`when\` の中では \`count\`（件数）/ \`memory\`（配列）/ \`value\`（\`out\` の形そのもの）と、
+  ふつうの式の名前（\`<ノードid>.out\` など・31章）が使える。
+- **注意: ループの戻り線を記憶ノードから出しているのに \`"when"\` にすると、条件が偽の周で
+  ループが止まる。** 記憶は枝に置いて、戻り線は別のノードから出す。図の⚠が名指しする。
+
+### 記録
+
+\`run.memories[<ノードid>@<場>]\`:
+
+~~~
+{"key":"記憶@run","node":"記憶","scope":"run","loopInstanceId":null,
+ "items":["案1","案2","案3"],
+ "applied":["d3","d7","d11"],
+ "ops":[{"deliveryId":"d3","from":"書く","port":"in","op":"append",
+         "size":1,"dropped":0,"skipped":false,"at":"…"}, …]}
+~~~
+
+実行の記録（\`traceReport\`）には \`memories\` がそのまま入る。
+\`runSummary\` には1行ずつの要約（\`node\` / \`scope\` / \`size\` / \`ops\`）が入る。
+
+### 既存の機能と混ぜないこと
+
+- **「1つの入口に来た複数の線をまとめる」だけなら \`merge\` か \`join\`**。記憶は要らない。
+- **「並んだ値を1つにする」だけなら \`reduce\`**。記憶は要らない。
+- 記憶が要るのは「**別々の時点に届いた値を、あとで一緒に見たい**」ときだけ。
+  ループの各周の草稿、各周の点数、直した理由の履歴などがそれ。
+
 ## 44. 点検（assert）
 
 ~~~
@@ -9140,14 +9444,30 @@ in → C1 → 先着（C1 は不合格 → 待つ）
 - Join: \`items\` が \`many\` でない・\`op\` が無い
 - 条件式が知らないノードを見ている・\`schema\` が無いノードの \`.out.項目\` を見ている
 - ループ: 入る線が無い・繰り返す先が無い・抜けたあとの線が無い・止まらない設定
+- **先着**: 候補が1本しかない・「どれか来たら」になっていない・止められない候補がある・\`onNone\` が失敗のまま
+- **記憶**: 上限が無い・Map の中で「Run で1つ」になっている・線が入っていない入口・流さない設定
+- **Runtime が読まないキーがある**（下記）
 
 検証（実行前に必ず走る）でエラーになるのは、id 重複・\`position\` の欠け／重複・
 \`many\` でない入口への複数入力・\`routing.mode\` の不正・\`failurePolicy\` の未実装値・
 知らない出口名・\`pick\` が読めない・schema の必須項目・モジュールが無い／再帰・
 Map の戻り線が無い、など。
 
-**知らないキーは、検証でも取り込みでも「無視」される。** 消しも警告もしない
+**知らないキーは、検証でも取り込みでも「無視」される。** 消さないし、実行は止めない
 （Runtime が読まないだけ）。だから綴りを間違えると**黙って効かない**。
+
+そのままでは気づけないので、**「診断する」が読まないキーを名指しする**:
+
+~~~
+⚠ A: Runtime が読まないキーがある: onNonValue, conditon, temperature
+   （書いても効かない。綴りちがいでないか確かめる）
+~~~
+
+- 見ているのは**ノードのキーだけ**（\`temperature\` は \`generation\` の中に書く、など）。
+- 一覧は「どれかの種類で読むキー」を全部まとめたもの。だから
+  **「その種類では読まないキー」は通してしまう**（例: \`input\` に \`condition\` を書いても出ない）。
+  出た分は確実に誰も読まないキー。出なかったから読まれている、とは言えない。
+- 検証エラーにはしない（実行は止まらない）。**警告として出るだけ。**
 
 ## 54. HSL と JSON の行き来
 
@@ -10530,7 +10850,7 @@ export async function CreateMLCEngine(model,opt){
   }
   const 止まった=ran.filter(x=>x.status!=="success"&&x.status!=="paused");
   ok("75 使い方の「詳しい動き」: 載せた完全な例が全部 検証を通り、mock で最後まで動く",
-    DEEP_EXAMPLES.length>=17&&bad.length===0&&止まった.length===0
+    DEEP_EXAMPLES.length>=19&&bad.length===0&&止まった.length===0
     &&HELP_DEEP.indexOf(DEEP_EXAMPLE_TEXT)>0
     &&/## 1\. 値が流れる仕組み/.test(HELP_DEEP)&&/## 57\. よく事故る組み合わせ/.test(HELP_DEEP));
   if(bad.length)out.push(`<span class="fail">↳</span>  ${esc(bad.slice(0,4).join(" / "))}`);
@@ -10861,6 +11181,172 @@ export async function CreateMLCEngine(model,opt){
     okL&&okM&&okS&&okR);
   if(!(okL&&okM&&okS&&okR))out.push(`<span class="fail">↳</span>  L=${okL} M=${okM} S=${okS} R=${okR}`
     +` / ${esc(JSON.stringify(tag(rL)))} calls=${rL.totals.apiCalls} canc=${esc(JSON.stringify(canc(rL)))}`);}
+ // 82 記憶（memory）: ためる・入れ替える・消す・読むだけ／届いた線は1回だけ使う／場ごと／Resume
+ {const MANY={in:{type:"any",cardinality:"many"}};
+  const memOf=r=>Object.values(r.memories||{}).map(m=>({key:m.key,items:m.items,ops:m.ops.length}));
+  // (a) ループの中で毎周ためる。many では残らない履歴が残る
+  const loopSpec=opt=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},{id:"lp",type:"loop",loop:{id:"lp",max:4}},
+      {id:"書く",type:"llm",provider:"m",mock:{tag:"案"},inputs:MANY,start:{mode:"any"}},
+      Object.assign({id:"記憶",type:"memory",scope:"run",rules:[{port:"in",op:"append"}],
+        emit:"always",out:"items",start:{mode:"any"}},opt||{}),
+      {id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+      {from:{node:"lp",port:"out"},to:{node:"書く",port:"in"},loopRole:"body",position:1},
+      {from:{node:"書く",port:"out"},to:{node:"記憶",port:"in"}},
+      {from:{node:"記憶",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+      {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}]});
+  const rA=await fullRun(loopSpec(),{in:"Q"});
+  const okA=rA.status==="success"
+    &&JSON.stringify(rA.result.value)==='["案1","案2","案3","案4"]'
+    &&memOf(rA).length===1&&memOf(rA)[0].ops===4
+    // 同じ Delivery を二度足していない（applied の数＝ops の数＝周回数）
+    &&Object.values(rA.memories)[0].applied.length===4;
+  const rLast=await fullRun(loopSpec({out:"last"}),{in:"Q"});
+  const rCnt=await fullRun(loopSpec({out:"count"}),{in:"Q"});
+  const rFst=await fullRun(loopSpec({out:"first"}),{in:"Q"});
+  const rMax=await fullRun(loopSpec({max:2}),{in:"Q"});
+  const rIni=await fullRun(loopSpec({initial:["ゼロ"]}),{in:"Q"});
+  const okOut=rLast.result.value==="案4"&&rCnt.result.value===4&&rFst.result.value==="案1"
+    &&JSON.stringify(rMax.result.value)==='["案3","案4"]'
+    &&JSON.stringify(rIni.result.value)==='["ゼロ","案1","案2","案3","案4"]'
+    &&Object.values(rMax.memories)[0].ops.filter(o=>o.dropped>0).length===2;
+  // (b) 入口ごとに扱いを分ける
+  const portSpec=rules=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+      {id:"A",type:"calc",lang:"js",code:'return "a";'},
+      {id:"B",type:"calc",lang:"js",code:'return "b";'},
+      {id:"記憶",type:"memory",scope:"run",rules,emit:"always",out:"items",start:{mode:"any"}},
+      {id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+      {from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+      {from:{node:"A",port:"out"},to:{node:"記憶",port:"追加"},position:0},
+      {from:{node:"B",port:"out"},to:{node:"記憶",port:"置換"},position:1},
+      {from:{node:"記憶",port:"out"},to:{node:"out",port:"in"}}]});
+  const pv=async rules=>{const r=await fullRun(portSpec(rules),{in:"Q"});
+    return r.status==="success"?JSON.stringify(r.result.value):"×"+((r.errors||[])[0]||{}).kind;};
+  const okPorts=(await pv([{port:"追加",op:"append"},{port:"置換",op:"replace"}]))==='["b"]'
+    &&(await pv([{port:"追加",op:"append"},{port:"置換",op:"clear"}]))==='[]'
+    &&(await pv([{port:"追加",op:"append"},{port:"置換",op:"read"}]))==='["a"]'
+    &&validate(portSpec([{port:"追加",op:"append"}])).some(m=>/入口 "置換"/.test(m));
+  // (c) 同じ値は足さない
+  const spU={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},{id:"lp",type:"loop",loop:{id:"lp",max:3}},
+      {id:"同じ",type:"calc",lang:"js",inputs:MANY,start:{mode:"any"},code:'return "おなじ";'},
+      {id:"記憶",type:"memory",scope:"run",rules:[{port:"in",op:"append"}],unique:true,
+       emit:"always",out:"items",start:{mode:"any"}},
+      {id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+      {from:{node:"lp",port:"out"},to:{node:"同じ",port:"in"},loopRole:"body",position:1},
+      {from:{node:"同じ",port:"out"},to:{node:"記憶",port:"in"}},
+      {from:{node:"記憶",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+      {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}]};
+  const rU=await fullRun(spU,{in:"Q"});
+  const okU=rU.status==="success"&&JSON.stringify(rU.result.value)==='["おなじ"]'
+    &&Object.values(rU.memories)[0].ops.filter(o=>o.skipped).length===2;
+  // (d) Map の中: scope なら件ごと、run なら共有
+  const mapSpec=scope=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},{id:"src",type:"calc",lang:"js",code:'return ["a","b"];'},
+      {id:"m",type:"map",map:{id:"m"}},
+      {id:"記憶",type:"memory",scope,rules:[{port:"in",op:"append"}],emit:"always",out:"items",start:{mode:"any"}},
+      {id:"end",type:"pass"},{id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"src",port:"in"}},
+      {from:{node:"src",port:"out"},to:{node:"m",port:"in"},position:0},
+      {from:{node:"m",port:"out"},to:{node:"記憶",port:"in"},mapRole:"body"},
+      {from:{node:"記憶",port:"out"},to:{node:"m",port:"in"},map:{id:"m"},position:1},
+      {from:{node:"m",port:"out"},to:{node:"end",port:"in"},mapRole:"done"},
+      {from:{node:"end",port:"out"},to:{node:"out",port:"in"}}]});
+  const rMs=await fullRun(mapSpec("scope"),{in:"Q"}),rMr=await fullRun(mapSpec("run"),{in:"Q"});
+  const okMap=JSON.stringify(rMs.result.value)==='[["a"],["b"]]'&&memOf(rMs).length===2
+    &&JSON.stringify(rMr.result.value)==='[["a"],["a","b"]]'&&memOf(rMr).length===1;
+  // (e) 流さない設定でも 記憶.out から読める
+  const spN={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+      {id:"A",type:"calc",lang:"js",code:'return "a";'},
+      {id:"記憶",type:"memory",scope:"run",rules:[{port:"in",op:"append"}],
+       emit:"never",out:"count",start:{mode:"any"}},
+      {id:"読む",type:"calc",lang:"expr",code:"記憶.out",inputs:MANY,start:{mode:"any"}},
+      {id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+      {from:{node:"A",port:"out"},to:{node:"記憶",port:"in"}},
+      {from:{node:"in",port:"out"},to:{node:"読む",port:"in"}},
+      {from:{node:"読む",port:"out"},to:{node:"out",port:"in"}}]};
+  const rN=await fullRun(spN,{in:"Q"});
+  const okNever=rN.status==="success"&&(rN.nodeRuns.記憶||[]).slice(-1)[0].status==="success"
+    &&Object.values(rN.memories)[0].items.length===1;
+  // (f) 検証: rules 無し・op 不正・emit 不正・when 無し・initial が配列でない・out 不正
+  const badSp=n=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},n,{id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"記憶",port:"in"}},
+      {from:{node:"記憶",port:"out"},to:{node:"out",port:"in"}}]});
+  const bad=n=>validate(badSp(Object.assign({id:"記憶",type:"memory"},n))).length>0;
+  const okVal=bad({})&&bad({rules:[{port:"in",op:"なにか"}]})
+    &&bad({rules:[{port:"in",op:"append"}],emit:"どれか"})
+    &&bad({rules:[{port:"in",op:"append"}],emit:"when"})
+    &&bad({rules:[{port:"in",op:"append"}],initial:"配列でない"})
+    &&bad({rules:[{port:"in",op:"append"}],out:"なにか"})
+    &&bad({rules:[{port:"in",op:"append"}],scope:"どこか"})
+    &&validate(badSp({id:"記憶",type:"memory",rules:[{port:"in",op:"append"}]})).length===0;
+  // (g) normalizeSpec が start と scope を書き込む／HSL で往復する
+  const spNo=loopSpec();const mn=spNo.nodes.find(x=>x.id==="記憶");
+  delete mn.start;delete mn.scope;
+  const changed=normalizeSpec(spNo);
+  const mn2=spNo.nodes.find(x=>x.id==="記憶");
+  const okNorm=changed===true&&mn2.start.mode==="any"&&mn2.scope==="run";
+  const spH=loopSpec({max:5,unique:true,initial:[]});spH.metadata.name="記憶の例";
+  const hd=hslRoundTripDiff(spH);
+  const okHSL=(hd===null||hd.length===0)
+    &&JSON.stringify(hslToSpec(specToHSL(spH)).nodes.find(x=>x.id==="記憶").rules)
+      ==='[{"port":"in","op":"append"}]';
+  // (h) 待っている途中で保存して続きから（記憶は Checkpoint に入る）
+  const run=makeRun(loopSpec(),{in:"Q"});const store=memStore();startRun(loopSpec(),run);
+  const sp2=loopSpec();
+  for(let i=0;i<40;i++){const r=await processOneWorkItem(sp2,run,store,null,null);
+    if(r.kind==="idle"||!run.workQueue.length)break;
+    if((Object.values(run.memories||{})[0]||{items:[]}).items.length>=2)break;}
+  const midN=(Object.values(run.memories||{})[0]||{items:[]}).items.length;
+  const cp=JSON.parse(JSON.stringify(run));
+  const r2=await resumeRun(sp2,cp,store,null,null);
+  const okResume=midN===2&&r2.status==="success"
+    &&JSON.stringify(r2.result.value)==='["案1","案2","案3","案4"]';
+  // (i) 並列で同時に3本届いても、1回の実行で届いた順に全部ためる（start:any の相乗り）
+  const spP={metadata:{version:"1",layout:{A:{x:0,y:0},B:{x:0,y:100},C:{x:0,y:200}}},
+    providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+      ...["A","B","C"].map(id=>({id,type:"calc",lang:"js",code:`return "${id}";`})),
+      {id:"記憶",type:"memory",scope:"run",rules:[{port:"in",op:"append"}],inputs:MANY,
+       emit:"always",out:"items",start:{mode:"any"}},
+      {id:"out",type:"output"}],
+    edges:[...["A","B","C"].map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"}})),
+      ...["A","B","C"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"記憶",port:"in"},position:i})),
+      {from:{node:"記憶",port:"out"},to:{node:"out",port:"in"}}]};
+  const rP=await fullRun(spP,{in:"Q"});
+  const mP=Object.values(rP.memories||{})[0]||{items:[],applied:[]};
+  const okPar=rP.status==="success"&&JSON.stringify(mP.items)==='["A","B","C"]'
+    &&mP.applied.length===3&&(rP.nodeRuns["記憶"]||[]).length===1;   // 実行は1回（相乗り）
+  ok("82 記憶（memory）: ためる/入れ替える/消す/読むだけ・届いた線は1回だけ・上限と重複・出し方4種・場ごと・流さない・Resume・HSL往復・並列の相乗り",
+    okA&&okOut&&okPorts&&okU&&okMap&&okNever&&okVal&&okNorm&&okHSL&&okResume&&okPar);
+  if(!(okA&&okOut&&okPorts&&okU&&okMap&&okNever&&okVal&&okNorm&&okHSL&&okResume&&okPar))
+    out.push(`<span class="fail">↳</span>  A=${okA} out=${okOut} ports=${okPorts} uniq=${okU}`
+      +` map=${okMap} never=${okNever} val=${okVal} norm=${okNorm} hsl=${okHSL} resume=${okResume} par=${okPar}`
+      +` / ${esc(JSON.stringify(memOf(rA)))}`);}
+ // 83 診断: Runtime が読まないキーを名指しする（載せている例では1件も出ない）
+ {const unk=sp=>reviewSpec(sp).filter(f=>/読まないキー/.test(f.message||"")).map(f=>f.node);
+  const caught=unk({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},
+      {id:"A",type:"llm",provider:"m",mock:{text:"a"},onNonValue:1,conditon:"x",temperature:0.5},
+      {id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+      {from:{node:"A",port:"out"},to:{node:"out",port:"in"}}]});
+  // 載せている例・プリセットでは誤検知しない
+  const falses=[];
+  for(const ex of DEEP_EXAMPLES){const sp=JSON.parse(JSON.stringify(ex.spec));
+    const bad=unk(sp);if(bad.length)falses.push(ex.name+": "+bad.join(","));}
+  for(const[k,sp]of Object.entries(EX||{})){
+    const bad=unk(JSON.parse(JSON.stringify(sp)));if(bad.length)falses.push(k+": "+bad.join(","));}
+  ok("83 診断: Runtime が読まないキーを名指しする（載せている例・プリセットでは1件も出ない）",
+    JSON.stringify(caught)==='["A"]'&&falses.length===0);
+  if(falses.length)out.push(`<span class="fail">↳</span>  ${esc(falses.slice(0,4).join(" / "))}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

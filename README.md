@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.29.0 先着（早く決める・残りを止める）
+## 1. 現状 — v0.30.0 記憶（値をためる・入れ替える）
 
 | 段階 | 状態 |
 |---|---|
@@ -56,7 +56,8 @@ iPhone でもPCでも同じ操作。
 | 1件ずつ（Map）と集計 v0.27.0（配列の1件ずつ・入れ子の場・1件だけの失敗・続きから／Run比較の集計統計／多数決の「もう来ない票」） | 実装済み |
 | 詳しい動き v0.28.0（第3タブ = Runtime意味論の全部・検証済みの完全JSON例16本／日本語 pick の修正） | 実装済み |
 | 式リファレンスの実測修正 v0.28.1（`&&`/`\|\|`/`!`・`input.<ID>`・`first_match` の priority・wllama の全設定。文書を実装へ合わせ、自己テストで固定） | 実装済み |
-| **先着 v0.29.0（`race`＝先に条件を満たしたものを採り、まだ動いていない候補を止める。onNone 4種／検証がLLM以外のノードにも届くよう修正）** | **いまここ** |
+| 先着 v0.29.0（`race`＝先に条件を満たしたものを採り、まだ動いていない候補を止める。onNone 4種／検証がLLM以外のノードにも届くよう修正） | 実装済み |
+| **記憶 v0.30.0（`memory`＝入口ごとに ためる/入れ替える/消す/読むだけ。Run 全体か場ごとか・出し方4種・流す条件・上限と重複なし。中身は実行の記録に残り Resume でも続く／診断が「Runtime が読まないキー」を名指し）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -1086,7 +1087,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト80件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲）
+node tests/harness-runtime.mjs      # 自己テスト83件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
@@ -1103,6 +1104,7 @@ node tests/harness-loop.mjs         # ループノード・緊急停止・入力
 node tests/harness-outputs.mjs      # 出力の項目（出力1・出力2…）・数値の範囲・出口を分ける・受け取る側の項目えらび
 node tests/harness-calc.mjs         # 計算ノード（式/JavaScript）・条件分岐ノード・ループのJSモード・使い方の？とJSONタブ
 node tests/harness-race.mjs         # 先着（race）— 足す・中身を決める・実行して候補が止まる・記録・診断・使い方3タブ
+node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱い・毎周たまる・記録・診断・使い方3タブ
 MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
 
