@@ -101,12 +101,23 @@ await tap('#imGo');
 R['⑤ 読めない返答'] = (await p.textContent('#imResult')).replace(/\s+/g, ' ').slice(0, 90);
 ok.badReply = (await p.locator('#imErrCopy').count()) === 1 && R['⑤ 読めない返答'].includes('読み取れない');
 
-// ⑥ route を書き忘れた返答は、適用する前に検証エラーとして示す
+// ⑥ route を書き忘れただけの返答は、誤検知せず「既定で埋めた」と言って適用できる（v0.24.0で直した）
 await p.fill('#imText', AI_REPLY.replace('  route parallel failure fail_fast\n', ''));
 await tap('#imGo');
-R['⑥ route抜け'] = (await p.textContent('#imResult')).replace(/\s+/g, ' ').slice(-130);
-ok.validateBeforeApply = R['⑥ route抜け'].includes('検証エラー') && R['⑥ route抜け'].includes('routing.mode')
-  && (await p.locator('#imErrCopy2').count()) === 1;
+R['⑥ route抜け'] = (await p.textContent('#imResult')).replace(/\s+/g, ' ').slice(-160);
+ok.noFalseRoutingError = !R['⑥ route抜け'].includes('検証エラー')
+  && R['⑥ route抜け'].includes('既定値で埋めた')
+  && (await p.locator('#imErrCopy2').count()) === 0
+  && (await p.locator('#imApply').count()) === 1;
+
+// ⑦ 本当の検証エラー（置き場のURLが無い openai_local）は、適用する前に示して AI に返す文面を出す
+await p.fill('#imText', AI_REPLY.replace('provider m = mock', 'provider m = openai_local'));
+await tap('#imGo');
+R['⑦ 本当の検証エラー'] = (await p.textContent('#imResult')).replace(/\s+/g, ' ').slice(0, 160);
+ok.validateBeforeApply = R['⑦ 本当の検証エラー'].includes('このまま適用すると検証エラー')
+  && R['⑦ 本当の検証エラー'].includes('endpoint')
+  && (await p.locator('#imErrCopy2').count()) === 1
+  && (await p.locator('#imApply').count()) === 1;   // 止めずに知らせる（決めるのはユーザー）
 await tap('#shClose');
 
 R['pageerror'] = errs;

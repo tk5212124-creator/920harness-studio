@@ -3,7 +3,7 @@
 `harness.html` は1枚のHTMLなので、テストは Playwright でページを開いて中の関数を直接叩く形にしてある。
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト75件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口 + 条件/計算 + 動く順番 + 動き出す条件 + エラーの扱い + 実行の記録 + 使い方のJSON + 出力の形と差し込み + まとめる/多数決/点検 + モジュール + Map + 多数決の確定 + 日本語pick + 詳しい動きの例）
+node tests/harness-runtime.mjs      # 自己テスト78件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口 + 条件/計算 + 動く順番 + 動き出す条件 + エラーの扱い + 実行の記録 + 使い方のJSON + 出力の形と差し込み + まとめる/多数決/点検 + モジュール + Map + 多数決の確定 + 日本語pick + 詳しい動きの例 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作

@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.28.0 詳しい動き（Runtimeリファレンス）
+## 1. 現状 — v0.28.1 式リファレンスを実測に合わせる
 
 | 段階 | 状態 |
 |---|---|
@@ -54,7 +54,8 @@ iPhone でもPCでも同じ操作。
 | ％と思考過程 v0.25.0（選択肢ごとの正しさ％だけ／考えてから答える／system にも差し込み／波かっこ無しの参照を診断） | 実装済み |
 | モジュールとくらべる v0.26.0（部分ハーネスの再利用／まとめる・多数決・点検ノード／Run比較／ノードごとの時刻） | 実装済み |
 | 1件ずつ（Map）と集計 v0.27.0（配列の1件ずつ・入れ子の場・1件だけの失敗・続きから／Run比較の集計統計／多数決の「もう来ない票」） | 実装済み |
-| **詳しい動き v0.28.0（第3タブ = Runtime意味論の全部・検証済みの完全JSON例16本／日本語 pick の修正）** | **いまここ** |
+| 詳しい動き v0.28.0（第3タブ = Runtime意味論の全部・検証済みの完全JSON例16本／日本語 pick の修正） | 実装済み |
+| **式リファレンスの実測修正 v0.28.1（`&&`/`\|\|`/`!`・`input.<ID>`・`first_match` の priority・wllama の全設定。文書を実装へ合わせ、自己テストで固定）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -1084,7 +1085,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト75件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録）
+node tests/harness-runtime.mjs      # 自己テスト78件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体

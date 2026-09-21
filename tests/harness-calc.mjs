@@ -135,13 +135,17 @@ await tap('#hlTab_deep');
  R['⑧ 詳しい動き'] = { 見出し: await p.locator('.help h4').count(),
    かたまり: await p.locator('.help pre.hcode').count(), 文字数: t.length,
    章: ['値が流れる仕組み','start:any','onError','DEADLOCK','Retry と Resume',
-        'よく事故る組み合わせ','そのまま貼って動く例'].every(x=>t.includes(x)),
+        'よく事故る組み合わせ','そのまま貼って動く例',
+        'wllama（CPUだけで動かす','式（expr）の演算子と関数'].every(x=>t.includes(x)),
+   式: t.includes('and / or / not は使えない')          // 表示ではバッククォートが消える
+       && t.includes('run.input.… は式では使えない')
+       && !t.includes('and or not'),                     // 古い誤記が残っていないこと
    例: t.includes('"type": "map"') && t.includes('"type": "quorum"') && t.includes('"modules"') };
  await tap('#hlCopy');
  R['⑧ 詳しい動き'].コピー = (await p.textContent('#logMsg')).includes('コピーした');
  ok.helpDeep = R['⑧ 詳しい動き'].見出し >= 40 && R['⑧ 詳しい動き'].文字数 > 30000
    && R['⑧ 詳しい動き'].かたまり >= 25 && R['⑧ 詳しい動き'].章 && R['⑧ 詳しい動き'].例
-   && R['⑧ 詳しい動き'].コピー;}
+   && R['⑧ 詳しい動き'].式 && R['⑧ 詳しい動き'].コピー;}
 await tap('#hlTab_read');                               // 読みものへ戻れる
 R['⑦ 戻れる'] = (await p.textContent('.help')).includes('まず動かす');
 ok.helpJson = R['⑦ JSONタブ'].かたまり >= 15 && R['⑦ JSONタブ'].文字数 > 6000

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 詳しい動き v0.28.0</title>
+<title>Harness Studio — 実測で直した式リファレンス v0.28.1</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -117,7 +117,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.28.0 · 詳しい動き</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.28.1 · 式の実測リファレンス</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -6775,7 +6775,7 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 "providers": {
   "local":  {"adapter":"webllm","model":"Qwen2.5-0.5B-Instruct-q4f16_1-MLC"},
   "cpu":    {"adapter":"wllama","model":"qwen2.5-0.5b-instruct-q4_k_m","url":"https://…/x.gguf","contextSize":2048},
-  "server": {"adapter":"openai_local","baseUrl":"http://localhost:1234/v1","model":"…"},
+  "server": {"adapter":"openai_local","endpoint":"http://localhost:1234/v1","model":"…"},
   "test":   {"adapter":"mock"}
 }
 ~~~
@@ -7153,18 +7153,24 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 ## 11. 式で使える名前（until / if / cond の expr）
 
 ~~~
-"until": "点数評価.out.score >= 8 and len(点数評価.out.理由) > 10"
+"until": "点数評価.out.score >= 8 && len(点数評価.out.理由) > 10"
 ~~~
 - \`<ノードid>.out.<キー>\` … そのノードが最後に出した値
 - \`<ノードid>.meta.len\` … 文字数 ／ \`<ノードid>.meta.tokens\` … トークン数
-- \`run.input.<入力ノードid>\` … 実行画面で入れた文
+- \`input.<入力ノードid>\` … 実行画面で入れた文（**\`run.input.…\` ではない**）
 - \`vars.<名前>\` … vars に書いた値
-- \`iteration\` … いまの周回（1から）
-- \`index\` … 多数決で、いま見ているのが何番目か（0から）
-- \`value\` … そのノードに入ってきた値そのもの。中身がJSONなら、そのキー名もそのまま名前として使える
-- 使える形: \`+ - * / %\` ／ \`== != < <= > >=\` ／ \`and or not\`
+- \`run.apiCalls\` \`run.iterationTotal\` \`run.elapsedMs\` … いまの Run の合計
+- \`loop.iteration\` \`loop.max\` … いるループの周回
+- \`iteration\` … いまの周回（1から）。**線の \`if\` では使えない**
+- \`index\` … 多数決で、いま見ているのが何番目か（0から）。Map の1件の中でも使える
+- \`value\` … そのノードに入ってきた値そのもの。中身がJSONなら、そのキー名もそのまま名前として使える。
+  **線の \`if\` では使えない**（\`<ノードid>.out.<キー>\` で書く）
+- 使える形: \`+ - * / %\` ／ \`== != < <= > >=\` ／ **\`&&\` \`\|\|\` \`!\`**
+  （\`and\` \`or\` \`not\` は**使えない**）
 - 使える関数: \`len() has() regex() count() min() max() json_parse() json_stringify()\`
+  （\`has()\` は「null でない」を見るだけ。**キーが無いことは調べられない**）
 - ノードの名前は日本語でよい。
+- 場所ごとに使える名前がどう違うかは、「詳しい動き」タブの31章に実測の表がある。
 
 ## 12. まるごと1つの例（貼ればそのまま動く）
 
@@ -7876,11 +7882,26 @@ m1#1/i0|m2#5/i1 … Map の中の Map
 | どれにも当たらない | \`onNoMatch\`（error / stop） | \`routing.onNoMatch\`（error / stop） |
 | 向いている場面 | 分岐そのものを図に残したい | 既存ノードの出口をそのまま条件で分けたい |
 
-\`first_match\` の決まり:
+\`first_match\` の決まり（ぜんぶ実測）:
 
-- \`priority\` を書かないと \`0\` 扱い。**同じ \`priority\` は検証エラー**（\`priority重複\`）。
-- \`else\` は1本まで。\`if\` のどれにも当たらなければ \`else\` へ。
-- 同じノードから**条件つきの線と無条件の線を混ぜると検証エラー**（\`routing混在\`）。
+| 書いたもの | どうなるか |
+|---|---|
+| \`if\` を1本＋\`else\` を1本、\`priority\` を書かない | 通る。\`if\` から見る |
+| \`if\` が2本以上で \`priority\` を書かない | **検証エラー \`priority重複\`**（どちらも \`0\` 扱いになるため） |
+| \`if\` が2本で \`priority\` が同じ数 | **検証エラー \`priority重複\`** |
+| \`if\` が2本で \`priority\` が \`0\` と \`1\` | \`0\` の方を先に見る |
+| \`priority\` に負の数（\`-1\` と \`0\`） | \`-1\` の方を先に見る（**小さい順**。0以上でなくてよい） |
+| \`else\` に \`priority:0\`、\`if\` に \`priority:9\` | \`if\` が先。**\`else\` の \`priority\` は見ない** |
+| \`else\` を2本 | 検証エラー \`else複数\` |
+| 条件つきの線と無条件の線を混ぜる | 検証エラー \`routing混在\` |
+| \`if\` を書いて \`routing.mode\` を書かない | **動く**（出口が全部条件つきなら \`first_match\` として扱う） |
+| \`else\` が無くてどれにも当たらない・\`onNoMatch\` 既定 | \`NO_MATCH\` で失敗 |
+| \`else\` が無くてどれにも当たらない・\`onNoMatch:"stop"\` | **\`paused\`**（\`resumable:true\`、\`run.errors\` は空）。Resume で続く |
+
+- \`priority\` を書かないと \`0\` 扱い。**小さい方から順に見て、最初に真になった1本だけ**に流す。
+- \`if\` の中では \`value\` も \`iteration\` も使えない（31章の表）。
+  \`<ノードid>.out.<キー>\` で書く。
+- \`if\` と \`loop\` を同じ線に書くと検証エラー（\`if+loop併記\`）。
 
 ## 26. Output（出力ノード）
 
@@ -7896,7 +7917,8 @@ m1#1/i0|m2#5/i1 … Map の中の Map
   他の入力ノードは、線でつながっていればそこから値が流れる。
 - 値の入り方: \`run.input\` が**ノードIDをキーにしたオブジェクト**。
   そのノードIDのキーがあればその値、無ければ \`run.input\` 全体が流れる。
-- 差し込みからは \`{{{run_input.<入力ノードID>}}}\`、式からは \`run.input.<入力ノードID>\`。
+- 差し込みからは \`{{{run_input.<入力ノードID>}}}\`、**式からは \`input.<入力ノードID>\`**。
+  （\`run.input.…\` は式では読めない。31章の表を見る）
 
 ## 28. Retry と Resume
 
@@ -7953,38 +7975,126 @@ m1#1/i0|m2#5/i1 … Map の中の Map
 
 ## 31. 式・差し込み・JavaScript で使える名前
 
-○＝使える。
+**同じ「条件」でも、書く場所によって使える名前が違う。** 以下はぜんぶ実測した表。
 
-| 名前 | 本文テンプレ等 | 式(expr) | 計算JS | 条件JS | ループJS |
-|---|---|---|---|---|---|
-| \`{{{in}}}\` | ○ | － | － | － | － |
-| \`{{{inputs.<入口>}}}\` | ○ | － | － | － | － |
-| \`{{{run_input.<入力ID>}}}\` | ○ | － | － | － | － |
-| \`{{{iteration}}}\` | ○ | － | － | － | － |
-| \`{{{vars.<名前>}}}\` | ○ | － | － | － | － |
-| \`value\` | － | ○ | Map の1件の中だけ | ○ | ○ |
-| \`index\` | － | Map の1件の中だけ | Map の1件の中だけ | Map の1件の中だけ | Map の1件の中だけ |
-| \`iteration\` | ○（差し込み） | ○ | ○ | ○ | ○ |
-| \`inputs\`（配列） | － | ○ | ○ | － | － |
-| \`vars.<名前>\` | \`{{{vars.x}}}\` | ○ | － | － | － |
-| \`run.input.<入力ID>\` | \`{{{run_input.x}}}\` | ○ | － | － | － |
-| \`<node>.out.<項目>\` | － | ○ | ○（式のとき） | ○ | ○ |
-| \`<node>.meta.len\` / \`.tokens\` | － | ○ | ○（式のとき） | ○ | ○ |
-| 入ってきた JSON のキー名 | － | ○ | 線の \`as\` 名として | ○ | ○ |
+### 31-1. 式（expr）の演算子と関数
+
+~~~
+"score >= 8 && len(理由) > 10"        ← かつ
+"score >= 8 || score < 2"            ← または
+"!(score >= 99)"                     ← でない
+~~~
+
+| 使える形 | |
+|---|---|
+| 計算 | \`+ - * / %\` |
+| 比べる | \`== != < <= > >=\` |
+| かつ | **\`&&\`**（アンパサンド2つ） |
+| または | **縦棒2つ**（\`\|\|\`） |
+| でない | **\`!\`** |
+| 括弧・添字・配列 | \`( )\` \`a[0]\` \`[1,2,3]\` |
+
+**\`and\` / \`or\` / \`not\` は使えない。** 書くと \`and\` が名前として読まれ、
+検証で「条件の式が読めない」になる（実測）。JavaScript と同じ \`&& \|\| !\` を書く。
+
+使える関数は次の8つだけ。ほかの名前で呼ぶと \`EXPRESSION_NOT_ALLOWED\`。
+
+| 関数 | 何を返すか |
+|---|---|
+| \`len(x)\` | 配列なら個数、文字なら**文字数** |
+| \`has(x)\` | \`x\` が null でなければ真 |
+| \`regex(文, "正規表現")\` | 当たれば真 |
+| \`count(配列, 値)\` | その値がいくつあるか |
+| \`min(a,b,…)\` / \`max(a,b,…)\` | 数の最小・最大 |
+| \`json_parse(文)\` / \`json_stringify(値)\` | 文 ⇄ JSON |
+
+**\`has()\` で「キーが無いこと」は調べられない。**
+\`has(A.out.ない)\` は \`has\` に届く前に \`REFERENCE_ERROR\`（\`ない がその中に無い\`）になる。
+\`has()\` が区別するのは「値が null かどうか」だけ。
+キーが来ないことがある形なら、**\`schema\` の \`required\` に入れて必ず来るようにする**か、
+手前の \`calc\` で既定値を埋める。
+
+**検証（貼った直後のエラー）が見ているのは「式の形」だけ。**
+名前があるか・関数の名前が正しいかは見ない。
+だから \`not (score >= 99)\` は検証を通って**動かしたときに落ちる**。
+
+### 31-2. 差し込み（\`{{{ }}}\`）で使える名前
+
+効く場所は \`prompt.template.value\` / \`prompt.system\` / \`prompt.prefix\` / \`prompt.suffix\`。
+
+| 書き方 | 入るもの |
+|---|---|
+| \`{{{in}}}\` | 入口 \`in\` に入ってきた値（JSON は文字列にして入る） |
+| \`{{{inputs.<入口名>}}}\` | その入口に入ってきた値 |
+| \`{{{run_input.<入力ノードID>}}}\` | 実行画面のその入力欄の文 |
+| \`{{{iteration}}}\` | いまの周回（1から） |
+| \`{{{vars.<名前>}}}\` | \`vars\` に書いた値 |
+
+**差し込めるのはこの5つだけ。** それ以外の名前（\`value\` / \`input.in\` /
+\`<ノードid>.out.x\` / \`run.apiCalls\` / \`index\`）を書くと、**エラーにならず空文字になる**（実測）。
+\`{{{vars.無い名前}}}\` \`{{{run_input.無いID}}}\` も空文字。
+**本文に入るはずの値が空だったら、まずこの表に無い名前を書いていないか確かめる。**
+
+### 31-3. 式（expr）で使える名前 — 場所ごと
+
+○＝使える ／ ×＝\`REFERENCE_ERROR\` になる。
+
+| 名前 | 線の \`if\` | cond の \`expr\` | ループ \`until\` | 多数決 \`condition\` | 点検 \`expr\` | calc（\`lang≠"js"\`） |
+|---|---|---|---|---|---|---|
+| \`run.apiCalls\` などの合計 | ○ | ○ | ○ | ○ | ○ | ○ |
+| \`input.<入力ノードID>\` | ○ | ○ | ○ | ○ | ○ | ○ |
+| \`vars.<名前>\` | ○ | ○ | ○ | ○ | ○ | ○ |
+| \`loop.iteration\` / \`.id\` / \`.max\` | ○ | ○ | ○ | ○ | ○ | ○ |
+| \`<ノードid>.out.<キー>\` | ○ | ○ | ○ | ○ | ○ | △ |
+| \`<ノードid>.meta.len\` / \`.tokens\` | ○ | ○ | ○ | ○ | ○ | △ |
+| \`value\`（入ってきた値そのもの） | **×** | ○ | ○ | ○ | ○ | Map の1件の中だけ |
+| 入ってきた JSON のキー名 | **×** | ○ | ○ | ○ | ○ | **×**（線の名前になる） |
+| \`iteration\` | **×** | ○ | ○ | ○ | ○ | ○ |
+| \`index\` | **×** | Map の1件の中だけ | **×** | ○ | Map の1件の中だけ | Map の1件の中だけ |
+| \`inputs\`（入ってきた値の配列） | × | × | × | × | × | ○ |
+| \`run.input.<入力ノードID>\` | **×** | **×** | **×** | **×** | **×** | **×** |
+
+- △ … \`calc\` の式では**線の変数名が先**なので、
+  線の名前（\`as\` を書かなければ**つなぎ元のノードID**）と同じ名前のノードは隠れる。
+  実測: \`A → K\` を \`as\` なしでつないだ \`calc\` で \`A.out.score\` は
+  \`out がその中に無い（あるのは: score）\` になる。\`A.score\` なら読める。
+  ノードビューのほうを読みたいときは線に \`as\` を付けて名前をずらす。
+- \`inputs\` は配列だが、式では \`inputs.0\` のような**数字の添字は書けない**（\`inputs[0]\` なら書ける）。
+  数を見るだけなら \`len(inputs)\`。
 
 **いちばん間違えやすいところ:**
 
-- **差し込みは \`{{{run_input.in}}}\`、式は \`run.input.in\`。** 書き方が違う。
+- **\`run.input.…\` は式では使えない。正しくは \`input.<入力ノードID>\`。**
+  （差し込みは \`{{{run_input.…}}}\`。名前が違うので混ざりやすい）
+- 読めない名前を書いたときのエラー文は、**その場所で使える名前を並べて出す**。
+  \`value が無い（使えるのは: run, input, vars, loop, …）\` のように出るので、そこを見る。
+  黙って偽になることはない。
+- **点検（assert）だけは例外。** 式が読めなくても Run は止まらず、
+  その点検が \`pass:false\` ＋ \`error\` つきになる（\`onFail:"error"\` のときだけノードのエラー）。
+  だから assert に書き間違えた式を置くと**気づかないまま「落ちた点検」になる**。
 - **差し込みを三重の波かっこで囲まないと、ただの文字列としてモデルに渡る。**
   \`system\` に「元質問は run_input.in」と書いても値は入らない（診断が名指しする）。
-- 差し込みは \`prompt.template.value\` だけでなく **\`system\` / \`prefix\` / \`suffix\` でも効く**
-  （\`{{{\` を書いた文だけ差し込む。書いていない文はそのまま通る）。
-- JavaScript の中では \`<node>.out.x\` のようなドットの式は**そのままでは使えない**。
-  計算ノードの JS で他のノードの値がほしいときは、**線でつないで \`as\` で名前を付ける**。
 
-式で使える形: \`+ - * / %\`、\`== != < <= > >=\`、\`and or not\`。
-使える関数: \`len() has() regex() count() min() max() json_parse() json_stringify()\`。
-ノード名も項目名も**日本語でよい**。
+### 31-4. JavaScript（\`lang:"js"\`）で使える名前
+
+| 名前 | 計算(calc) | 条件(cond) | ループ(until) | 多数決 | 点検 |
+|---|---|---|---|---|---|
+| 線の変数名（\`as\` ／ \`pick\` ／ つなぎ元のノードID） | ○ | × | × | × | × |
+| \`inputs\`（配列） | ○ | × | × | × | × |
+| \`iteration\` | ○ | ○ | ○ | ○ | ○ |
+| \`value\` | Map の1件の中だけ | ○ | ○ | ○ | ○ |
+| 入ってきた JSON のキー名 | × | ○ | ○ | ○ | ○ |
+| \`index\` | Map の1件の中だけ | Map の1件の中だけ | × | ○ | Map の1件の中だけ |
+| \`run\` / \`input\` / \`vars\` / \`loop\` / \`<ノードid>\` | **×** | **×** | **×** | **×** | **×** |
+
+- JavaScript の中では \`<ノードid>.out.x\` のようなドットの式は**使えない**（\`run is not defined\` になる）。
+  計算ノードの JS で他のノードの値がほしいときは、**線でつないで \`as\` で名前を付ける**。
+- \`cond\` / \`until\` / 多数決 / 点検 の JS は \`return true\` か \`return false\` を返す
+  （それ以外を返すと \`CODE_RETURN_TYPE\`）。
+- JS は別スレッド（Worker）で走り、**3秒で打ち切る**（\`CODE_TIMEOUT\`）。
+  Worker が作れない端末では同じ画面の中で走るので**打ち切れない**（そのことは正直に出る）。
+
+ノード名も項目名も**日本語でよい**（空白は入れられない）。
 
 ## 32. 計算ノード（calc）
 
@@ -8040,7 +8150,7 @@ Runtime が**実際に見ているのはこれだけ**。
 | adapter | 生成時の強制 | 返ってきてからの確認 |
 |---|---|---|
 | \`webllm\`（内蔵LLM） | **する**（文法として渡す） | する |
-| \`wllama\`（CPU） | しない | する |
+| \`wllama\`（CPU） | **する**（\`response_format\` の \`json_schema\` を llama.cpp の文法として渡す） | する |
 | \`openai_local\` | \`response_format\` を送る（サーバ次第） | する |
 | \`mock\` | しない | する |
 
@@ -8134,6 +8244,100 @@ Runtime が区別できるのは **Provider が「\`maxTokens\` で切れた」�
 | 形の強制（できる adapter だけ） | 返ってきた値の確認・記録 |
 
 Runtime は adapter の種類で挙動を変えない（\`mock\` でも \`webllm\` でも同じ順で動く）。
+
+## 39.5 wllama（CPUだけで動かす・WebGPU不要）
+
+WebGPU が無い端末（古い iPhone Safari など）でも動く adapter。
+**GGUF ファイルを直接読む**ので、置き場（\`url\`）が決まっていないと始まらない。
+
+~~~
+"providers": {
+  "cpu": {"adapter":"wllama",
+          "model":"Qwen2.5-0.5B-Instruct-Q4_K_M",
+          "url":"https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+          "contextSize":1024,
+          "gpuLayers":0,
+          "generation":{"maxTokens":160,"temperature":0.7}}
+}
+~~~
+
+| キー | 既定 | 何をするか |
+|---|---|---|
+| \`url\` | **必須** | GGUF の置き場。無いと \`MODEL_LOAD_FAILED\`（\`GGUFの置き場（url）が決まっていない\`）。**retryable ではない** |
+| \`model\` | － | 画面に出す名前。**推論の中身には効かない**（中身を決めるのは \`url\`） |
+| \`contextSize\` | \`1024\` | \`n_ctx\`。短いほどメモリが少なくて済む |
+| \`gpuLayers\` | \`0\` | \`n_gpu_layers\`。**\`0\` は CPU だけ**。\`null\` でなく \`0\` が既定 |
+| \`threads\` | 書かなければ**渡さない**（wllama 側の既定） | \`n_threads\` |
+| \`cache\` | \`true\` | \`false\` にすると端末に取り置きしない（毎回ダウンロード） |
+| \`stallMs\` | \`180000\`（3分） | **この時間ダウンロードが1バイトも進まなかったら打ち切る**（\`MODEL_LOAD_FAILED\`・retryable） |
+| \`generation\` | － | \`maxTokens\`（既定 \`256\`）/ \`temperature\`（既定 \`0.7\`）/ \`topP\` |
+
+**本体（wasm）の置き場**は、ふつうは書かなくてよい。
+このページと同じ場所の \`vendor/wllama/\` から読む（CDN に行かない）。
+別の置き場にしたいときだけ次を書く。
+
+| キー | 既定 |
+|---|---|
+| \`base\` | \`vendor/wllama/\`（このページからの相対） |
+| \`moduleUrl\` | \`<base>index.js\` |
+| \`wasmUrl\` | \`<base>wllama.wasm\` |
+| \`compatJsUrl\` | \`<base>compat/wllama.js\`（Safari など用） |
+| \`compatWasmUrl\` | \`<base>compat/wllama.wasm\` |
+| \`moduleTimeoutMs\` | \`30000\`（本体そのものが読めないときの打ち切り） |
+
+**同時に載せるのは1つだけ（singleton）。**
+
+- 別の \`url\` / \`contextSize\` の wllama を使おうとすると、
+  **先に載っていた方を \`exit()\` で片付けてから**新しい方を読む
+  （小さい端末が2つ載せて落ちるのを防ぐため）。ログには「別のモデルを片付けている」と出る。
+- 片付けの対象は**同じ adapter のものだけ**。GPU（\`webllm\`）とは別枠なので、
+  \`webllm\` と \`wllama\` は同時に載る。
+- 「同じかどうか」は \`adapter / endpoint / model / url / contextSize / transport / …\` を
+  つないだ鍵で見る。**\`contextSize\` を変えただけでも別のモデル扱いになり、読み直しになる。**
+
+**形（schema）の扱いが webllm と違う。**
+
+| | 生成時に強制するか | 返ってきてから確かめるか |
+|---|---|---|
+| \`webllm\` | する（文法として渡す） | する |
+| \`wllama\` | \`response_format\` に \`json_schema\` を渡す（llama.cpp の文法として効く） | する |
+
+\`schema\` を付けると \`response_format:{type:"json_schema", json_schema:{…, strict:true}}\` を渡す。
+**どこまで効くかは llama.cpp と GGUF 次第**なので、効かなかった場合も
+返ってきてからの確認（\`SCHEMA_VALIDATION_ERROR\`）で必ず捕まる。
+
+**エラーの出方**
+
+| 何が起きたか | code | retryable |
+|---|---|---|
+| \`url\` が無い | \`MODEL_LOAD_FAILED\` | しない |
+| 本体（\`index.js\`）が読めない・30秒たっても来ない | \`MODEL_LOAD_FAILED\` | する |
+| GGUF のダウンロードが \`stallMs\` 止まった | \`MODEL_LOAD_FAILED\` | する |
+| メモリが足りない（OOM らしい文が返った） | \`RESOURCE_EXHAUSTED\`（\`providerState:"needs_reset"\`） | する |
+| 推論の途中で落ちた | \`MODEL_INFERENCE_FAILED\` | しない |
+
+読み込みに失敗すると、その場で \`wl.exit()\` して後片付けする（半端に載ったままにしない）。
+**緊急停止や中断（AbortSignal）は読み込み中にも効く**。
+そのときは \`cancelled\` になり、次にもう一度読み直せる。
+
+**端末に取り置きしたぶんの扱い**（画面の「モデル管理」から）
+
+- \`cacheStatus\` … その \`url\` が端末にあるかを wllama の \`CacheManager\` に聞く。
+  聞けないときは \`{cached:false, from:null}\` を返す（**「無い」と断定しない**）。
+- \`deleteCache\` … その \`url\` のぶんだけ消して、モデルの状態を \`reset()\` する。
+
+**画面から選べる GGUF**（「モデル管理」のプルダウン）
+
+| id | だいたいの大きさ |
+|---|---|
+| \`Qwen2.5-0.5B-Instruct-Q4_K_M\` | 約398MB（まずこれ） |
+| \`Qwen2.5-0.5B-Instruct-Q2_K\` | 約339MB（さらに軽い・品質は落ちる） |
+| \`Qwen2.5-1.5B-Instruct-Q4_K_M\` | 約1120MB（賢いが重い） |
+
+選ぶと \`{adapter:"wllama", model, url, contextSize:1024, gpuLayers:0,
+generation:{maxTokens:160, temperature:0.7}}\` が入る。
+このサイトが自分で配っているぶん（\`models_index.json\`）があれば、
+そちらの \`url\` を使う（HuggingFace に繋がらなくても落とせる・同一オリジンなので速い）。
 
 ## 40. mock（推論しないテスト用）
 
@@ -9761,6 +9965,157 @@ export async function CreateMLCEngine(model,opt){
     &&/## 1\. 値が流れる仕組み/.test(HELP_DEEP)&&/## 57\. よく事故る組み合わせ/.test(HELP_DEEP));
   if(bad.length)out.push(`<span class="fail">↳</span>  ${esc(bad.slice(0,4).join(" / "))}`);
   if(止まった.length)out.push(`<span class="fail">↳</span>  ${esc(止まった.slice(0,4).map(x=>x.name+"="+x.status+"/"+x.err).join(" / "))}`);}
+ // 76 式で使える名前と演算子（「詳しい動き」31章の表を実測で固定する）
+ {const SC={type:"object",required:["score","理由"],
+    properties:{score:{type:"integer"},理由:{type:"string"}}};
+  const condSpec=expr=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},vars:{目標:8},
+    nodes:[{id:"in",type:"input"},
+      {id:"A",type:"llm",provider:"m",mock:{fixed:{score:9,理由:"あいうえおかきくけこさ"}},schema:SC},
+      {id:"C",type:"cond",lang:"expr",routing:{onNoMatch:"error"},
+       ports:[{id:"y",label:"y",expr},{id:"n",label:"それ以外",else:true}]},
+      {id:"o1",type:"output"},{id:"o2",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+      {from:{node:"A",port:"out"},to:{node:"C",port:"in"}},
+      {from:{node:"C",port:"y"},to:{node:"o1",port:"in"}},
+      {from:{node:"C",port:"n"},to:{node:"o2",port:"in"}}]});
+  const ifSpec=expr=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},vars:{目標:8},
+    nodes:[{id:"in",type:"input"},
+      {id:"A",type:"llm",provider:"m",mock:{fixed:{score:9,理由:"あいうえおかきくけこさ"}},schema:SC,
+       routing:{mode:"first_match",onNoMatch:"error"}},
+      {id:"o1",type:"output"},{id:"o2",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+      {from:{node:"A",port:"out"},to:{node:"o1",port:"in"},if:expr,priority:0},
+      {from:{node:"A",port:"out"},to:{node:"o2",port:"in"},else:true}]});
+  const truthy=async(mkSp,expr)=>{const sp=mkSp(expr);
+    if(validate(sp).length)return "VALIDATE";
+    const r=await fullRun(sp,{in:"Q"});
+    if(r.status!=="success")return "RUNERR";
+    return (r.nodeRuns.o1||[]).length?"真":"偽";};
+  // (a) && || ! は使える。and / or / not は使えない（検証で落ちる or 動かして落ちる）
+  const opsOK=(await truthy(condSpec,"score >= 8 && len(理由) > 3"))==="真"
+    &&(await truthy(condSpec,"score >= 99 || score == 9"))==="真"
+    &&(await truthy(condSpec,"!(score >= 99)"))==="真";
+  const opsNG=validate(condSpec("score >= 8 and score <= 10")).some(x=>/条件の式が読めない/.test(x))
+    &&validate(condSpec("score >= 8 or score < 2")).some(x=>/条件の式が読めない/.test(x))
+    &&(await truthy(condSpec,"not (score >= 99)"))==="RUNERR";
+  // (b) 式では input.<入力ID>、run.input.… は読めない
+  const inputName=(await truthy(condSpec,'input.in == "Q"'))==="真"
+    &&(await truthy(condSpec,'run.input.in == "Q"'))==="RUNERR"
+    &&(await truthy(ifSpec,'input.in == "Q"'))==="真"
+    &&(await truthy(ifSpec,'run.input.in == "Q"'))==="RUNERR";
+  // (c) 線の if では value も iteration も使えない。cond では使える
+  const ifNoLocals=(await truthy(ifSpec,"value.score >= 8"))==="RUNERR"
+    &&(await truthy(ifSpec,"iteration == 1"))==="RUNERR"
+    &&(await truthy(ifSpec,"A.out.score >= 8"))==="真"
+    &&(await truthy(condSpec,"value.score >= 8"))==="真"
+    &&(await truthy(condSpec,"iteration == 1"))==="真"
+    &&(await truthy(condSpec,"score >= 8"))==="真";
+  // (d) has() はキーが無いことを調べられない（手前で REFERENCE_ERROR）
+  const hasLimit=(await truthy(condSpec,"has(A.out.score)"))==="真"
+    &&(await truthy(condSpec,"has(A.out.ない)"))==="RUNERR";
+  // (e) 差し込みで使えるのは in / inputs / run_input / iteration / vars だけ。他は空文字
+  const tmpl=async v=>{const sp={metadata:{version:"1"},providers:{m:{adapter:"mock"}},vars:{目標:8},
+      nodes:[{id:"in",type:"input"},
+        {id:"T",type:"llm",provider:"m",mock:{echoPrompt:true},
+         prompt:{template:{syntax:"mustache",mode:"interpolation_only",value:`[${v}]`}}},
+        {id:"o",type:"output"}],
+      edges:[{from:{node:"in",port:"out"},to:{node:"T",port:"in"}},
+        {from:{node:"T",port:"out"},to:{node:"o",port:"in"}}]};
+    if(validate(sp).length)return "VALIDATE";
+    const r=await fullRun(sp,{in:"Q"});
+    return r.status==="success"?String(r.result.value):"RUNERR";};
+  const tmplOK=(await tmpl("{{{run_input.in}}}"))==="[Q]"
+    &&(await tmpl("{{{vars.目標}}}"))==="[8]"
+    &&(await tmpl("{{{iteration}}}"))==="[1]"
+    &&(await tmpl("{{{input.in}}}"))==="[]"          // 式の名前は差し込みでは空
+    &&(await tmpl("{{{value}}}"))==="[]"
+    &&(await tmpl("{{{vars.無い名前}}}"))==="[]";
+  // (f) calc の式では線の名前がノードビューを隠す
+  const calcSp=(code,as)=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},{id:"A",type:"llm",provider:"m",mock:{fixed:{score:9}},
+      schema:{type:"object",required:["score"],properties:{score:{type:"integer"}}}},
+      {id:"K",type:"calc",lang:"expr",code},{id:"o",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+      Object.assign({from:{node:"A",port:"out"},to:{node:"K",port:"in"}},as?{as}:{}),
+      {from:{node:"K",port:"out"},to:{node:"o",port:"in"}}]});
+  const cv=async(code,as)=>{const sp=calcSp(code,as);
+    if(validate(sp).length)return "VALIDATE";
+    const r=await fullRun(sp,{in:"Q"});
+    return r.status==="success"?r.result.value:"RUNERR";};
+  const calcShadow=(await cv("A.score + 1"))===10
+    &&(await cv("A.out.score"))==="RUNERR"
+    &&(await cv("A.out.score","x"))===9;
+  ok("76 式で使える名前と演算子（&&/||/!・input.<ID>・if に value なし・has の限界・差し込みの5名前・calc の名前隠れ）",
+    opsOK&&opsNG&&inputName&&ifNoLocals&&hasLimit&&tmplOK&&calcShadow);
+  if(!(opsOK&&opsNG&&inputName&&ifNoLocals&&hasLimit&&tmplOK&&calcShadow))
+    out.push(`<span class="fail">↳</span>  ops=${opsOK}/${opsNG} input=${inputName} if=${ifNoLocals} has=${hasLimit} tmpl=${tmplOK} calc=${calcShadow}`);}
+ // 77 first_match の priority の決まり（25章の表）
+ {const SC={type:"object",required:["score"],properties:{score:{type:"integer"}}};
+  const fm=edges=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},
+      {id:"A",type:"llm",provider:"m",mock:{fixed:{score:9}},schema:SC,
+       routing:{mode:"first_match",onNoMatch:"error"}},
+      {id:"o1",type:"output"},{id:"o2",type:"output"},{id:"o3",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},...edges]});
+  const E=(to,o)=>Object.assign({from:{node:"A",port:"out"},to:{node:to,port:"in"}},o);
+  const which=async sp=>{const v=validate(sp);if(v.length)return "V:"+v[0];
+    const r=await fullRun(sp,{in:"Q"});
+    if(r.status!=="success")return r.status;
+    return ["o1","o2","o3"].filter(k=>(r.nodeRuns[k]||[]).length).join(",")||"（なし）";};
+  const dup=/priority重複/.test(await which(fm([
+    E("o1",{if:"A.out.score >= 5"}),E("o2",{if:"A.out.score >= 8"}),E("o3",{else:true})])));
+  const dup2=/priority重複/.test(await which(fm([
+    E("o1",{if:"A.out.score >= 5",priority:2}),E("o2",{if:"A.out.score >= 8",priority:2}),E("o3",{else:true})])));
+  const small=(await which(fm([
+    E("o1",{if:"A.out.score >= 5",priority:5}),E("o2",{if:"A.out.score >= 8",priority:2}),
+    E("o3",{else:true})])))==="o2";
+  const neg=(await which(fm([
+    E("o1",{if:"A.out.score >= 5",priority:0}),E("o2",{if:"A.out.score >= 8",priority:-1}),
+    E("o3",{else:true})])))==="o2";
+  const elsePrio=(await which(fm([
+    E("o1",{if:"A.out.score >= 8",priority:9}),E("o2",{else:true,priority:0})])))==="o1";
+  const oneIf=(await which(fm([E("o1",{if:"A.out.score >= 8"}),E("o2",{else:true})])))==="o1";
+  const noMode=await (async()=>{const sp=fm([E("o1",{if:"A.out.score >= 8"}),E("o2",{else:true})]);
+    delete sp.nodes[1].routing;return (await which(sp))==="o1";})();
+  const stopSp=fm([E("o1",{if:"A.out.score >= 99",priority:0})]);
+  stopSp.nodes[1].routing={mode:"first_match",onNoMatch:"stop"};
+  const rs=await fullRun(stopSp,{in:"Q"});
+  const stopped=rs.status==="paused"&&!!rs.resumable&&(rs.errors||[]).length===0;
+  ok("77 first_match: priority省略/同値は検証エラー・小さい順・負でもよい・else の priority は見ない・mode省略でも動く",
+    dup&&dup2&&small&&neg&&elsePrio&&oneIf&&noMode&&stopped);
+  if(!(dup&&dup2&&small&&neg&&elsePrio&&oneIf&&noMode&&stopped))
+    out.push(`<span class="fail">↳</span>  dup=${dup}/${dup2} small=${small} neg=${neg} else=${elsePrio} one=${oneIf} mode=${noMode} stop=${stopped}`);}
+ // 78 wllama（CPU）の既定値と singleton（39.5章）
+ {const W=PROVIDERS.wllama;
+  const noUrl=await (async()=>{try{await W.ensureLoaded({adapter:"wllama"},null,null);return null;}
+    catch(e){return e;}})();
+  const urlRequired=!!noUrl&&noUrl.code==="MODEL_LOAD_FAILED"&&noUrl.retryable===false
+    &&/url/.test(String(noUrl.message||""));
+  const g=GGUF_CATALOG[0],d=wllamaDef(g.id);
+  const defaults=d.adapter==="wllama"&&d.url===g.url&&d.contextSize===1024&&d.gpuLayers===0
+    &&d.generation.maxTokens===160;
+  // 同じ adapter でも contextSize が違えば別のモデル扱い（＝読み直し）になる
+  const k1=ModelManager.key({adapter:"wllama",url:"u",contextSize:1024});
+  const k2=ModelManager.key({adapter:"wllama",url:"u",contextSize:2048});
+  const k3=ModelManager.key({adapter:"wllama",url:"u",contextSize:1024});
+  // singleton の片付けは同じ adapter のものだけ
+  let released=0;
+  const fake={id:"wllama",singleton:true,release:async()=>{released++;}};
+  ModelManager.states={"wllama|||u1|1024|||w1|":{status:"ready",progress:1,handle:{},loadCount:1},
+    "webllm||m|||||w1|":{status:"ready",progress:1,handle:{},loadCount:1}};
+  await ModelManager.releaseOthers(fake,"wllama|||u2|1024|||w1|",null);
+  const onlySameAdapter=released===1&&!ModelManager.states["wllama|||u1|1024|||w1|"]
+    &&!!ModelManager.states["webllm||m|||||w1|"];
+  ModelManager.reset();
+  const urls=wllamaUrls({});
+  const vendor=/vendor\/wllama\/index\.js$/.test(urls.module)
+    &&/vendor\/wllama\/wllama\.wasm$/.test(urls.wasm)
+    &&/vendor\/wllama\/compat\/wllama\.js$/.test(urls.compatJs);
+  const overridden=wllamaUrls({moduleUrl:"https://x/y.js"}).module==="https://x/y.js";
+  ok("78 wllama: url必須(retryable=false)・既定は contextSize 1024/gpuLayers 0・contextSize違いは別扱い・片付けは同adapterだけ・本体は vendor/ から",
+    urlRequired&&defaults&&k1!==k2&&k1===k3&&onlySameAdapter&&vendor&&overridden);
+  if(!(urlRequired&&defaults&&k1!==k2&&k1===k3&&onlySameAdapter&&vendor&&overridden))
+    out.push(`<span class="fail">↳</span>  url=${urlRequired} def=${defaults} key=${k1!==k2}/${k1===k3} rel=${onlySameAdapter} vendor=${vendor}/${overridden}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
