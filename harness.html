@@ -224,7 +224,12 @@ const ABSENT=Symbol("absent");
 /* ---- 式評価 ---- */
 const OPS2=["&&","||","==","!=","<=",">="],OPS1=["+","-","*","/","%","<",">"];
 const FNS=new Set(["len","has","regex","count","min","max","json_parse","json_stringify"]);
-function tokenize(s){const t=[];let i=0;const isId=c=>/[A-Za-z_$]/.test(c),isIdN=c=>/[A-Za-z0-9_$]/.test(c);
+/* 名前に使える文字。日本語のノード名も条件式で使えるようにしてある（空白は入れられない） */
+const ID1=/[A-Za-z_$\u0080-\uFFFF]/,IDN=/[A-Za-z0-9_$\u0080-\uFFFF]/;
+const IDRE="[A-Za-z_$\\u0080-\\uFFFF][A-Za-z0-9_$\\u0080-\\uFFFF]*";
+const NOTID="[^A-Za-z0-9_$\\u0080-\\uFFFF]";
+function tokenize(s){const t=[];let i=0;
+  const isId=c=>ID1.test(c)&&!/\s/.test(c),isIdN=c=>IDN.test(c)&&!/\s/.test(c);
   while(i<s.length){const c=s[i];if(/\s/.test(c)){i++;continue;}
     if(c==='"'||c==="'"){let j=i+1,v="";while(j<s.length&&s[j]!==c)v+=s[j++];i=j+1;t.push({t:"str",v});continue;}
     if(/[0-9]/.test(c)||(c==="."&&/[0-9]/.test(s[i+1]))){let j=i,v="";while(j<s.length&&/[0-9.]/.test(s[j]))v+=s[j++];i=j;t.push({t:"num",v:parseFloat(v)});continue;}
@@ -669,7 +674,7 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
 - 計算(calc)には set code が必須。入ってくる線に as で名前を付けると、その名前で使える（inputs と iteration も使える）。
 - 出力の項目を決めるときは schema を書く。数値は {"type":"number","minimum":0,"maximum":10}、整数は "integer"。
 - ノード名に日本語も使える。その場合は "…" で囲む（例: node "検証": llm local / write -> "検証"）。
-  ただし条件式（if / until）では日本語の名前は使えないので、条件を書くノードは英数字の名前にする。
+  条件式（if / until / cond）でも日本語の名前がそのまま書ける（例: "点数評価".out.score >= 8 は 点数評価.out.score >= 8 と書く）。
   名前に 空白 . " { } > は使えない。`;
 function buildEditPrompt(spec,instruction){
   let hsl;try{hsl=specToHSL(spec);}catch(e){hsl="（書き出せない: "+errText(e)+"）";}
@@ -744,8 +749,9 @@ function specDiff(a,b){
 /* --- ハーネスの構造を機械的に診る（AIに聞く前に、確実に分かることを出す） --- */
 const EXPR_ROOTS=new Set(["run","input","vars","loop","true","false","null"]);
 function exprNodeRefs(src){
-  const out=new Set();const re=/\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*(out|meta|usage|status|prev|type|raw|valid)\b/g;
-  let m;while((m=re.exec(String(src||""))))if(!EXPR_ROOTS.has(m[1]))out.add(m[1]);
+  const out=new Set();
+  const re=new RegExp(`(^|${NOTID})(${IDRE})\\s*\\.\\s*(out|meta|usage|status|prev|type|raw|valid)(?!${IDRE.slice(0,-1)})`,"g");
+  let m;while((m=re.exec(String(src||""))))if(!EXPR_ROOTS.has(m[2]))out.add(m[2]);
   return[...out];
 }
 function reviewSpec(spec){
@@ -1715,10 +1721,11 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
      if(n.type==="loop"&&n.loop&&n.loop.until&&n.loop.lang!=="js")exprs.push({src:n.loop.until,where:`${n.id} の打ち切り条件`});
      if(n.type==="cond")(n.ports||[]).forEach(c=>{if(c&&c.expr)exprs.push({src:c.expr,where:`${n.id} の「${c.label||c.id}」`});});
      if(n.type==="calc"&&n.code)exprs.push({src:n.code,where:`${n.id} の計算`});});
-   const re=/\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*out\s*\.\s*([A-Za-z0-9_$]+)/g;
+   const re=new RegExp(`(^|${NOTID})(${IDRE})\\s*\\.\\s*out\\s*\\.\\s*([A-Za-z0-9_$]+)`,"g");
    const seen=new Set();
    for(const{src,where}of exprs){let m;re.lastIndex=0;
      while((m=re.exec(String(src)))){
+       m=[m[0],m[2],m[3]];
        const nd=spec.nodes.find(x=>x.id===m[1]);if(!nd||nd.schema)continue;
        // mock は返す形が宣言されている。JSONで返る指定（fixed/scoreByIteration/echoInput）なら読める
        if(nd.mock&&(nd.mock.fixed!==undefined||nd.mock.scoreByIteration!==undefined||nd.mock.echoInput))continue;
@@ -1726,10 +1733,11 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
        const key=`${m[1]}.out.${m[2]}`;if(seen.has(key))continue;seen.add(key);
        errs.push(`${where} が ${key} を見ているのに ${m[1]} に schema が無い（文章で返るとこの式は読めない）: ${m[1]}`);}}
    // schema はあるが、その項目の型が決まっていないと "…" のような文字列で返ってくる
-   const reNum=/\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*out\s*\.\s*([A-Za-z0-9_$]+)\s*(?:==|!=|<=|>=|<|>)\s*(-?\d+(?:\.\d+)?)/g;
+   const reNum=new RegExp(`(^|${NOTID})(${IDRE})\\s*\\.\\s*out\\s*\\.\\s*([A-Za-z0-9_$]+)\\s*(?:==|!=|<=|>=|<|>)\\s*(-?\\d+(?:\\.\\d+)?)`,"g");
    const seen2=new Set();
    for(const{src,where}of exprs){let m;reNum.lastIndex=0;
      while((m=reNum.exec(String(src)))){
+       m=[m[0],m[2],m[3],m[4]];
        const nd=spec.nodes.find(x=>x.id===m[1]);if(!nd||!nd.schema)continue;
        const pr=(nd.schema.properties||{})[m[2]];
        const t=pr&&pr.type;
@@ -1897,7 +1905,10 @@ const JS_RESERVED=new Set(("break case catch class const continue debugger defau
  +"false finally for function if implements import in instanceof interface let new null package private protected public "
  +"return static super switch this throw true try typeof var void while with yield await arguments eval undefined NaN Infinity")
  .split(" "));
-const okVarName=v=>/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(String(v||""))&&!JS_RESERVED.has(String(v));
+const okVarName=v=>{
+  const t=String(v==null?"":v);
+  if(!t||/\s/.test(t)||JS_RESERVED.has(t))return false;
+  try{new Function(t,"return 0");return true;}catch(_){return false;}};
 const varNameOf=(e,i)=>{
   for(const raw of [e.as,e.pick,e.from.node])if(okVarName(raw))return String(raw);
   return "in"+(i+1);};
@@ -2769,6 +2780,24 @@ const schemaPresetOf=sc=>{
   if(hit)return hit.v;
   return outputsFromSchema(sc)?"fields":"custom";
 };
+/* 条件が見ているノードを差し替える（<古>.out.<項目> → <新>.out.<項目>）。
+   「点数を出すノードではなく手前のノードを見ている」を1タップで直すため。 */
+function retargetExpr(oldId,field,newId){
+  const esc2=oldId.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+  const re=new RegExp(`(^|${NOTID})${esc2}\\s*\\.\\s*out\\s*\\.\\s*${field}(?!${IDRE.slice(0,-1)})`,"g");
+  const sub=t=>String(t).replace(re,(mm,p1)=>`${p1}${newId}.out.${field}`);
+  let n=0;
+  for(const e of Ed.spec.edges||[]){
+    if(e.if&&re.test(e.if)){e.if=sub(e.if);n++;}
+    if(e.loop&&e.loop.until&&re.test(e.loop.until)){e.loop.until=sub(e.loop.until);n++;}
+  }
+  for(const nd of Ed.spec.nodes||[]){
+    if(nd.loop&&nd.loop.until&&re.test(nd.loop.until)){nd.loop.until=sub(nd.loop.until);n++;}
+    if(nd.type==="cond")for(const c of nd.ports||[])if(c.expr&&re.test(c.expr)){c.expr=sub(c.expr);n++;}
+    if(nd.type==="calc"&&nd.code&&re.test(nd.code)){nd.code=sub(nd.code);n++;}
+  }
+  return n;
+}
 /* 「こう返して」の文（自動で入れたものだけ触る。人が書いた文は消さない） */
 function setAsk(n,ask){
   n.prompt=n.prompt||{};
@@ -2780,7 +2809,7 @@ function setAsk(n,ask){
 function addSchemaFor(id){
   const n=nodeById(id);if(!n)return;
   const fields=new Set();
-  const re=new RegExp("\\b"+id.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*\\.\\s*out\\s*\\.\\s*([A-Za-z0-9_$]+)","g");
+  const re=new RegExp(`(?:^|${NOTID})`+id.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\s*\\.\\s*out\\s*\\.\\s*([A-Za-z0-9_$]+)","g");
   for(const e of Ed.spec.edges||[]){
     for(const src of [e.if,e.loop&&e.loop.until]){if(!src)continue;let m;re.lastIndex=0;
       while((m=re.exec(String(src))))fields.add(m[1]);}}
@@ -2833,6 +2862,13 @@ function showErrs(){
     if((r=/が (.+?)\.(.+?) を見ているのに .+ に schema が無い.*: (.+)$/.exec(m))
       ||(r=/が (.+?)\.(.+?) を数と比べているのに.*: (.+)$/.exec(m))){
       const id=r[3];
+      // その項目を宣言しているノードが他にあるなら、条件の見る先を変える方が正しい
+      const fld=String(r[2]).replace(/^out\./,"");
+      const cands=(Ed.spec.nodes||[]).filter(x=>x.id!==id&&schemaKeys(x).includes(fld));
+      if(cands.length===1&&!fixes.some(f=>f.key==="aim:"+id+fld))
+        fixes.push({key:"aim:"+id+fld,label:`条件の見る先を ${cands[0].id}.out.${fld} に変える`,
+          act:()=>{const n2=retargetExpr(id,fld,cands[0].id);syncFromCanvas();
+            setHint(`条件の見る先を ${cands[0].id}.out.${fld} に変えた（${n2}か所）`);}});
       if(!fixes.some(f=>f.key==="schema:"+id))fixes.push({key:"schema:"+id,label:`${id} に schema を付ける`,
         act:()=>addSchemaFor(id)});continue;}
   }
@@ -4829,6 +4865,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 最後の出口を「それ以外」にすると必ずどこかに流れる（無いと、当たらなかったとき失敗になる）。
 - 出口ごとに渡す値（どの項目か）も決められる。
 - 使える名前: \`value\`（来た値）、\`iteration\`（何周目か）、来た値がJSONならその項目名。他のノードは \`ノード名.out.項目\`。
+- **日本語のノード名もそのまま書ける**（\`点数評価.out.score >= 8\`）。名前に空白や \`.\` は使えない。
 
 ## 9. 計算
 入ってきた線ごとに**変数名**を付けられる（既定は項目名かノード名）。\`inputs\`（つないだ順の配列）と \`iteration\` も使える。
@@ -4848,7 +4885,8 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - モデルは初回だけダウンロードして端末の中に残る（このサイトから配っている分は速い）。「消えないようにする」で消えにくくなる。
 
 ## 12. うまくいかないとき
-- 赤い ⚠ は**実行前に分かった直すところ**。その場で直せるものはボタンが出る。
+- 赤い ⚠ は**実行前に分かった直すところ**。その場で直せるものはボタンが出る（「schema を付ける」「出口の流し方を決める」「条件の見る先を変える」など）。
+- **条件が手前のノードを見てしまっている**ときは「条件の見る先を ○○.out.△△ に変える」が出る。点数を出すノードを見るように1タップで直せる。
 - 「診断する」で、機械で確実に分かることだけを一覧にする（LLMの意見ではない）。
 - 「実行ログ」→ **まとめてコピー**（Spec・ログ・失敗の理由・端末の対応状況が1つに入る）。そのまま相談先に貼れる。
 - 版が古いと画面の上にお知らせが出る。リロードすると新しくなる。
@@ -5520,6 +5558,30 @@ export async function CreateMLCEngine(model,opt){
   ok("56 動く順番: 入力が届いた順・同時なら図の並び（縦は上／横は左／同じなら作られた順）",
     seen(r1)==="in,B,C,A,jn,out"&&seen(r2)==="in,B,C,A,jn,out"
     &&seen(r3)==="in,A,B,C,jn,out"&&seen(r4)==="in,A,B,A2,jn,out");}
+ // 57 条件式に日本語のノード名をそのまま書ける（ループ・条件分岐・計算）
+ {const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"lp",type:"loop",loop:{id:"lp",max:5,until:"点数評価.out.score >= 8"}},
+    {id:"書く",type:"llm",mock:{tag:"案"}},
+    {id:"点数評価",type:"llm",mock:{scoreByIteration:[4,9]},schema:schemaFromOutputs([{key:"score",type:"integer"}])},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"}},
+     {from:{node:"lp",port:"out"},to:{node:"書く",port:"in"}},
+     {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"},
+     {from:{node:"書く",port:"out"},to:{node:"点数評価",port:"in"}},
+     {from:{node:"点数評価",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}}]};
+  const r=await fullRun(sp,{});
+  const refs=exprNodeRefs("点数評価.out.score >= 8 && 書く.meta.len > 0");
+  const cd={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"値",type:"llm",mock:{fixed:{score:9}},schema:schemaFromOutputs([{key:"score",type:"integer"}])},
+    {id:"cd",type:"cond",ports:[{id:"c1",label:"高い",expr:"値.out.score >= 8"},{id:"c2",label:"それ以外",else:true}]},
+    {id:"o1",type:"output"},{id:"o2",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"値",port:"in"}},{from:{node:"値",port:"out"},to:{node:"cd",port:"in"}},
+     {from:{node:"cd",port:"c1"},to:{node:"o1",port:"in"}},{from:{node:"cd",port:"c2"},to:{node:"o2",port:"in"}}]};
+  const rc=await fullRun(cd,{});
+  ok("57 条件式に日本語のノード名が書ける（ループ2周で抜ける／条件分岐も当たる）",
+    validate(sp).length===0&&r.status==="success"&&r.iterationTotal===2
+    &&refs.join()==="点数評価,書く"
+    &&validate(cd).length===0&&rc.status==="success"&&(rc.nodeRuns.o1||[]).length===1);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

@@ -188,6 +188,31 @@ await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySele
 R['⑧ 次のノードが受け取った文'] = (await p.textContent('#ioOut [data-out="out"]')).replace(/\s+/g, ' ').slice(0, 80);
 ok.listRun = R['⑧ 次のノードが受け取った文'].includes('- 主語が無い') && R['⑧ 次のノードが受け取った文'].includes('- 結論が無い');
 
+// ⑨ 条件が「手前のノード」を見ているとき、見る先を1タップで直せる（報告された不具合）
+await paste({ metadata: { name: "見る先", version: "1" }, providers: { m: { adapter: "mock" } },
+  nodes: [{ id: "in", type: "input" },
+    { id: "write", type: "llm", provider: "m", mock: { tag: "案" } },
+    { id: "lp", type: "loop", loop: { id: "lp", max: 5, until: "write.out.score >= 8" } },
+    { id: "点数評価", type: "llm", provider: "m", mock: { scoreByIteration: [4, 9] },
+      schema: { type: "object", required: ["score"], properties: { score: { type: "integer" } } } },
+    { id: "out", type: "output" }],
+  edges: [{ from: { node: "in", port: "out" }, to: { node: "lp", port: "in" } },
+    { from: { node: "lp", port: "out" }, to: { node: "write", port: "in" } },
+    { from: { node: "lp", port: "out" }, to: { node: "out", port: "in" }, loopRole: "done" },
+    { from: { node: "write", port: "out" }, to: { node: "点数評価", port: "in" } },
+    { from: { node: "点数評価", port: "out" }, to: { node: "lp", port: "in" }, loop: { id: "lp" } }] });
+R['⑨ 取り込み直後'] = (await vErr()).slice(0, 70);
+const aim = p.locator('#vErr button').filter({ hasText: '見る先' });
+ok.aimOffered = (await aim.count()) === 1;
+await aim.first().tap(); await p.waitForTimeout(250);
+R['⑨ 直した後'] = { 検証: (await vErr()).trim() || '（エラーなし）',
+  条件: (await spec()).nodes.find(n => n.id === 'lp').loop.until };
+ok.aimFixed = R['⑨ 直した後'].検証 === '（エラーなし）' && R['⑨ 直した後'].条件 === '点数評価.out.score >= 8';
+await tap('#run');
+await p.waitForFunction(() => /^state: (success|failed)/.test(document.querySelector('#stateline').textContent), null, { timeout: 15000 });
+R['⑨ 実行'] = (await p.textContent('#stateline')).slice(0, 60);
+ok.aimRun = R['⑨ 実行'].includes('success') && R['⑨ 実行'].includes('iterTotal=2');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;
