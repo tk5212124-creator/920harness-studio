@@ -113,6 +113,15 @@ await tap('#runTop');
 R['⑤ 実行'] = await state();
 ok.loopJSRun = R['⑤ 実行'].includes('success') && R['⑤ 実行'].includes('iterTotal=3');
 
+// ⑥ 右上の ？ で使い方が出て、全文コピーできる
+await tap('#helpBtn');
+R['⑥ 使い方'] = { 見出し: await p.locator('.help h4').count(), 文字数: (await p.textContent('.help')).length,
+  コピー: null };
+await tap('#hlCopy');
+R['⑥ 使い方'].コピー = (await p.textContent('#logMsg')).includes('コピーした');
+ok.help = R['⑥ 使い方'].見出し >= 10 && R['⑥ 使い方'].文字数 > 2000 && R['⑥ 使い方'].コピー;
+await tap('#shClose');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.19.0 ループのノードを足す
+## 1. 現状 — v0.20.0 条件分岐と計算を足す
 
 | 段階 | 状態 |
 |---|---|
@@ -45,7 +45,8 @@ iPhone でもPCでも同じ操作。
 | 確認を減らして迷わせない v0.16（2本目は聞かずに繋ぐ・受け取り方は全LLMノードに・版の確認・JSONの反映を言う） | 実装済み |
 | どこから来た線でも合流できる v0.17.0（分岐グループをまたぐ合流をRuntimeが1つの実行に揃える） | 実装済み |
 | CPUで動かす道 v0.18.0（Wllama / GGUF / WebGPU不要。WebGPUで落ちる端末の逃げ道） | 実装済み |
-| **ループと順番 v0.19.0（ループノード・無限ループと緊急停止・入口の順番を自動で振る・図にモデル名・入力ノードの文言）** | **いまここ** |
+| ループと順番 v0.19.0（ループノード・無限ループと緊急停止・入口の順番を自動で振る・図にモデル名・入力ノードの文言） | 実装済み |
+| **出力の項目と分岐 v0.20.0（出力1・出力2…／数値の範囲／出口を分ける／条件分岐ノード／計算ノード（式・JavaScript）／動く順番／使い方の？）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -58,7 +59,9 @@ iPhone でもPCでも同じ操作。
 
 | やりたいこと | 操作 |
 |---|---|
-| ノードを足す | **＋ノード** → 入力 / LLM / Join / **ループ** / 出力 を選ぶ。置いた直後に中身の編集が開く |
+| ノードを足す | **＋ノード** → 入力 / LLM / Join / ループ / **条件分岐** / **計算** / 出力 を選ぶ。置いた直後に中身の編集が開く |
+| ノードの大きさを変える | ノードの右下の**つまみ**をドラッグ（`metadata.sizes`。ノードをタップ →「大きさを戻す」で戻る） |
+| 使い方を読む | 画面**右上の ？**。全文コピーのボタン付き |
 | ノードを動かす | ノードをドラッグ。座標は `metadata.layout` に入る（Runtimeは見ない） |
 | **つなぐ** | つなぎ元の **○** をタップ → つなぎ先の **●** をタップ |
 | ノードの中身を変える | ノードをタップ → provider・**使うモデル**・prompt・schema・generation を編集 |
@@ -476,6 +479,89 @@ critic -> lp loop "lp"        本体の最後から戻す線
 
 ---
 
+## 2.7 出力の項目（出力1・出力2…）と、出口を分ける
+
+**LLMに何を返させるかを項目で決める。** ノードをタップ →「出力の形」→ **項目を決める**。
+
+| 種類 | schema になるもの | 備考 |
+|---|---|---|
+| 文章 | `{"type":"string"}` | |
+| 数値 | `{"type":"number","minimum":…,"maximum":…}` | 小数・マイナスOK。範囲は空でもよい |
+| 整数 | `{"type":"integer","minimum":…,"maximum":…}` | |
+| はい / いいえ | `{"type":"boolean"}` | |
+| 文のリスト | `{"type":"array","items":{"type":"string"}}` | 個数はモデルが決める |
+| 数値のリスト | `{"type":"array","items":{"type":"number"}}` | |
+
+- キー名は自由（英数字）。条件式からは `ノード名.out.キー名` で読める。
+- 「こう返して」の例文（`prompt.suffix`）は**実際に返せる値**で作り直す（`"…"` と書くとモデルがそれをそのまま返すため）。
+- 内蔵LLMでは schema が**文法として強制**される。プロンプトに「JSONで出して」と書くだけでは縛りにならない。
+
+**1つのノードから複数の出口を出せる。** ノードをタップ →「リストの渡し方」→ **出口を分ける**。
+
+```
+node A: llm local
+  schema {"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"string"}}}}
+  set ports [{"id":"p1","label":"1つ目","pick":"items.0"},{"id":"p2","label":"2つ目から","pick":"items.1.."}]
+
+A -> 詳しく from_port "p1"      1つ目だけが流れる
+A -> まとめ  from_port "p2"      2つ目から最後までのリストが流れる
+```
+
+- `pick` の書き方: `"score"` / `"items.0"` / `"items.1..3"` / `"items.1.."` / 値そのものがリストなら `"0"` `"1.."`。
+- 受け取る側でも選べる（`pick` を線に書く）。ノードをタップ →「入ってきた値のどれを使うか」。
+- 取り出せないときは **何が無いか**を言って落ちる（`score がその中に無い（あるのは: note）`）。知らない出口は実行前の検証で落ちる。
+
+---
+
+## 2.8 条件分岐（cond）
+
+**出口そのものが条件。** 上から順に調べて、最初に当たった1本だけに流す。
+
+```
+node cd: cond
+  set ports [{"id":"c1","label":"高い","expr":"score >= 8"},
+             {"id":"c2","label":"ふつう","expr":"score >= 5"},
+             {"id":"c3","label":"それ以外","else":true}]
+
+cd -> 合格 from_port "c1"
+cd -> 再考 from_port "c2"
+cd -> 却下 from_port "c3"
+```
+
+- 最後を `else` にすると必ずどこかに流れる。無いと、当たらなかったときに `NO_MATCH` で失敗する（`routing.onNoMatch` を `stop` にすれば止めて Resume できる）。
+- 出口ごとに**渡す値**（どの項目か）も決められる。
+- 使える名前: `value`（来た値）／`iteration`／来た値がJSONならその項目名／`ノード名.out.項目`。
+- `set lang "js"` にすると、各条件を **JavaScript**（`return true/false`）で書ける。
+
+## 2.9 計算（calc）
+
+入ってきた線ごとに**変数名**を付けて計算する。
+
+```
+node cl: calc
+  set code "a + b * 2"
+
+A -> cl pick "score" as "a" position 0
+B -> cl pick "score" as "b" position 1
+```
+
+- 既定の名前は「項目名 → ノード名 → in1, in2…」の順に決まる。JavaScript の予約語（`in` など）は使えないので `in1` に落ちる（人が入れた名前は検証と赤枠で弾く）。
+- `inputs`（つないだ順の配列）と `iteration`（何周目か）も使える。
+- **かんたんな式**: `+ - * / %`・比較・`len() has() regex() count() min() max() json_parse() json_stringify()`。
+- **JavaScript**: `return` で値を返す。**別スレッド（Worker）で走らせる**ので、無限ループを書いても画面は止まらず **3秒で打ち切る**。Worker が作れない端末では同じ画面の中で走らせる（打ち切れないことは画面に書く）。
+- **Python・C言語・Visual Basic は動かせない。** ブラウザに実行系が無いので、動かすには数十MBの実行系を別に積むかサーバに出すことになる（どちらも入れていない）。画面にもそう書いてある（選べるように見せない）。
+
+## 2.10 動く順番
+
+1. **入力が届いた順**に動く。
+2. 同じ配り分けで**同時に届いた**ときは図の並びで決める: 縦に流すなら**上**、横に流すなら**左**、同じなら左上、位置まで同じなら**先に作ったノード**。
+3. ループは戻ってきた値が新しい入力になるので、そのまま上の規則で続く（特別な扱いは要らない）。
+
+`metadata.layout` と `metadata.flow` は**この「同時のときの並び順」にだけ**使う。
+何が動くか・何が流れるかは位置では変わらない（位置を動かしても結果は同じ）。
+
+---
+
 ## 3. 外部LLMに渡して直させる（往復）
 
 ![AIで編集](docs/ai-loop-sheet.png)
@@ -769,7 +855,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト50件（Runtime回帰15 + Provider契約13 + HSL3 + 合流2 + Join/失敗の文2 + JSON強制と取得先4 + ループ/順番6）
+node tests/harness-runtime.mjs      # 自己テスト56件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
@@ -782,7 +868,9 @@ node tests/harness-fanin.mjs        # 1つの入口に複数の線（合流）�
 node tests/harness-fixflow.mjs      # 失敗の理由・エラーをその場で直す・Joinのまとめ方・線の形
 node tests/harness-sitemodels.mjs   # このサイトが配るモデル（取得先が本当に切り替わるか）
 node tests/harness-startup.mjs      # 開いた直後の状態（例がそのまま実行できる・前回の続きの復元）
-node tests/harness-loop.mjs         # ループノード・緊急停止・入力ノードの文言・出力の受け取り方・入力の順番
+node tests/harness-loop.mjs         # ループノード・緊急停止・入力ノードの文言・出力の受け取り方・入力の順番・大きさ変更
+node tests/harness-outputs.mjs      # 出力の項目（出力1・出力2…）・数値の範囲・出口を分ける・受け取る側の項目えらび
+node tests/harness-calc.mjs         # 計算ノード（式/JavaScript）・条件分岐ノード・ループのJSモード・使い方の？
 MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
 
@@ -829,6 +917,21 @@ MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデ�
 | 出力ノードの受け取り方 | 出力ノードにも受け取り方の選択肢が5つ出て、`json_array` を選ぶと `["b1","a1"]` が出力欄に出る |
 | 入力の順番 | ↑↓ で入れ替えると `position` が振り直され、**実際に渡る順番が変わる** |
 | 図のモデル名 | ノードに `SmolLM2-360M-q4f16_1` のように出て、吹き出しに `（providerの既定）` が出る |
+
+### harness-outputs.mjs / harness-calc.mjs が見るもの
+
+| 見るもの | 期待 |
+|---|---|
+| 出力の項目 | 「項目を決める」でキー名・種類・範囲を決めると schema と例文ができる（`{"score":{"type":"integer","minimum":0,"maximum":10}}`） |
+| 出口を分ける | 図の出口が2つに増えてラベルが出る。既にあった線は1つ目の出口に付け替わる |
+| 出口ごとの値 | 実行すると `1つ目=「い」` / `2つ目から=["ろ","は"]` と**別の値が届く** |
+| 受け取る側の項目 | 線に `pick` が入り、`note だけ` が下流に届く |
+| HSL | `from_port "p1"` / `pick "score"` / `set ports [...]` で往復する |
+| 計算ノード | 変数名の既定はノード名。`p * 3 + 1` で 10、JavaScript の `return p * 4;` で 12 |
+| 予約語 | 変数名に `in` を入れると**入らず枠が赤くなる** |
+| 条件分岐 | 既定で「条件＋それ以外」の2出口。図の出口が2つ出て、当たった1本だけに流れる |
+| ループのJS | `return iteration >= 3;` で3周で抜ける |
+| 使い方の ？ | 見出し10以上・2000字以上が出て、全文コピーできる |
 
 ### harness-startup.mjs が見るもの
 

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — ループのノードを足す v0.19.0</title>
+<title>Harness Studio — 条件分岐と計算を足す v0.20.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -88,6 +88,12 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .ordrow span.nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ordrow button{padding:3px 10px;font-size:13px}
 .ordrow select{width:auto;flex:0 0 auto;font-size:12px;padding:3px 6px}
+#helpBtn{position:fixed;right:10px;top:calc(8px + env(safe-area-inset-top));z-index:45;
+  width:34px;height:34px;padding:0;border-radius:50%;font-size:16px;font-weight:700;line-height:1;
+  background:var(--panel);box-shadow:0 1px 6px rgba(0,0,0,.18)}
+.help h4{margin:14px 0 4px;font-size:13px}
+.help p{margin:0 0 6px;font-size:12.5px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+.help p.li{padding-left:12px}
 #estop{position:fixed;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:60;display:none;
   font-weight:700;padding:12px 16px;border-radius:999px;box-shadow:0 3px 14px rgba(0,0,0,.28)}
 #estop.show{display:block}
@@ -106,7 +112,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.19.0 · ループのノードを足す</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.20.0 · 条件分岐と計算を足す</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -207,6 +213,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="tests" id="tests">running…</div>
 <div class="mini">Runtime回帰15件 + Provider契約13件。Provider層は stub transport で決定論的に検証する（実ネットワーク不要）。</div></div>
 </div>
+<button id="helpBtn" title="使い方">？</button>
 <button id="estop" class="danger">■ 緊急停止</button>
 <div class="backdrop" id="backdrop"></div>
 <div class="sheet" id="sheet"><div id="sheetBody"></div></div>
@@ -593,7 +600,7 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
   provider <id> = <adapter> <key> <値> …     adapter は webllm | wllama | openai_local | mock
       wllama は GGUF を CPU(WASM)で動かす: provider cpu = wllama url "https://…/model.gguf" contextSize 1024 gpuLayers 0
   var <名前> = <値>
-  node <id>: <種類> [provider名]              種類は input | llm | join | loop | output
+  node <id>: <種類> [provider名]              種類は input | llm | join | loop | cond | calc | output
     model "…"
     system "…"        LLMへの役割指定
     prompt "…"        本文。{{{in}}}=前のノードの出力、{{{run_input.<キー>}}}=実行時の入力
@@ -616,11 +623,23 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
     set label "直したい文章を貼る"        （input。実行画面の入力欄に出す文言）
     set default "…"                      （input。最初から入れておく文）
     set loop {"id":"rev","max":5,"until":"critic.out.score >= 8"}
-        （loop ノード。max を書かないと止まらない＝無限ループ。until が真になったら抜ける）
+        （loop ノード。max を書かないと止まらない＝無限ループ。until が真になったら抜ける。
+          JavaScript で書くなら {"id":"rev","lang":"js","until":"return value.score >= 8;"}）
+    set lang "js"                         （calc / cond。式で書くなら書かない。動くのは expr と js だけ）
+    set code "a + b * 2"                  （calc の中身。lang が js なら return で値を返す）
+    set ports [{"id":"c1","label":"高い","expr":"score >= 8"},{"id":"c2","label":"それ以外","else":true}]
+        （cond の条件＝出口。上から順に調べ、最初に当たった1本だけに流す。最後を else にすると必ず通る）
+    set ports [{"id":"p1","label":"1つ目","pick":"items.0"},{"id":"p2","label":"2つ目から","pick":"items.1.."}]
+        （出口を分ける。pick は "キー名" / "キー名.0" / "キー名.1..3" / "キー名.1.." / "0" など）
   <from> -> <to>[.<port>] [if "式"] [else] [loop <id> max <回数> until "式"] [position <番号>] [transform json_stringify|json_parse|list_to_text] [priority <番号>]
+      from_port "p1"   どの出口から出るか（ports を書いたノードのとき）
+      pick "score"     受け取る側でどの項目を使うか
+      as "a"           計算ノードの中で使う変数名（既定は項目名かノード名。JavaScriptの予約語は使えない）
       loop ノードの線: 出口に loopRole "done" を付けると「抜けたあと」。付けなければ「繰り返す先（本体）」。
       本体の最後から loop ノードへ戻す線は loop <そのノード名> と書く（回数と条件はノード側が持つので max/until は書かない）
   layout <id> <x>,<y>                     図の位置（無くてもよい）
+  meta flow "tb"                          図の向き（tb=縦 / lr=横）。同時に届いたときの動く順番に使う
+  meta sizes {"<id>":{"w":150,"h":62}}    ノードの大きさ（見た目だけ）
   bend <from>><to>[.<port>][#<position>] <x>,<y>   図の線の形（無くてもよい）
 
 守ること:
@@ -646,6 +665,9 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
   schema {"type":"object","required":["items"],"properties":{"items":{"type":"array","items":{"type":"string"}}}}。
 - <node>.out.<フィールド> を見るなら、その node に schema を書く（**書かないとエラーになる**。
   schema が無いとLLMは文章で返すので、.score のような項目は読めない）。
+- 条件分岐(cond)は最後の出口を {"else":true} にする（当たらないと失敗になる）。出口ごとに線を出す。
+- 計算(calc)には set code が必須。入ってくる線に as で名前を付けると、その名前で使える（inputs と iteration も使える）。
+- 出力の項目を決めるときは schema を書く。数値は {"type":"number","minimum":0,"maximum":10}、整数は "integer"。
 - ノード名に日本語も使える。その場合は "…" で囲む（例: node "検証": llm local / write -> "検証"）。
   ただし条件式（if / until）では日本語の名前は使えないので、条件を書くノードは英数字の名前にする。
   名前に 空白 . " { } > は使えない。`;
@@ -1785,7 +1807,7 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
 function edgeIdOf(spec,edge){const i=(spec.edges||[]).indexOf(edge);return i>=0?"e"+i:null;}
 function makeRun(spec,input){return{runId:"run_"+Date.now(),status:"running",resumable:true,
   nodeRuns:{},deliveries:[],executions:{},workQueue:[],branchGroups:{},cancelRequested:false,
-  loopInstances:{},loopSeq:0,execSeq:0,actSeq:0,delivSeq:0,
+  loopInstances:{},loopSeq:0,execSeq:0,actSeq:0,delivSeq:0,routeSeq:0,
   totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0},iterationTotal:0,
   startedAt:new Date().toISOString(),errors:[],result:null,input:input||{},vars:spec.vars||{},
   harnessVersion:(spec.metadata&&spec.metadata.version)||"0",specCanon:canonSpec(spec),specSnapshot:spec};}
@@ -1921,7 +1943,7 @@ function makeDelivery(run,spec,edge,rv,fromExecId,ctx){
   edgeId:edgeIdOf(spec,edge),
   fromExecId:fromExecId||null,fromNodeId:edge.from.node,fromPort:edge.from.port||"out",
   toNodeId:edge.to.node,toPort:edge.to.port||"in",
-  position:edge.position!=null?edge.position:0,runtimeValue:sent,
+  position:edge.position!=null?edge.position:0,runtimeValue:sent,arrival:run.routeSeq||0,
   activationId:NN(ctx.activationId),loopInstanceId:NN(ctx.loopInstanceId),iteration:NN(ctx.iteration)});}
 function makeExec(run,nodeId,ctx){const execId=`${nodeId}@${ctx.loopInstanceId||"root"}:${ctx.iteration||1}#${++run.execSeq}`;
   const ex={execId,nodeId,status:"ready",activationId:NN(ctx.activationId),loopInstanceId:NN(ctx.loopInstanceId),iteration:NN(ctx.iteration)};
@@ -2103,6 +2125,39 @@ function makeController(hooks){
 }
 function requestCancel(run,store,ctl){run.cancelRequested=true;run.status="cancelling";if(ctl)ctl.abort();if(store)store.save(run);}
 
+/* ---- どれを先に動かすか ----
+   入力が届いた順。同じ配り分けで同時に届いたときは図の並びで決める:
+   縦に流すなら上、横に流すなら左、同じなら左上、位置まで同じなら先に作られたノード。
+   （metadata.layout / metadata.flow は「同時のときの並び順」にだけ使う。
+     何が動くか・何が流れるかは一切変えない。） */
+function arrivalRank(spec,run,ex){
+  let seq=0;const conf=isConfluenceNode(spec,ex.nodeId);
+  for(const d of run.deliveries){
+    if(d.toNodeId!==ex.nodeId)continue;
+    if(!deliveryMatchesExec(d,ex,conf))continue;
+    const a=d.arrival!=null?d.arrival:0;if(a>seq)seq=a;
+  }
+  return seq;
+}
+function layoutRank(spec,nodeId){
+  const m=spec.metadata||{};const q=(m.layout||{})[nodeId];
+  const tb=(m.flow||"tb")==="tb";
+  const i=(spec.nodes||[]).findIndex(n=>n.id===nodeId);
+  if(!q)return{a:Infinity,b:Infinity,i};
+  return tb?{a:q.y,b:q.x,i}:{a:q.x,b:q.y,i};
+}
+const rankLess=(a,b)=>a.s!==b.s?a.s<b.s:(a.a!==b.a?a.a<b.a:(a.b!==b.b?a.b<b.b:a.i<b.i));
+function pickNextWork(spec,run){
+  let best=-1,bk=null;
+  for(let i=0;i<run.workQueue.length;i++){
+    const wi=run.workQueue[i];const ex=run.executions[wi.execId];
+    if(!ex)return i;                                  // 壊れた項目は先に片付ける
+    if(wi.phase==="execute"&&!execInputsReady(run,spec,ex))continue;
+    const k=Object.assign({s:wi.phase==="route"?-1:arrivalRank(spec,run,ex)},layoutRank(spec,ex.nodeId));
+    if(best<0||rankLess(k,bk)){best=i;bk=k;}
+  }
+  return best;
+}
 /* ---- processOneWorkItem（1 Work Item・async） ---- */
 async function processOneWorkItem(spec,run,store,log,ctl){
   if(run.cancelRequested&&run.status==="cancelling"){
@@ -2114,17 +2169,16 @@ async function processOneWorkItem(spec,run,store,log,ctl){
   if(run.workQueue.length===0)return{kind:"idle"};
   const byId={};spec.nodes.forEach(n=>byId[n.id]=n);
   const loopEntries={};for(const e of spec.edges||[])if(e.loop&&!isLoopNode(byId[e.to.node]))loopEntries[e.to.node]={loopId:e.loop.id,edge:e};
-  const wi=run.workQueue[0];const ex=run.executions[wi.execId];
-  if(!ex){run.workQueue.shift();return{kind:"skip"};}
+  const at=pickNextWork(spec,run);
+  if(at<0){
+    // どれも入力が揃っていない＝これ以上進めない
+    failRun(run,run.executions[run.workQueue[0].execId].nodeId,{code:"DEADLOCK",message:"barrier未成立で全待機"},store,false);
+    return{kind:"failed"};}
+  const wi=run.workQueue[at];const ex=run.executions[wi.execId];
+  if(!ex){run.workQueue.splice(at,1);return{kind:"skip"};}
   const node=byId[ex.nodeId];if(!node){failRun(run,ex.nodeId,{code:"REFERENCE_ERROR",message:"no node"},store,false);return{kind:"failed"};}
 
   if(wi.phase==="execute"){
-    if(!execInputsReady(run,spec,ex)){
-      run.workQueue.push(run.workQueue.shift());
-      const allWaiting=run.workQueue.every(w=>{const e=run.executions[w.execId];return w.phase==="execute"&&!execInputsReady(run,spec,e);});
-      if(allWaiting){failRun(run,ex.nodeId,{code:"DEADLOCK",message:"barrier未成立で全待機"},store,false);return{kind:"failed"};}
-      return{kind:"waiting"};
-    }
     ex.status="running";
     ex.attempts=ex.attempts||[];const attempt={attempt:ex.attempts.length+1,status:"running",error:null,partialOutput:null,startedAt:Date.now(),endedAt:null};ex.attempts.push(attempt);
     let rv,usage;
@@ -2133,7 +2187,7 @@ async function processOneWorkItem(spec,run,store,log,ctl){
         if(Array.isArray(rvOut))rvOut=mergeToRV(rvOut,node.merge);      // 複数の線が入っているとき
         run.result=rvOut;
         (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rvOut,raw:JSON.stringify(rvOut),usage:{apiCalls:0,inputTokens:0,outputTokens:0,cost:null},meta:metaOf(rvOut,null),status:"success"});
-        ex.status="completed";run.workQueue.shift();log&&log("data",`● OUTPUT(${node.id}) ← ${JSON.stringify(rvOut)}`);if(store)store.save(run);return{kind:"completed"};}
+        ex.status="completed";run.workQueue.splice(at,1);log&&log("data",`● OUTPUT(${node.id}) ← ${JSON.stringify(rvOut)}`);if(store)store.save(run);return{kind:"completed"};}
       if(node.type==="input"){
         // 入力は「そのノードの名前のキー」を読む。無ければ入力全体を渡す（古いSpecのため）
         const has=run.input&&Object.prototype.hasOwnProperty.call(run.input,node.id);
@@ -2172,13 +2226,13 @@ async function processOneWorkItem(spec,run,store,log,ctl){
       if(usage.inputTokens==null&&usage.outputTokens==null)run.totals.unreportedUsageCalls++;}
     run.totals.inputTokens+=usage.inputTokens||0;run.totals.outputTokens+=usage.outputTokens||0;ex._rv=rv;
     {const at=ex.attempts[ex.attempts.length-1];at.status="completed";at.endedAt=Date.now();}
-    run.workQueue[0]={execId:ex.execId,phase:"route"};if(store)store.save(run);return{kind:"executed"};
+    run.workQueue[at]={execId:ex.execId,phase:"route"};if(store)store.save(run);return{kind:"executed"};
   }
   let outcome;
   try{outcome=await routeExec(spec,run,ex,byId,loopEntries,log);}catch(err){
     failRun(run,ex.nodeId,err,store,false);return{kind:"failed"};}
   if(outcome.kind==="paused"){run.status="paused";if(store)store.save(run);return{kind:"paused"};}
-  run.workQueue.shift();ex.status="completed";if(store)store.save(run);return{kind:"routed"};
+  run.workQueue.splice(at,1);ex.status="completed";if(store)store.save(run);return{kind:"routed"};
 }
 /* ---- ループノード ----
    入ってきた値をそのまま通し、出口を「繰り返す先（本体）」と「抜けたあと」に振り分ける。
@@ -2248,6 +2302,7 @@ async function routeCondNode(spec,run,ex,node,log){
     {activationId:ex.activationId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration},log,`「${lab}」`);
 }
 async function routeExec(spec,run,ex,byId,loopEntries,log){
+  run.routeSeq=(run.routeSeq||0)+1;      // ここで配る線は「同時に届いた」とみなす
   const node=byId[ex.nodeId];const outEdges=(spec.edges||[]).filter(e=>e.from.node===node.id);
   if(isLoopNode(node))return await routeLoopNode(spec,run,ex,node,log);
   if(node.type==="cond")return await routeCondNode(spec,run,ex,node,log);
@@ -2802,6 +2857,7 @@ function edgePath(a,b){
   const dx=Math.max(40,Math.abs(b.x-a.x)*0.4);
   return `M ${a.x} ${a.y} C ${a.x+dx} ${a.y}, ${b.x-dx} ${b.y}, ${b.x} ${b.y}`;}
 function setDir(d){Ed.dir=d;$("#cv").classList.toggle("tb",d==="tb");
+  if(Ed.spec){const m=Ed.spec.metadata=Ed.spec.metadata||{};if(m.flow!==d){m.flow=d;if($("#spec").value)$("#spec").value=JSON.stringify(Ed.spec,null,2);}}
   const t=$("#dirBtn");if(t)t.textContent=d==="tb"?"縦に流す":"横に流す";}
 function edRender(){
   const nodesEl=$("#nodes"),svg=$("#edges");
@@ -4714,6 +4770,123 @@ setHint("ノードをタップすると中身を編集。○ → ● の順に�
 window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
   nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;}};
 
+/* ---- 使い方（？ボタン） ---- */
+const HELP_TEXT=`# Harness Studio の使い方
+
+LLM を「1回聞いて終わり」ではなく、**いくつものノードをつないだ流れ（ハーネス）**として動かす道具。
+推論はこの端末の中で動く（サーバもAPIキーも要らない・料金0）。図もハーネスもこの端末に残る。
+
+## 1. まず動かす（3手）
+1. 画面のいちばん上「入出力」の入力欄に質問が入っている（例が3つ並んでいて、押すと入る。「別の例にする」で変わる）。
+2. **実行** を押す。初回はモデルの読み込みで少し待つ（進み方は「モデル」の帯に出る）。
+3. 下の「出力」に答えが出る。うまくいかないときは「実行ログ」→ **まとめてコピー**。
+
+## 2. ノードの種類
+- **入力**: 実行時に入れた文が流れ出す起点。ノードをタップすると「入力画面に出す文言」と「最初から入れておく文」を決められる。
+- **LLM**: プロバイダ（内蔵LLM／CPUで動くLLM／OpenAI互換のローカルサーバ／mock）で推論する。使うモデルはノードごとに選べる。
+- **Join**: 複数の値を1つにまとめる（文章のまま／Markdown／CSV／JSON配列／キー付き／テンプレ）。
+- **ループ**: 条件が来るまで同じところを何回も回す。
+- **条件分岐**: 条件で行き先を選ぶ。
+- **計算**: 入ってきた値を式か JavaScript で計算する。
+- **出力**: 最後の結果を受け取る。複数あってよい。
+
+## 3. つなぐ・動かす（図の操作）
+- **つなぐ**: つなぎ元の **○** をタップ → つなぎ先の **●** をタップ。
+- **ノードを動かす**: ドラッグ。**大きさを変える**: 右下のつまみをドラッグ（ノードをタップ →「大きさを戻す」で戻る）。
+- **線の形**: 線の途中の丸をドラッグ。丸をタップすると線の設定（if / else / 戻り線 / 順番 / 値の変換 / 削除）。
+- **画面**: 何もない所をドラッグで移動、ピンチで拡大縮小、**⤢** で全体表示。**整列** で自動配置、**縦に流す / 横に流す** で向きを変える。
+- ループノードだけ入口(●)と出口(○)が上下（左右）逆。戻ってくる線が上から入るため。
+
+## 4. 出力の形（LLMに何を返させるか）
+ノードをタップ →「出力の形」。
+- **縛らない**: 文章のまま返る。
+- **項目を決める（出力1・出力2…）**: キー名と種類を並べる。種類は 文章 / 数値 / 整数 / はい・いいえ / 文のリスト / 数値のリスト。
+  数値は **最小・最大の範囲** と **整数だけ** を指定できる（小数もマイナスも使える）。
+- **自分で JSON schema を書く**: 上で表せない形のとき。
+内蔵LLMでは schema が**文法として強制**される。プロンプトに「JSONで出して」と書くだけでは縛りにならない。
+条件式から読むときは **ノード名.out.キー名**。
+
+## 5. 1つの値を複数の線に分ける（出口を増やす）
+ノードをタップ →「リストの渡し方」→ **出口を分けて、リストの一部だけを渡す**。
+出口ごとに「どの項目の・リストの何番目を渡すか」を決められる（1つ目だけ／2つ目から最後まで／1〜3つ目…）。
+図のノードに出口が増え、線ごとにちがう値が流れる。受け取る側のノードでも「入ってきた値のどれを使うか」を選べる。
+
+## 6. 入口に2本以上入るとき
+- 順番は**線をつないだ順**に自動で振られる。入れ替えはノードをタップ →「入力の順番」（↑↓）。
+- まとめ方はノードをタップ →「複数の入力が来たときの受け取り方」: 改行でつなぐ（既定）／番号を振る／見出しを付ける／CSV／JSON配列。
+- LLM だけでなく **出力・ループ・条件分岐**でも同じように決められる。
+
+## 7. ループ
+ループノードを置き、**本体の最後のノードからループノードへつなぐ**と輪が閉じる（自動で戻り線になる）。
+- 出口の1本目が「繰り返す先（本体）」、2本目が「抜けたあと」。ノードをタップして入れ替えられる。
+- 抜ける条件は、回数だけ／JSONの値（点数が8以上など）／文の長さ／自分で式／**JavaScript** から選ぶ。
+- **最大回数を空にすると止まらない（無限ループ）**。実行中は画面右下に **■ 緊急停止** が出続ける。押せばその場で止まる（cancelled）。
+- 打ち切り条件が真にならないまま 20000回 進んだら、安全装置が止める（paused。Resume で続けられる）。
+- ループの中の値は毎周入れ替わる。ループの外から入れた値（入力ノードなど）は毎周そのまま使える。
+
+## 8. 条件分岐
+条件分岐ノードは**出口そのものが条件**。上から順に調べて、最初に当たった1本だけに流す。
+- 最後の出口を「それ以外」にすると必ずどこかに流れる（無いと、当たらなかったとき失敗になる）。
+- 出口ごとに渡す値（どの項目か）も決められる。
+- 使える名前: \`value\`（来た値）、\`iteration\`（何周目か）、来た値がJSONならその項目名。他のノードは \`ノード名.out.項目\`。
+
+## 9. 計算
+入ってきた線ごとに**変数名**を付けられる（既定は項目名かノード名）。\`inputs\`（つないだ順の配列）と \`iteration\` も使える。
+- **かんたんな式**: \`+ - * / %\` と比較、\`len() has() regex() count() min() max() json_parse() json_stringify()\`。
+- **JavaScript**: \`return\` で値を返す。**別スレッドで動かす**ので画面は止まらず、3秒で終わらなければ打ち切る。
+- Python・C言語・Visual Basic は**ブラウザに実行系が無いので動かせない**。動かすには数十MBの実行系を別に積むかサーバに出すことになる（いまは入れていない）。
+
+## 10. 動く順番のきまり
+1. **入力が届いた順**に動く。
+2. 同じ配り分けで**同時に届いた**ときは、図の並びで決める: 縦に流すなら**上**、横に流すなら**左**、同じなら左上、位置まで同じなら**先に作ったノード**。
+3. ループは戻ってきた値が新しい入力になるので、そのまま上の規則で続く（特別な扱いは要らない）。
+図の位置は「同時のときの並び順」にだけ使う。**何が動くか・何が流れるかは位置では変わらない。**
+
+## 11. モデル（この端末の中で動くLLM）
+- **内蔵LLM（WebGPU）**: 速い。iPhone では大きいモデルでタブが落ちることがある。落ちるときは「文脈の長さ」を短くするか、小さいモデルにする。
+- **CPUで動かす（GGUF・WebGPU不要）**: 遅いがWebGPUを使わない逃げ道。ノード編集の Provider で明示的に選ぶ（勝手に切り替えない）。
+- モデルは初回だけダウンロードして端末の中に残る（このサイトから配っている分は速い）。「消えないようにする」で消えにくくなる。
+
+## 12. うまくいかないとき
+- 赤い ⚠ は**実行前に分かった直すところ**。その場で直せるものはボタンが出る。
+- 「診断する」で、機械で確実に分かることだけを一覧にする（LLMの意見ではない）。
+- 「実行ログ」→ **まとめてコピー**（Spec・ログ・失敗の理由・端末の対応状況が1つに入る）。そのまま相談先に貼れる。
+- 版が古いと画面の上にお知らせが出る。リロードすると新しくなる。
+
+## 13. 書き出す・渡す・戻す
+- **書き出す**: HSL（人が読める1枚のテキスト）か JSON。共有リンクも作れる（中身はURLに入る・サーバには送らない）。
+- **外部のLLMに直させる**: 「書き出す」→ 説明付きの1枚を渡し、返ってきた文を「取り込む」に貼ると、**差分を見てから**適用できる。
+- **取り込む**: HSL / JSON / 共有リンクのどれでも。読めないときは行番号付きで理由が出る。
+
+## 14. 気をつけること
+- 端末のメモリには限りがある。大きいモデル＋長い文脈＋並列は落ちやすい。落ちたら「省メモリで試す」。
+- JavaScript は自分で書いたコードがそのまま動く。別スレッドなので画面は止まらないが、**3秒で打ち切る**。
+- クラウドのLLMにはまだ繋がない（料金の話が絡むので、いまは端末の中だけ）。
+`;
+function helpHTML(t){
+  return String(t).split(/\n{2,}/).map(block=>{
+    const ls=block.split("\n");
+    return ls.map(l=>{
+      const b=s2=>esc(s2).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/`([^`]+)`/g,"<code>$1</code>");
+      if(/^# /.test(l))return `<h3 style="margin:0 0 6px">${b(l.slice(2))}</h3>`;
+      if(/^## /.test(l))return `<h4>${b(l.slice(3))}</h4>`;
+      if(/^[-0-9]/.test(l)&&/^(- |\d+\. )/.test(l))return `<p class="li">${b(l)}</p>`;
+      return `<p>${b(l)}</p>`;
+    }).join("");
+  }).join("");
+}
+function openHelp(){
+  openSheet(head("使い方")
+    +`<div class="row"><button class="primary" id="hlCopy">使い方を全部コピー</button><button id="hlSave">文で保存</button></div>`
+    +`<div class="help">${helpHTML(HELP_TEXT)}</div>`
+    +`<div class="row"><button class="primary" id="hlCopy2">使い方を全部コピー</button></div>`);
+  bindClose();
+  const doCopy=()=>copyOut(HELP_TEXT,"使い方");
+  $("#hlCopy").onclick=doCopy;$("#hlCopy2").onclick=doCopy;
+  $("#hlSave").onclick=()=>saveOut(HELP_TEXT,"harness-studio-使い方.txt");
+}
+$("#helpBtn").onclick=openHelp;
+
 /* ---- 自己テスト ---- */
 const enc=s=>new TextEncoder().encode(s);
 function sseStub(chunks,opt){opt=opt||{};
@@ -5318,6 +5491,35 @@ export async function CreateMLCEngine(model,opt){
     validate(mkq(9)).length===0&&ran(r9)==="o1"&&ran(r6)==="o2"&&ran(r1)==="o3"
     &&rn.status==="failed"&&/どの条件にも当たらなかった/.test(errText((rn.errors||[])[0]))
     &&jsv.status==="success"&&ran(jsv)==="o1");}
+ // 56 動く順番: 入力が届いた順。同時なら図の並び（縦は上・横は左・同じなら作られた順）
+ {const three=(flow,layout)=>({metadata:{version:"1",flow,layout},nodes:[
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"A",type:"llm",mock:{tag:"A"}},{id:"B",type:"llm",mock:{tag:"B"}},{id:"C",type:"llm",mock:{tag:"C"}},
+    {id:"jn",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"in",port:"out"},to:{node:"C",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"jn",port:"items"},position:0},
+     {from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:1},
+     {from:{node:"C",port:"out"},to:{node:"jn",port:"items"},position:2},
+     {from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}]});
+  const seen=r=>Object.keys(r.nodeRuns).join(",");
+  const r1=await fullRun(three("tb",{in:{x:0,y:0},A:{x:0,y:30},B:{x:0,y:10},C:{x:0,y:20},jn:{x:0,y:50},out:{x:0,y:60}}),{});
+  const r2=await fullRun(three("lr",{in:{x:0,y:0},A:{x:30,y:0},B:{x:10,y:0},C:{x:20,y:0},jn:{x:50,y:0},out:{x:60,y:0}}),{});
+  const r3=await fullRun(three("tb",{in:{x:0,y:0},A:{x:5,y:9},B:{x:5,y:9},C:{x:5,y:9},jn:{x:0,y:50},out:{x:0,y:60}}),{});
+  // 入力が届いた順は図の並びより強い: A の先（一番上に置いた A2）より、先に入力が来ていた B が先に動く
+  const later={metadata:{version:"1",flow:"tb",layout:{in:{x:0,y:0},A:{x:0,y:10},B:{x:0,y:20},A2:{x:0,y:1},jn:{x:0,y:90},out:{x:0,y:99}}},
+   nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+     {id:"A",type:"llm",mock:{tag:"A"}},{id:"B",type:"llm",mock:{tag:"B"}},{id:"A2",type:"llm",mock:{tag:"A2"}},
+     {id:"jn",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"A2",port:"in"}},
+     {from:{node:"A2",port:"out"},to:{node:"jn",port:"items"},position:0},
+     {from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:1},
+     {from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}]};
+  const r4=await fullRun(later,{});
+  ok("56 動く順番: 入力が届いた順・同時なら図の並び（縦は上／横は左／同じなら作られた順）",
+    seen(r1)==="in,B,C,A,jn,out"&&seen(r2)==="in,B,C,A,jn,out"
+    &&seen(r3)==="in,A,B,C,jn,out"&&seen(r4)==="in,A,B,A2,jn,out");}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
