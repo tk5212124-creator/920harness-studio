@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — ％と思考過程・差し込みの穴 v0.25.0</title>
+<title>Harness Studio — モジュールとくらべる v0.26.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -116,7 +116,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.25.0 · ％と思考過程</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.26.0 · モジュールとくらべる</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -184,7 +184,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 </div>
 <div class="mini" id="nowSpec"></div>
 <div class="hintbar" id="hint"></div>
-<div class="row"><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button></div>
+<div class="row"><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button><button id="btnExp">くらべる</button></div>
 <input type="file" id="fileIn" accept=".hsl,.json,.txt,text/plain,application/json" style="display:none">
 </div>
 <div class="row"><div class="seg" id="exSeg">
@@ -1653,6 +1653,7 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
     }catch(err){
       if(err&&err.truncated&&pol==="retry"&&tries<2){
         countUsage(run,err.usage);                 // やり直す前の分も数える
+        run.totals.truncateRetries=(run.totals.truncateRetries||0)+1;
         tries++;
         const mt=(gen.maxTokens||256)*2;
         gen=Object.assign({},gen,{maxTokens:mt});
@@ -1663,6 +1664,7 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
       // 形に合わなかった（切れたのではない）とき、もう一度聞く
       if(err&&err.code==="SCHEMA_VALIDATION_ERROR"&&!err.truncated&&badPol==="retry"&&badTries<2){
         countUsage(run,err.usage);
+        run.totals.badOutputRetries=(run.totals.badOutputRetries||0)+1;
         badTries++;attempt.partialOutput="";
         log&&log("prov",`↻ ${node.id}: 答えが形に合わなかったのでもう一度聞く（${badTries}/2）`);
         continue;
@@ -1979,7 +1981,7 @@ function edgeIdOf(spec,edge){const i=(spec.edges||[]).indexOf(edge);return i>=0?
 function makeRun(spec,input){return{runId:"run_"+Date.now(),status:"running",resumable:true,
   nodeRuns:{},deliveries:[],executions:{},workQueue:[],branchGroups:{},cancelRequested:false,
   loopInstances:{},loopSeq:0,execSeq:0,actSeq:0,delivSeq:0,routeSeq:0,assertions:[],
-  totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0,recoveredErrors:0,stoppedNodes:0},iterationTotal:0,
+  totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0,recoveredErrors:0,stoppedNodes:0,truncateRetries:0,badOutputRetries:0},iterationTotal:0,
   startedAt:new Date().toISOString(),errors:[],result:null,input:input||{},vars:spec.vars||{},
   harnessVersion:(spec.metadata&&spec.metadata.version)||"0",specCanon:canonSpec(spec),specSnapshot:spec};}
 function metaOf(rv,usage){const m={len:null,tokens:(usage&&usage.outputTokens!=null)?usage.outputTokens:null,bytes:null};
@@ -2456,7 +2458,7 @@ function errText(e){
   const rest=Object.keys(e).filter(k=>k!=="code").map(k=>`${k}=${typeof e[k]==="object"?JSON.stringify(e[k]):e[k]}`).join(" ");
   return (c||"ERROR")+(rest?" "+rest:"");
 }
-function failRun(run,nodeId,err,store,recordNodeFailure){run.status="failed";run.resumable=true;run.errors.push({node:nodeId,kind:err.code||"ERROR",message:errText(err)});
+function failRun(run,nodeId,err,store,recordNodeFailure){run.status="failed";run.resumable=true;run.finishedAt=new Date().toISOString();run.errors.push({node:nodeId,kind:err.code||"ERROR",message:errText(err)});
   if(recordNodeFailure&&nodeId)(run.nodeRuns[nodeId]=run.nodeRuns[nodeId]||[]).push({out:null,raw:null,usage:null,meta:{len:null,tokens:null,bytes:null},status:"error",errorKind:err.code||"ERROR"});
   if(store)store.save(run);}
 
@@ -3034,6 +3036,36 @@ function traceReport(spec,run,opt){
     branchGroups:Object.values(run.branchGroups||{}).map(g=>({activationId:g.activationId,failurePolicy:g.failurePolicy,
       status:g.status,branches:Object.values(g.branches||{}),failures:g.failures||[]}))};
 }
+/* 実行1回を「くらべられる1行」にする。実験（Run比較）と書き出しで使う。 */
+function runSummary(spec,run,extra){
+  const t=run.totals||{};
+  const exs=Object.values(run.executions||{});
+  const retries=exs.reduce((a,e)=>a+Math.max(0,((e.attempts||[]).length-1)),0);
+  const models=[...new Set((spec.nodes||[]).filter(n=>(n.type||"llm")==="llm"||n.type==="tool")
+    .map(n=>n.model||(((spec.providers||{})[n.provider]||{}).model)||null).filter(Boolean))];
+  const provs=[...new Set((spec.nodes||[]).map(n=>n.provider).filter(Boolean))];
+  const asr=(run.assertions||[]).reduce((a,x)=>({total:a.total+x.total,passed:a.passed+x.passed,
+    failed:a.failed+x.failed,warned:a.warned+(x.warned||0)}),{total:0,passed:0,failed:0,warned:0});
+  const ms=(run.startedAt&&run.finishedAt)?(new Date(run.finishedAt)-new Date(run.startedAt)):null;
+  return Object.assign({
+    status:run.status,
+    harness:(spec.metadata&&spec.metadata.name)||null,
+    harnessVersion:(spec.metadata&&spec.metadata.version)||null,
+    specCanon:run.specCanon||null,
+    input:run.input,
+    result:run.result?run.result.value:null,
+    apiCalls:t.apiCalls||0,inputTokens:t.inputTokens||0,outputTokens:t.outputTokens||0,
+    ms,iterationTotal:run.iterationTotal||0,
+    errors:(run.errors||[]).length,
+    errorKinds:[...new Set((run.errors||[]).map(e=>e.kind))],
+    recoveredErrors:t.recoveredErrors||0,stoppedNodes:t.stoppedNodes||0,
+    retries,truncateRetries:t.truncateRetries||0,badOutputRetries:t.badOutputRetries||0,
+    assertions:asr,
+    models,providers:provs,
+    seed:null,                                  // seed を受ける Provider はまだ無い（受けたらここに入れる）
+    runId:run.runId
+  },extra||{});
+}
 const traceText=(spec,run,opt)=>JSON.stringify(traceReport(spec,run,opt),null,1);
 
 /* ---- runUntilIdle ---- */
@@ -3055,7 +3087,7 @@ async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
     if(!anyWork&&!anyReady){
       const outputNodes=spec.nodes.filter(n=>n.type==="output");
       const anyOutputDone=outputNodes.length===0||outputNodes.some(n=>(run.nodeRuns[n.id]||[]).some(h=>h.status==="success"||h.status==="recovered"));
-      if(anyOutputDone){run.status="success";run.resumable=false;if(store)store.save(run);}
+      if(anyOutputDone){run.status="success";run.resumable=false;run.finishedAt=new Date().toISOString();if(store)store.save(run);}
       else{
         const why=whyNotRun(spec,run).filter(w=>w.delivered.length||w.status!=="未実行");
         if(log&&why.length){log("err","■ Outputに届かなかった。動かなかったノードと理由:");
@@ -3091,7 +3123,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,whyNotRun,LOGOPT,expandModules,modulePorts,remapNodeIds,remapLoopIds,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,runSummary,whyNotRun,LOGOPT,expandModules,modulePorts,remapNodeIds,remapLoopIds,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -5239,7 +5271,149 @@ function openReviewSheet(){
   h+=`<div class="mini" style="margin-top:10px">直すときは「書き出す」で外部のLLMに渡す1枚を作り、返ってきた文を「取り込む」に入れる。</div>`;
   openSheet(h);bindClose();
 }
+/* --- くらべる（実験）: 同じ／別のハーネスを、同じ／別の入力で何回も回して並べる ---
+   iPhone で一度に何本も動かすとメモリが持たないので、必ず1本ずつ順番に回す。
+   途中経過はそのつど表に出し、localStorage にも残す（閉じても消えない）。 */
+const EXP_KEY="harness.studio.experiment.v1";
+const EXP={rows:[],running:false,cancel:false,variants:null,note:""};
+function expLoad(){try{const o=JSON.parse(localStorage.getItem(EXP_KEY)||"null");
+  if(o&&Array.isArray(o.rows)){EXP.rows=o.rows;EXP.note=o.note||"";}}catch(_){}}
+function expSave(){try{localStorage.setItem(EXP_KEY,JSON.stringify({rows:EXP.rows,note:EXP.note,at:new Date().toISOString()}));}catch(_){}}
+/* result の中から見たい値を取り出す（"score" や "best.score" のような書き方） */
+function expPick(v,paths){
+  const o={};
+  for(const p of paths){const x=atPath(v,p);o[p]=(x===undefined?null:x);}
+  return o;
+}
+/* 入力の並びを作る。1行 = 1回分。JSONで書けばノードごとに指定できる。 */
+function expInputs(text,spec){
+  const first=(spec.nodes||[]).find(n=>n.type==="input");
+  const key=first?first.id:"in";
+  const lines=String(text||"").split(/\n+/).map(x=>x.trim()).filter(Boolean);
+  if(!lines.length)return [inputForRun()];
+  return lines.map(l=>{
+    if(/^[{[]/.test(l)){try{const o=JSON.parse(l);if(o&&typeof o==="object"&&!Array.isArray(o))return o;}catch(_){}}
+    const o={};o[key]=l;return o;});
+}
+function expTable(){
+  const rows=EXP.rows;
+  if(!rows.length)return `<div class="mini">まだ結果が無い。</div>`;
+  const extra=[...new Set(rows.flatMap(r=>Object.keys(r.picked||{})))];
+  const head=["変種","入力","状態","呼出","in","out","ms","周回","err","再試行","点検"].concat(extra).concat(["result"]);
+  const cell=r=>[
+    esc(r.variant),esc(capStr(JSON.stringify(r.input),28)),
+    `<span class="s-${r.status==="success"?"success":"error"}">${esc(r.status)}</span>`,
+    r.apiCalls,r.inputTokens,r.outputTokens,r.ms==null?"":r.ms,r.iterationTotal,
+    r.errors+(r.recoveredErrors?`(+${r.recoveredErrors})`:""),
+    r.retries,r.assertions&&r.assertions.total?`${r.assertions.passed}/${r.assertions.total}`:"",
+  ].concat(extra.map(k=>{const v=(r.picked||{})[k];return v==null?"":esc(capStr(JSON.stringify(v),14));}))
+   .concat([esc(capStr(JSON.stringify(r.result),40))]);
+  return `<div class="tblwrap"><table><thead><tr>`+head.map(h=>`<th>${esc(h)}</th>`).join("")+`</tr></thead><tbody>`
+    +rows.map(r=>`<tr>`+cell(r).map(c=>`<td>${c}</td>`).join("")+`</tr>`).join("")
+    +`</tbody></table></div>`;
+}
+function expRender(){
+  const el=$("#expOut");if(!el)return;
+  el.innerHTML=(EXP.note?`<div class="mini">${esc(EXP.note)}</div>`:"")+expTable();
+}
+function openExpSheet(){
+  expLoad();
+  const vs=EXP.variants||[{name:(Ed.spec.metadata||{}).name||"いまのハーネス",json:JSON.stringify(Ed.spec)}];
+  EXP.variants=vs;
+  let h=head("くらべる（実験）");
+  h+=`<div class="mini">同じハーネスを何回も、別の入力で、あるいは別のハーネスと並べて回して、結果を表にする。`
+    +`<b>1本ずつ順番に回す</b>（端末のメモリを守るため）。途中でも止められる。</div>`;
+  h+=`<div class="fld"><span>くらべるハーネス</span><div id="expVars">`;
+  vs.forEach((v,i)=>{h+=`<div class="ordrow"><b>${i+1}</b>`
+    +`<input type="text" data-vname="${i}" value="${esc(v.name)}" placeholder="名前" style="flex:1;min-width:90px">`
+    +(i?`<button data-vdel="${i}">削除</button>`:`<span class="mini">いまの図</span>`)+`</div>`;});
+  h+=`</div></div><div class="row"><button id="expAdd">＋ いまの図をもう1つ足す</button>`
+    +`<button id="expPaste">＋ JSON / HSL を貼って足す</button></div>`;
+  h+=`<label class="fld"><span>入力（1行＝1回分。空ならいまの入力欄。JSONで書けばノードごとに指定できる）</span>`
+    +`<textarea id="expIn" style="min-height:80px" placeholder="雨の日に家でできることを3つ挙げて。&#10;{&quot;in&quot;:&quot;別の質問&quot;}"></textarea></label>`;
+  h+=`<div class="fld2">${fld("同じ組み合わせを何回ずつ",num("__expN",3))}`
+    +`${fld("result から見たい値（カンマ区切り）",txt("__expPick","","score, best.score"))}</div>`;
+  h+=`<div class="row"><button class="primary" id="expRun">まわす</button><button id="expStop" disabled>止める</button>`
+    +`<button id="expClear">結果を消す</button></div>`;
+  h+=`<div class="row"><button id="expCopy">結果をコピー（JSON）</button><button id="expSave">結果を保存</button>`
+    +`<button id="expCsv">CSVでコピー</button></div>`;
+  h+=`<div id="expOut"></div>`;
+  openSheet(h);bindClose();
+  expRender();
+  const vn=()=>$("#sheetBody").querySelectorAll("[data-vname]");
+  vn().forEach(el=>el.oninput=()=>{EXP.variants[+el.dataset.vname].name=el.value;});
+  $("#sheetBody").querySelectorAll("[data-vdel]").forEach(b=>b.onclick=()=>{
+    EXP.variants.splice(+b.dataset.vdel,1);openExpSheet();});
+  $("#expAdd").onclick=()=>{
+    EXP.variants.push({name:((Ed.spec.metadata||{}).name||"harness")+" "+(EXP.variants.length+1),
+      json:JSON.stringify(Ed.spec)});openExpSheet();};
+  $("#expPaste").onclick=()=>{
+    const t=prompt("くらべたいハーネスを JSON か HSL で貼る");
+    if(!t)return;
+    try{const got=parseHarnessText(t);
+      EXP.variants.push({name:(got.spec.metadata||{}).name||("変種"+(EXP.variants.length+1)),
+        json:JSON.stringify(got.spec)});openExpSheet();}
+    catch(e){setHint("読めない: "+errText(e));}};
+  $("#expClear").onclick=()=>{EXP.rows=[];EXP.note="";expSave();expRender();};
+  const outJSON=()=>JSON.stringify({format:"harness-experiment/1",at:new Date().toISOString(),
+    variants:EXP.variants.map(v=>({name:v.name,harness:(JSON.parse(v.json).metadata||{}).name||null,
+      version:(JSON.parse(v.json).metadata||{}).version||null})),rows:EXP.rows},null,1);
+  $("#expCopy").onclick=()=>copyOut(outJSON(),"実験の結果");
+  $("#expSave").onclick=()=>saveOut(outJSON(),"harness-experiment-"+stamp()+".json");
+  $("#expCsv").onclick=()=>{
+    const extra=[...new Set(EXP.rows.flatMap(r=>Object.keys(r.picked||{})))];
+    const cols=["variant","status","apiCalls","inputTokens","outputTokens","ms","iterationTotal",
+      "errors","recoveredErrors","retries","truncateRetries","badOutputRetries","harnessVersion"];
+    const q=v=>`"${String(v==null?"":v).replace(/"/g,'""')}"`;
+    const lines=[cols.concat(extra).concat(["input","result"]).map(q).join(",")];
+    EXP.rows.forEach(r=>lines.push(cols.map(c=>q(r[c])).concat(
+      extra.map(k=>q(JSON.stringify((r.picked||{})[k])))).concat(
+      [q(JSON.stringify(r.input)),q(JSON.stringify(r.result))]).join(",")));
+    copyOut(lines.join("\n"),"実験の結果（CSV）");};
+  $("#expStop").onclick=()=>{EXP.cancel=true;EXP.note="止めるところ…";expRender();};
+  $("#expRun").onclick=async()=>{
+    if(EXP.running)return;
+    const nEach=Math.max(1,Number(($("#sheetBody").querySelector('[data-f="__expN"]')||{}).value||1));
+    const picks=String((($("#sheetBody").querySelector('[data-f="__expPick"]')||{}).value)||"")
+      .split(",").map(x=>x.trim()).filter(Boolean);
+    const specs=[];
+    for(const v of EXP.variants){
+      let sp;try{sp=JSON.parse(v.json);}catch(e){setHint(v.name+" が読めない");return;}
+      try{sp=expandModules(sp);}catch(e){EXP.note=`${v.name}: モジュールを展開できない — ${errText(e)}`;expRender();return;}
+      normalizeSpec(sp);
+      const errs=validate(sp);
+      if(errs.length){EXP.note=`${v.name}: 検証エラーで回せない — ${errs[0]}`;expRender();return;}
+      specs.push({name:v.name,spec:sp});}
+    const inputs=expInputs($("#expIn").value,specs[0].spec);
+    const total=specs.length*inputs.length*nEach;
+    EXP.running=true;EXP.cancel=false;$("#expRun").disabled=true;$("#expStop").disabled=false;
+    let done=0;
+    for(const v of specs){
+      for(const inp of inputs){
+        for(let k=0;k<nEach;k++){
+          if(EXP.cancel)break;
+          EXP.note=`まわしている… ${done+1}/${total}（${v.name}）`;expRender();
+          const ctl=makeController({});
+          let run;
+          try{run=await fullRun(v.spec,inp,memStore(),ctl);}
+          catch(e){run={status:"failed",totals:{},errors:[{kind:"RUN_THREW",message:errText(e)}],
+            input:inp,result:null,iterationTotal:0,executions:{},runId:"run_"+Date.now()};}
+          const row=runSummary(v.spec,run,{variant:v.name,repeat:k+1});
+          row.picked=expPick(row.result,picks);
+          EXP.rows.push(row);expSave();done++;expRender();
+          await new Promise(r=>setTimeout(r,0));      // 画面に順番を返す（止めるボタンが効くように）
+        }
+        if(EXP.cancel)break;}
+      if(EXP.cancel)break;}
+    EXP.running=false;EXP.cancel=false;
+    const rb=$("#expRun"),sb=$("#expStop");if(rb)rb.disabled=false;if(sb)sb.disabled=true;
+    EXP.note=`終わり（${EXP.rows.length}行）。`
+      +`同じ組み合わせの中でばらつくのは、モデルの temperature とループの回り方のせい。`;
+    expSave();expRender();
+  };
+}
 let reviewCtl=null;
+$("#btnExp").onclick=openExpSheet;
 $("#btnExport").onclick=openExportSheet;
 $("#btnImport").onclick=openImportSheet;
 $("#btnReview").onclick=openReviewSheet;
@@ -6063,6 +6237,47 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 
 **よく使う形**: LLM に答えさせる → 計算ノードで良し悪しを判定（\`{items, ok}\` を返す）→ ループの条件を \`ok\`、条件分岐で \`pass\` / \`fail\` に分ける。
 
+## 8.5 まとめる・多数決・点検・モジュール
+
+**まとめる（reduce）** — 並んだ値を1つにする。
+- 合計／平均／いちばん小さい数／いちばん大きい数／個数／全部あてはまる／どれかあてはまる／最初／最後／**いちばん良いもの**／**いちばん悪いもの**。
+- 「どこを見るか」に \`score\` のように書くと、各要素のその項目で比べる（入れ子は \`a.b\`）。
+- **いちばん良いもの／悪いもの**は、その要素を**まるごと**次へ渡す（\`{"name":"A","score":90}\` のように）。
+- 線が何本も入っていても、配列が1つ入っていても、同じように扱う。
+
+**多数決（quorum）** — 1つずつに条件を当てて、何人そろえば合格かを決める。
+- 条件は \`value.score >= 80\`（1つ分の値は \`value\`、何番目かは \`index\`、中身がJSONならキー名もそのまま書ける）。
+- 「何人そろえば合格か」か「割合（0.67 など）」で決める。書かなければ過半数。
+- 結果は \`{"pass":true,"decided":true,"agree":2,"against":1,"arrived":3,"total":3,"required":2,"results":[…]}\`。
+- **早く決めたいとき**は「このノードが動き出す条件」を**どれか来たら**にする。届くたびに数え直し、\`decided\` が true になった時点でもう結果は変わらない（条件分岐で \`decided == true\` を見て先へ進める）。
+
+**点検（assert）** — 条件を並べて、成り立っているかを数える（テスト用）。
+- 1行が1つの点検。名前・式・重さ（落ちたら不合格／注意／参考）を決める。
+- 結果は \`{"total":3,"passed":2,"failed":1,"tests":[…]}\`。
+- **点検の合否は Run の成否とは別**に数える。実行ログと「実行の記録」にまとめて残る。
+- 「落ちたとき」を **このノードをエラーにする** にすれば、Run の失敗と連動させられる。
+
+**モジュール（部分ハーネスの再利用）** — 何ノードかの流れを、1つのノードとして他から呼ぶ。
+- 「書き出す」の**いまのハーネスをモジュールにする**で、いまの図をそのままモジュールにできる。
+- **入力ノードが入口、出力ノードが出口**になる。1つずつなら線はそのまま繋げばよい。
+- 同じモジュールを何か所からでも呼べる。**中のループや条件は混ざらない**。
+- 実行するときに中身へ置き換わる。中のノードは \`呼んだノード名__中の名前\` としてログ・表・記録に出るので、**どこで何が起きたかそのまま追える**。使った分やエラーの数え方もふつうのノードと同じ。
+- モジュールはそのハーネスの中に入っている。**あとから勝手に中身が変わることはない**（版は自分で \`version\` に書く）。
+- **自分自身を呼ぶ（再帰）は使えない**。書くと実行前に落ちる。
+- ノード編集から「このモジュールだけを開く」で単体で動かして試せる。
+
+**そのまま通す（pass）** — 値を変えずに中継する。名前を付けて追いやすくしたいときに使う。
+
+## 8.7 くらべる（実験）
+
+上の「くらべる」を押すと、**同じハーネスを何回も／別の入力で／別のハーネスと並べて**回して、結果を表にできる。
+
+- **1本ずつ順番に回す**（端末のメモリを守るため）。途中で「止める」を押せる。
+- 入力は1行＝1回分。JSONで書けばノードごとに指定できる。
+- 並ぶのは 状態・呼出回数・入出力トークン・かかった時間・周回・エラー数・やり直し回数・点検の結果・result。
+- 「result から見たい値」に \`score\` や \`best.score\` と書くと、その値が列になる。
+- 結果は **JSON でも CSV でもコピー／保存**できる。途中で閉じても残る。
+
 ## 9. 出力ノード
 最後の結果を受け取る。いくつ置いてもよい（条件分岐で「合格」「不合格」を別々の出力に出せる）。
 複数の線が入るときは、他のノードと同じく**受け取り方**と**入力の順番**を決められる。
@@ -6090,6 +6305,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 「実行ログ」→ **まとめてコピー**（Spec・ログ・失敗の理由・端末の対応状況・実行の記録が1つに入る）。そのまま相談先に貼れる。
 - 「**実行の記録をコピー**」は機械が読む用の全部入り（どのノードが何を受け取って何を返したか・掛かった時間・トークン・どの枝の何周目か・モデルへ送った文・動かなかったノードが何を待っていたか）。直させたいLLMにはこれを渡すのがいちばん早い。
 - ログの「**詳しく**」に印を付けると、次の実行からモデルへ送った文と値の全文もログに出る。
+- 実行ログには**ノードごとの開始時刻と終了時刻**（hh:mm:ss.mmm）と掛かった時間が出る。どこで待たされているかはここで分かる。
 - 進めなくなったとき・出力に届かず終わったときは、**どのノードが何を待っていたか**を名指しで出す。そのノードの「動き出す条件」を見る。
 - ノードごとに「**エラーが起きたとき**」を決められる（止める／決めた値を出す／null を出す／そのノードだけ止めて先へ進む）。どれを選んでも、エラーはログと記録に残る。
 - 使用量は**失敗した呼び出しも数える**（実際にモデルを動かしているため）。
@@ -6144,6 +6360,7 @@ const HELP_JSON=`# JSONで書く（設定の全部）
   "metadata": {"name":"ためし","version":"1"},
   "providers": {"local":{"adapter":"webllm","model":"Qwen2.5-0.5B-Instruct-q4f16_1-MLC"}},
   "vars": {"目標点":8},
+  "modules": {"書き直し":{"version":"2","spec":{ …ふつうのHarnessSpec… }}},
   "nodes": [ … ],
   "edges": [ … ]
 }
@@ -6273,6 +6490,8 @@ const HELP_JSON=`# JSONで書く（設定の全部）
   - \`{{{run_input.<入力ノードのid>}}}\` … 実行画面で入れた文
   - \`{{{vars.<名前>}}}\` … vars の値
   - \`{{{iteration}}}\` … いまの周回（1から）
+- なお \`run_input\` は**いちばん外側の入力**を指す。モジュールの中でも外側の入力になるので、
+  モジュールの中へ値を渡すときは \`run_input\` ではなく**線でつなぐ**（\`{{{in}}}\` で受ける）。
   - 空なら、入ってきた値をそのまま渡す。
 - \`prompt.prefix\` / \`prompt.suffix\` … 本文の前後に必ず付ける文。
 - \`generation.maxTokens\` … 答えの長さの上限。\`temperature\` … ばらつき（0に近いほど同じ答えになる）。
@@ -6343,6 +6562,71 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 - 使える名前は**線の \`as\`** で決まる（書かなければ \`pick\` か、つなぎ元のノード名）。
 - \`"js"\` では \`inputs\`（入ってきた順の配列）も使える。
 - Python / C / VB でも書けるが**動かない**（この道具はブラウザの中だけで動く）。
+
+## reduce（まとめる）
+~~~
+{"id":"best","type":"reduce","op":"best","path":"score","skipMissing":false,
+ "inputs":{"in":{"type":"any","cardinality":"many"}}}
+~~~
+- \`op\` … \`sum\` \`average\` \`min\` \`max\` \`count\` \`all\` \`any\` \`first\` \`last\` \`best\` \`worst\`
+- \`path\` … 各要素のどこを見るか（\`score\` / \`a.b\`）。空なら値そのもの。
+- \`best\` / \`worst\` / \`first\` / \`last\` は**その要素をまるごと**返す。\`all\` / \`any\` は true / false。
+- \`skipMissing\` … true にすると \`path\` が無い要素を飛ばす（既定 false ＝ エラー）。
+- 線が何本も入っていても、配列が1つ入っていても同じに扱う。
+
+## quorum（多数決）
+~~~
+{"id":"vote","type":"quorum","lang":"expr","condition":"value.score >= 80",
+ "required":2, "requiredRatio":null, "total":3, "onBadItem":"error",
+ "inputs":{"in":{"type":"any","cardinality":"many"}},
+ "start":{"mode":"all"}}
+~~~
+- \`condition\` … 1つ分に当てる条件。1つ分は \`value\`、何番目かは \`index\`。\`lang\` は \`expr\` か \`js\`。
+- \`required\`（人数）か \`requiredRatio\`（0〜1）。どちらも無ければ過半数。
+- \`total\` … 全部で何人か。書かなければ入ってきた線の数。
+- \`onBadItem\` … \`"error"\`（既定）か \`"false"\`（条件が読めない要素を反対票にする）。
+- 返る形: \`{"pass":…,"decided":…,"agree":…,"against":…,"arrived":…,"total":…,"required":…,"results":[…]}\`
+- \`start\` を \`{"mode":"any"}\` にすると届くたびに数え直す（早期確定）。\`decided\` が true ならもう結果は変わらない。
+
+## assert（点検）
+~~~
+{"id":"chk","type":"assert","lang":"expr","onFail":"continue",
+ "asserts":[
+   {"name":"点数","expr":"評価.out.score >= 8","severity":"fail"},
+   {"name":"空でない","expr":"len(回答.out.answer) > 0"},
+   {"name":"3周","expr":"iteration == 3","severity":"warn"}]}
+~~~
+- \`severity\` … \`fail\`（既定）/ \`warn\` / \`info\`
+- \`onFail\` … \`"continue"\`（既定・Run は続く）/ \`"error"\`（このノードをエラーにする）
+- 返る形: \`{"total":3,"passed":2,"failed":1,"warned":0,"info":0,"tests":[…]}\`
+- 合否は \`run.assertions\` にもまとまるので、**Run の成否とは別**に数えられる。
+
+## module（部分ハーネスの再利用）
+~~~
+"modules": {
+  "書き直し": {
+    "version":"2",
+    "note":"下書き→評価→合格するまで回す",
+    "spec": { "nodes":[…ふつうのHarnessSpec…], "edges":[…] }
+  }
+},
+"nodes":[{"id":"w1","type":"module","module":"書き直し"}]
+~~~
+- **入口** = モジュールの中の \`input\` ノードの id、**出口** = \`output\` ノードの id。
+  1つずつなら線の \`to.port\` / \`from.port\` は \`"in"\` / \`"out"\` のままでよい。
+  2つ以上あるときは、その id を \`port\` に書く。
+- 実行する直前に中身へ置き換わる。中のノードは \`w1__<中の名前>\`、ループIDも \`w1__<ループID>\` になる。
+  展開すると \`input\` / \`output\` は \`pass\` ノードになる。
+- 同じモジュールを何か所からでも呼べる。中のループ・条件は混ざらない。
+- **再帰（自分を呼ぶモジュール）は使えない**。検証で落ちる。
+- 版は \`version\`。モジュールはハーネスの中に入っているので、あとから勝手に中身が変わることはない。
+- HSL では \`module "書き直し" = {"version":"2","spec":{…}}\` の1行。
+
+## pass（そのまま通す）
+~~~
+{"id":"中継","type":"pass"}
+~~~
+入ってきた値をそのまま次へ渡す。線が複数入るときは \`merge\` でまとまる。
 
 ## output（出力）
 ~~~
@@ -6463,6 +6747,7 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 - \`run.input.<入力ノードid>\` … 実行画面で入れた文
 - \`vars.<名前>\` … vars に書いた値
 - \`iteration\` … いまの周回（1から）
+- \`index\` … 多数決で、いま見ているのが何番目か（0から）
 - \`value\` … そのノードに入ってきた値そのもの。中身がJSONなら、そのキー名もそのまま名前として使える
 - 使える形: \`+ - * / %\` ／ \`== != < <= > >=\` ／ \`and or not\`
 - 使える関数: \`len() has() regex() count() min() max() json_parse() json_stringify()\`
