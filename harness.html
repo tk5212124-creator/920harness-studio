@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 実測で直した式リファレンス v0.28.1</title>
+<title>Harness Studio — 先着（早く決める） v0.29.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -52,6 +52,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .nd.t-input{border-color:#8fb4d8}.nd.t-output{border-color:#8fc8a8}.nd.t-join{border-color:#d8c08f}.nd.t-llm{border-color:#b8a6d8}
 .nd.t-loop{border-color:#e0a06c}.nd.t-cond{border-color:#c9a227}.nd.t-calc{border-color:#6fb3a8}
 .nd.t-reduce{border-color:#6fa3b3}.nd.t-quorum{border-color:#b38f6f}.nd.t-assert{border-color:#9ab36f}
+.nd.t-race{border-color:#c07fa8}
 .nd.t-module{border-color:#8f8fd8;border-width:2px}.nd.t-pass{border-color:#c0c6cf}
 .nd.t-map{border-color:#d88fae;border-width:2px}
 .nd .ndm{font-size:9px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;font-family:ui-monospace,monospace}
@@ -117,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.28.1 · 式の実測リファレンス</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.29.0 · 先着</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -858,6 +859,44 @@ function reviewSpec(spec){
       for(const c of cs)if(c&&!edges.some(e=>e.from.node===n.id&&(e.from.port||"out")===c.id))
         add("warn",`出口「${c.label||c.id}」から線が出ていない（当たっても行き先が無い）`,n.id);
       if(n.lang!=="js")for(const c of cs)if(c&&c.expr)checkExpr(c.expr,`${n.id} の「${c.label||c.id}」`);
+    }
+    if(n.type==="memory"){
+      if(n.lang!=="js"&&n.when)checkExpr(n.when,`${n.id} の出す条件`);
+      const outs=edges.filter(e=>e.from.node===n.id);
+      const emit=n.emit||"always";
+      if(emit!=="always"&&outs.length)
+        add("info",emit==="never"?"「出さない」設定なので先へは流れない（値は 記憶.out から読める）"
+          :"出す条件が真になるまで先へ流れない（真にならないと Output に届かない）",n.id);
+      if(emit==="never"&&!outs.length)
+        add("info","出口が無いので、ためるだけのノード（他のノードから 記憶.out で読む）",n.id);
+      const app=(n.rules||[]).some(r=>r&&r.op==="append");
+      if(app&&(n.max==null||n.max===""))
+        add("info","足すだけで上限が無いので、回るほど増える（上限を入れると古いものから捨てる）",n.id);
+      if(memScopeOf(n)==="run"){
+        const inMap=Object.entries(loopBodySets(spec)).some(([lid,set])=>
+          set.has(n.id)&&(spec.nodes||[]).some(x=>x.id===lid&&x.type==="map"));
+        if(inMap)add("warn","Map の中なのに記憶が「Run で1つ」。全件が同じ記憶を共有する"
+          +"（件ごとに分けるなら場を「ループや1件ごと」にする）",n.id);}
+      const declared=[...new Set((n.rules||[]).map(r=>(r&&r.port)||"in"))];
+      const actual=[...new Set(edges.filter(e=>e.to.node===n.id&&!e.loop&&!e.map).map(e=>e.to.port||"in"))];
+      const unused=declared.filter(q=>!actual.includes(q));
+      if(unused.length)add("info",`入口 ${unused.join(", ")} に線が入っていない（書いてあるだけで使われない）`,n.id);
+    }
+    if(n.type==="race"){
+      if(n.lang!=="js"&&n.condition)checkExpr(n.condition,`${n.id} の先着`);
+      const ins=edges.filter(e=>e.to.node===n.id&&!e.loop&&!e.map);
+      if(ins.length<2)add("warn","候補が1本しか入っていない。先着にするなら候補を2本以上つなぐ",n.id);
+      if(startModeOf(n)!=="any")
+        add("warn",`動き出す条件が「${startModeOf(n)==="all"?"全部そろったら":"自分で組んだ条件"}」なので、`
+          +"候補が全部動いたあとに選ぶことになる（早く決めて止めたいなら「どれか来たら」にする）",n.id);
+      if((n.cancel||"pending")!=="none"){
+        const set=raceCancelSet(spec,n.id);
+        const srcs=[...new Set(ins.map(e=>e.from.node))];
+        const shared=srcs.filter(x=>!set.has(x));
+        if(shared.length)add("info",`候補 ${shared.join(", ")} は先着以外にも線を出しているので止めない`
+          +"（止めるとその先も道連れになるため）",n.id);}
+      if(!n.onNone||n.onNone==="error")
+        add("info","どれも通らなかったときは失敗する。先へ進めたいなら「どれも通らなかったときの扱い」を変える",n.id);
     }
     if(n.type==="calc"){
       if(n.lang==="js")add("info","JavaScript は別スレッドで動かす。3秒で終わらなければ打ち切る",n.id);
@@ -1742,7 +1781,16 @@ function normalizeOutRouting(spec){
   }
   return changed;
 }
-function normalizeSpec(spec){const a=normalizeInputOrder(spec),b=normalizeOutRouting(spec);return a||b;}
+function normalizeSpec(spec){const a=normalizeInputOrder(spec),b=normalizeOutRouting(spec),c=normalizeRaceStart(spec);return a||b||c;}
+/* 先着（race）と記憶（memory）は「どれか来たら動く」でないと届くたびに動かない。
+   書いていなければ start を埋める（隠さず JSON に残す）。記憶は場（scope）も書き込む。 */
+function normalizeRaceStart(spec){
+  let changed=false;
+  for(const n of spec.nodes||[]){
+    if(n.type!=="race"&&n.type!=="memory")continue;
+    if(!n.start||!n.start.mode){n.start=Object.assign({},n.start||{},{mode:"any"});changed=true;}
+    if(n.type==="memory"&&!n.scope){n.scope="run";changed=true;}}
+  return changed;}
 function normalizeInputOrder(spec){
   let changed=false;
   const byId={};(spec.nodes||[]).forEach(n=>byId[n.id]=n);
@@ -1774,16 +1822,19 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(def.adapter!=="mock"&&!def.model)errs.push("providerにmodel必須: "+pid);
   }
   spec.nodes.forEach(n=>{
-    if(n.type!=="llm"&&n.type!=="tool")return;
-    if(n.provider){if(!(spec.providers||{})[n.provider])errs.push("provider未定義: "+n.provider+" @ "+n.id);}
-    else if(!n.mock)errs.push("provider未指定（mock宣言も無い）: "+n.id);
-    if(n.prompt&&n.prompt.template){
-      if(n.prompt.template.syntax!=="mustache")errs.push("prompt.template.syntax=mustache必須: "+n.id);
-      if(n.prompt.template.mode!=="interpolation_only")errs.push("prompt.template.mode=interpolation_only必須: "+n.id);
-      try{mustacheRender(n.prompt.template.value||"",{},{escape:false});}catch(e){errs.push("prompt.template不正: "+n.id+" "+errText(e));}
+    // モデルを呼ぶノードだけの決まり
+    if(n.type==="llm"||n.type==="tool"){
+      if(n.provider){if(!(spec.providers||{})[n.provider])errs.push("provider未定義: "+n.provider+" @ "+n.id);}
+      else if(!n.mock)errs.push("provider未指定（mock宣言も無い）: "+n.id);
+      if(n.prompt&&n.prompt.template){
+        if(n.prompt.template.syntax!=="mustache")errs.push("prompt.template.syntax=mustache必須: "+n.id);
+        if(n.prompt.template.mode!=="interpolation_only")errs.push("prompt.template.mode=interpolation_only必須: "+n.id);
+        try{mustacheRender(n.prompt.template.value||"",{},{escape:false});}catch(e){errs.push("prompt.template不正: "+n.id+" "+errText(e));}
+      }
+      if(n.onTruncate&&!["error","use","retry"].includes(n.onTruncate))errs.push("途中で切れたときの扱いが不正: "+n.id);
+      if(n.onBadOutput&&!["error","retry"].includes(n.onBadOutput))errs.push("形に合わなかったときの扱いが不正: "+n.id);
     }
-    if(n.onTruncate&&!["error","use","retry"].includes(n.onTruncate))errs.push("途中で切れたときの扱いが不正: "+n.id);
-    if(n.onBadOutput&&!["error","retry"].includes(n.onBadOutput))errs.push("形に合わなかったときの扱いが不正: "+n.id);
+    // ここから下はどの種類にも効く（以前はモデルを呼ぶノード以外に届いていなかった）
     if(n.onError&&!ERROR_POLICIES.includes(n.onError))errs.push("エラーのときの扱いが不正（error / value / null / skip）: "+n.id);
     if(n.type==="map"){
       const body=mapBodyEdges(spec,n.id),fin=mapDoneEdges(spec,n.id),back=mapBackEdges(spec,n);
@@ -1821,6 +1872,40 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
       if(n.requiredRatio!=null&&n.requiredRatio!==""&&!(Number(n.requiredRatio)>0&&Number(n.requiredRatio)<=1))
         errs.push("多数決の requiredRatio は 0より大きく1以下にする: "+n.id);
       if(n.lang&&!["expr","js"].includes(n.lang))errs.push("多数決の条件の書き方が不正（式か JavaScript）: "+n.id);}
+    if(n.type==="memory"){
+      const rs=Array.isArray(n.rules)?n.rules:null;
+      if(!rs||!rs.length)errs.push("記憶の入口ごとの扱い(rules)が1つも無い: "+n.id);
+      else rs.forEach((r,i)=>{
+        if(!r||!MEM_OPS.includes(r.op))
+          errs.push(`記憶の入口 ${i+1} の扱いが不正（${MEM_OPS.join(" / ")}）: ${n.id}`);});
+      const ports=[...new Set((spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop&&!e.map)
+        .map(e=>e.to.port||"in"))];
+      for(const q of ports)if(!memRuleOf(n,q))
+        errs.push(`記憶の入口 "${q}" に何をするか（${MEM_OPS.join(" / ")}）が書かれていない: `+n.id);
+      if(n.emit&&!MEM_EMITS.includes(n.emit))
+        errs.push(`記憶のいつ出すかが不正（${MEM_EMITS.join(" / ")}）: `+n.id);
+      if(n.emit==="when"&&!String(n.when||"").trim())errs.push("記憶の出す条件(when)が無い: "+n.id);
+      if(n.emit==="when"&&String(n.when||"").trim()&&n.lang!=="js"){
+        try{compileExpr(n.when);}catch(_){errs.push("記憶の出す条件が読めない: "+n.id+" — "+n.when);}}
+      if(n.out&&!MEM_OUTS.includes(n.out))errs.push(`記憶の出し方が不正（${MEM_OUTS.join(" / ")}）: `+n.id);
+      if(n.scope&&!MEM_SCOPES.includes(n.scope))errs.push(`記憶の場が不正（${MEM_SCOPES.join(" / ")}）: `+n.id);
+      if(n.lang&&!["expr","js"].includes(n.lang))errs.push("記憶の条件の書き方が不正（式か JavaScript）: "+n.id);
+      if(n.max!=null&&n.max!==""&&!(Number(n.max)>=1))errs.push("記憶の上限(max)は1以上にする: "+n.id);
+      if(n.initial!=null&&!Array.isArray(n.initial))errs.push("記憶の最初の中身(initial)は配列で書く: "+n.id);
+      if(!ports.length)errs.push("記憶に入ってくる線が1本も無い: "+n.id);}
+    if(n.type==="race"){
+      if(!String(n.condition||"").trim())errs.push("先着の採用条件(condition)が無い: "+n.id);
+      else if(n.lang!=="js"){try{compileExpr(n.condition);}catch(_){errs.push("先着の条件が読めない: "+n.id+" — "+n.condition);}}
+      if(n.lang&&!["expr","js"].includes(n.lang))errs.push("先着の条件の書き方が不正（式か JavaScript）: "+n.id);
+      if(n.onNone&&!RACE_NONE.includes(n.onNone))
+        errs.push(`どれも通らなかったときの扱いが不正（${RACE_NONE.join(" / ")}）: `+n.id);
+      if(n.onNone==="value"&&n.onNoneValue===undefined)
+        errs.push("どれも通らなかったとき出す値（onNoneValue）が書かれていない: "+n.id);
+      if(n.cancel&&!RACE_CANCEL.includes(n.cancel))
+        errs.push(`決まったときの止め方が不正（${RACE_CANCEL.join(" / ")}）: `+n.id);
+      if(n.total!=null&&n.total!==""&&!(Number(n.total)>=1))errs.push("先着の total は1以上にする: "+n.id);
+      if(n.path!=null&&typeof n.path!=="string")errs.push("見る場所(path)は文字で書く: "+n.id);
+      if(!inEdgeCount(spec,n.id))errs.push("先着に候補が1本も入っていない（候補のノードから線を引く）: "+n.id);}
     if(n.type==="assert"){
       const as=Array.isArray(n.asserts)?n.asserts:null;
       if(!as||!as.length)errs.push("点検する条件(asserts)が1つも無い: "+n.id);
@@ -1884,7 +1969,10 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
      if(n.lang==="js")return;                       // JavaScript の中は静的には読まない
      if(n.type==="loop"&&n.loop&&n.loop.until&&n.loop.lang!=="js")exprs.push({src:n.loop.until,where:`${n.id} の打ち切り条件`});
      if(n.type==="cond")(n.ports||[]).forEach(c=>{if(c&&c.expr)exprs.push({src:c.expr,where:`${n.id} の「${c.label||c.id}」`});});
-     if(n.type==="calc"&&n.code)exprs.push({src:n.code,where:`${n.id} の計算`});});
+     if(n.type==="calc"&&n.code)exprs.push({src:n.code,where:`${n.id} の計算`});
+     if(n.type==="quorum"&&n.condition)exprs.push({src:n.condition,where:`${n.id} の多数決`});
+     if(n.type==="race"&&n.condition)exprs.push({src:n.condition,where:`${n.id} の先着`});
+     if(n.type==="memory"&&n.when)exprs.push({src:n.when,where:`${n.id} の出す条件`});});
    const re=new RegExp(`(^|${NOTID})(${IDRE})\\s*\\.\\s*out\\s*\\.\\s*([A-Za-z0-9_$]+)`,"g");
    const seen=new Set();
    for(const{src,where}of exprs){let m;re.lastIndex=0;
@@ -1999,7 +2087,7 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
 function edgeIdOf(spec,edge){const i=(spec.edges||[]).indexOf(edge);return i>=0?"e"+i:null;}
 function makeRun(spec,input){return{runId:"run_"+Date.now(),status:"running",resumable:true,
   nodeRuns:{},deliveries:[],executions:{},workQueue:[],branchGroups:{},cancelRequested:false,
-  loopInstances:{},loopSeq:0,mapInstances:{},mapSeq:0,log:[],logDropped:0,execSeq:0,actSeq:0,delivSeq:0,routeSeq:0,assertions:[],
+  loopInstances:{},loopSeq:0,mapInstances:{},mapSeq:0,log:[],logDropped:0,execSeq:0,actSeq:0,delivSeq:0,routeSeq:0,assertions:[],races:[],memories:{},
   totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0,recoveredErrors:0,stoppedNodes:0,truncateRetries:0,badOutputRetries:0,mapItems:0,mapItemErrors:0},iterationTotal:0,
   startedAt:new Date().toISOString(),errors:[],result:null,input:input||{},vars:spec.vars||{},
   harnessVersion:(spec.metadata&&spec.metadata.version)||"0",specCanon:canonSpec(spec),specSnapshot:spec};}
@@ -2388,24 +2476,270 @@ async function runQuorum(spec,run,ex,node,inputs){
       :Math.floor(total/2)+1);
   const agree=results.filter(r=>r.pass).length;
   const against=results.length-agree;
-  /* 「まだ来ていない」と「もう来ない」を分ける。
-     入力元が onError:"skip" などで止まっていたら、その票はもう届かないので
-     待たずに確定できる（届く可能性のある数だけを pending に数える）。 */
+  const st=arrivalStatus(spec,run,ex,node,results.length,total);
+  const pass=agree>=required;
+  return rvOf({pass,decided:pass||(agree+st.pending<required),
+    agree,against,arrived:results.length,terminal:st.terminal,terminalFrom:st.terminalFrom,pending:st.pending,
+    total,required,results});
+}
+/* 「まだ来ていない」と「もう来ない」を分ける。
+   入力元が onError:"skip" などで止まっていたら、その分はもう届かないので待たずに決められる
+   （届く可能性のある数だけを pending に数える）。 */
+function arrivalStatus(spec,run,ex,node,arrived,totalIn){
   const conf=isConfluenceNode(spec,node.id);
   const arrivedFrom=new Set(run.deliveries.filter(d=>d.toNodeId===node.id&&deliveryMatchesExec(d,ex,conf))
     .map(d=>d.fromNodeId));
   const srcs=[...new Set((spec.edges||[]).filter(e=>e.to.node===node.id&&!e.loop&&!e.map)
     .map(e=>e.from.node))];
-  const terminalList=srcs.filter(id=>{
+  const terminalFrom=srcs.filter(id=>{
     if(arrivedFrom.has(id))return false;
     const h=run.nodeRuns[id]||[];const last=h[h.length-1];
     return !!last&&(last.status==="stopped"||last.status==="cancelled");});
-  const terminal=terminalList.length;
-  const pending=Math.max(0,total-results.length-terminal);
-  const pass=agree>=required;
-  return rvOf({pass,decided:pass||(agree+pending<required),
-    agree,against,arrived:results.length,terminal,terminalFrom:terminalList,pending,
-    total,required,results});
+  const total=totalIn!=null?totalIn
+    :((node.total!=null&&node.total!=="")?Number(node.total)
+      :Math.max(arrived,inEdgeCount(spec,node.id)));
+  return{total,terminal:terminalFrom.length,terminalFrom,
+    pending:Math.max(0,total-arrived-terminalFrom.length)};
+}
+
+/* ---- 先着（race / First Accept） ----
+   届いた候補を「届いた順」に条件へ当て、最初に通ったものをそのまま次へ流す。
+   まだ来る見込みがあれば何も流さずに待つ（そのあいだ実行は waiting）。
+   決まったら、まだ動いていない候補を止める＝そのぶんの推論をしない。
+   多数決(quorum)との違い: quorum は「何人そろったか」を数えて結果を1つのJSONで返すだけ。
+   先着は「1つを選んで、その値そのものを流し、残りを止める」。 */
+const isRaceNode=n=>!!n&&n.type==="race";
+const RACE_NONE=["error","null","value","best"];
+const RACE_CANCEL=["pending","none"];
+async function runRace(spec,run,ex,node,inputs){
+  const where=`${node.id} の先着`;
+  if(!String(node.condition||"").trim())
+    throw{code:"RACE_NO_CONDITION",retryable:false,
+      message:`${where}: 採用する条件が書かれていない（最初に届いたものでよければ has(value) と書く）`};
+  const port=Object.keys(inputs)[0];
+  const items=listOfInputs(inputs);
+  const used=(ex._used||[]).filter(u=>u.port===port);
+  // 届いた順に見る（同時に届いたものは入口の順）。線が1本で配列が来たときは並びの順。
+  const sameLen=used.length===items.length;
+  const cands=items.map((v,i)=>({index:i,value:v,
+    from:sameLen&&used[i]?used[i].from:null,
+    arrival:sameLen&&used[i]&&used[i].arrival!=null?used[i].arrival:0}))
+    .sort((a,b)=>a.arrival!==b.arrival?a.arrival-b.arrival:a.index-b.index);
+  const ctx=buildCtx(run,spec,ex.loopInstanceId);
+  let win=-1;
+  for(let k=0;k<cands.length;k++){
+    const c=cands[k];
+    const locals=Object.assign(localsOf(rvOf(c.value),ex),{index:c.index});
+    try{c.pass=await evalCondition(node.condition,node.lang,ctx,locals,`${where}（${c.index+1}番目）`);}
+    catch(e){
+      if(node.onBadItem!=="false")throw e;    // 既定は止める。"false" にすると「通らなかった」ことにする
+      c.error=errText(e);c.pass=false;}
+    if(c.pass){win=k;break;}                  // 先着なので、通った時点で残りは見ない
+  }
+  const st=arrivalStatus(spec,run,ex,node,items.length);
+  return{cands,win,arrived:items.length,total:st.total,
+    terminal:st.terminal,terminalFrom:st.terminalFrom,pending:st.pending};
+}
+/* 先着の1回ぶんを記録して、流す値を決める。まだ決まらないときは null を返す（＝待つ）。 */
+function raceDecide(spec,run,ex,node,dec,log){
+  const rec={node:node.id,execId:ex.execId,at:new Date().toISOString(),
+    loopInstanceId:ex.loopInstanceId||null,iteration:ex.iteration||null,
+    arrived:dec.arrived,total:dec.total,terminal:dec.terminal,terminalFrom:dec.terminalFrom,
+    pending:dec.pending,decided:false,by:null,winner:null,
+    tried:dec.cands.filter(c=>"pass" in c).map(c=>
+      ({index:c.index,from:c.from,pass:!!c.pass,error:c.error||null}))};
+  run.races=run.races||[];
+  const done=(by,rv,winner)=>{rec.decided=true;rec.by=by;if(winner!==undefined)rec.winner=winner;
+    run.races.push(rec);return{rv,rec};};
+  if(dec.win>=0){
+    const c=dec.cands[dec.win];
+    return done("condition",rvOf(c.value),{index:c.index,from:c.from});
+  }
+  if(dec.pending>0){run.races.push(rec);return null;}     // まだ来る候補がある＝待つ
+  const mode=node.onNone||"error";
+  if(mode==="error"){run.races.push(rec);
+    throw{code:"RACE_NO_MATCH",retryable:false,
+      message:`${node.id}: どの候補も条件を満たさなかった（届いた${dec.arrived}件`
+        +`${dec.terminal?`・もう来ない${dec.terminal}件`:""}）。`
+        +`採らなかったときの扱い（onNone）を null / value / best にすると先へ進める`};}
+  if(mode==="null")return done("none_null",rvOf(null));
+  if(mode==="value"){
+    if(node.onNoneValue===undefined){run.races.push(rec);
+      throw{code:"RACE_NO_VALUE",retryable:false,
+        message:`${node.id}: どれも通らなかったとき出す値（onNoneValue）が書かれていない`};}
+    return done("none_value",rvOf(node.onNoneValue));}
+  if(mode==="best"){
+    if(!dec.cands.length){run.races.push(rec);
+      throw{code:"RACE_NO_MATCH",retryable:false,
+        message:`${node.id}: 候補が1つも届いていないので、いちばん良いものも選べない`};}
+    const rv=runReduce({id:node.id,op:"best",path:node.path||"",skipMissing:node.skipMissing},
+      {in:dec.cands.map(c=>c.value)});
+    rec.bestPath=node.path||"";
+    return done("none_best",rv);}
+  run.races.push(rec);
+  throw{code:"RACE_ON_NONE",retryable:false,
+    message:`${node.id}: 知らない「どれも通らなかったときの扱い」 "${mode}"（${RACE_NONE.join(" / ")}）`};
+}
+/* 先着が待っているあいだに、残りの候補が「もう来ない」ことになったとき
+   （onError:"skip" / 取り消し / 失敗で止まったとき）、待っている実行を待ち行列へ戻して
+   数え直させる。まだ来る見込みが減っていないときは戻さない（同じ所を回らないため）。 */
+function wakeWaitingRaces(spec,run,log){
+  let woke=0;
+  for(const ex of Object.values(run.executions)){
+    if(ex.status!=="waiting")continue;
+    const node=(spec.nodes||[]).find(n=>n.id===ex.nodeId);
+    if(!isRaceNode(node))continue;
+    // その場の先着がもう決まっているなら、古い待ちは起こさない
+    if((run.nodeRuns[ex.nodeId]||[]).some(h=>h.status==="success"
+      &&NN(h.loopInstanceId)===NN(ex.loopInstanceId)&&NN(h.iteration)===NN(ex.iteration)))continue;
+    const rec=(run.nodeRuns[ex.nodeId]||[])
+      .filter(h=>h.execId===ex.execId&&h.status==="waiting").slice(-1)[0];
+    if(!rec||!rec.race)continue;
+    const now=arrivalStatus(spec,run,ex,node,rec.race.arrived);
+    if(now.pending>=rec.race.pending)continue;        // 何も変わっていない
+    ex.status="ready";run.workQueue.push({execId:ex.execId,phase:"execute"});woke++;
+    log&&log("dim",`⏳ ${ex.nodeId}（先着） もう来ない候補が出たので数え直す`
+      +`（まだ来る ${rec.race.pending} → ${now.pending}）`);}
+  return woke;}
+/* 先着で止めてよい枝を出す。
+   この先着ノードへ辿れるノードのうち、先着以外にも線を出しているものは止めない
+   （止めるとその先も道連れになるため）。 */
+function raceCancelSet(spec,raceId){
+  const up=new Set();const q=[raceId];
+  while(q.length){const x=q.shift();
+    for(const e of spec.edges||[]){
+      if(e.to.node!==x||e.loop||e.map)continue;
+      const f=e.from.node;
+      if(f===raceId||up.has(f))continue;
+      up.add(f);q.push(f);}}
+  const shared=new Set();
+  for(let pass=0;pass<=up.size;pass++){
+    let changed=false;
+    for(const x of up){
+      if(shared.has(x))continue;
+      const outs=(spec.edges||[]).filter(e=>e.from.node===x&&!e.loop&&!e.map);
+      if(outs.some(e=>e.to.node!==raceId&&(!up.has(e.to.node)||shared.has(e.to.node)))){
+        shared.add(x);changed=true;}}
+    if(!changed)break;}
+  return new Set([...up].filter(x=>!shared.has(x)));
+}
+/* まだ動いていない候補を止める。動いてしまったものは止めない（記録を消さない）。 */
+function cancelRaceLosers(run,spec,raceEx,node,log){
+  if((node.cancel||"pending")==="none")return[];
+  const set=raceCancelSet(spec,node.id);
+  const killed=[];
+  for(const wi of run.workQueue.slice()){
+    if(wi.phase!=="execute")continue;
+    const e=run.executions[wi.execId];
+    if(!e||e.execId===raceEx.execId||e.status!=="ready")continue;
+    if(!set.has(e.nodeId))continue;
+    // 同じ「場」と同じ周回のものだけ（ループや Map の別の周を巻き込まない）
+    if(NN(e.loopInstanceId)!==NN(raceEx.loopInstanceId))continue;
+    if(NN(e.iteration)!==NN(raceEx.iteration))continue;
+    e.status="cancelled";e.cancelReason="race_decided";
+    (run.nodeRuns[e.nodeId]=run.nodeRuns[e.nodeId]||[]).push({execId:e.execId,
+      loopInstanceId:e.loopInstanceId,iteration:e.iteration,out:null,raw:null,usage:null,
+      meta:{len:null,tokens:null,bytes:null},status:"cancelled",cancelReason:"race_decided"});
+    const gid=findBranchGroupId(run,e);
+    if(gid&&run.branchGroups[gid]&&run.branchGroups[gid].branches[e.execId])
+      run.branchGroups[gid].branches[e.execId].status="cancelled";
+    killed.push(e.nodeId);}
+  if(killed.length){
+    run.workQueue=run.workQueue.filter(wi=>{const e=run.executions[wi.execId];
+      return !(e&&e.status==="cancelled"&&e.cancelReason==="race_decided");});
+    log&&log("route",`■ ${node.id}（先着）が決まったので、まだ動いていない候補を止めた: ${killed.join(", ")}`);}
+  return killed;
+}
+/* ---- 記憶（memory） ----
+   Run の中に値を持ち続けるノード。線が入ってくる「口」ごとに
+   足す(append) / 入れ替える(replace) / 消す(clear) / 読むだけ(read) を決める。
+
+   Delivery は消えないので、届いた分をそのまま毎回足すと同じ値が何度も増える。
+   そこで「もう使った Delivery」を覚えておいて二度は足さない。
+
+   **これは Runtime の中で唯一「それまでに何が届いたか」で出る値が変わるノード。**
+   だから中身は run.memories にそのまま残し、実行の記録にも出す（隠れた状態を作らない）。
+   Checkpoint にも入るので Resume でも続く。 */
+const MEM_OPS=["append","replace","clear","read"];
+const MEM_EMITS=["always","when","never"];
+const MEM_OUTS=["items","last","first","count"];
+const MEM_SCOPES=["run","scope"];
+const isMemoryNode=n=>!!n&&n.type==="memory";
+const memScopeOf=n=>((n&&n.scope)||"run");
+const memRuleOf=(node,port)=>((node.rules||[]).find(r=>r&&(r.port||"in")===port)||null);
+/* どの「場」の記憶か。run なら Run に1つ、scope ならループの場や Map の1件ごとに1つ。 */
+function memKeyOf(ex,node){
+  return node.id+"@"+(memScopeOf(node)==="run"?"run":(NN(ex.loopInstanceId)||"root"));}
+function memStoreOf(run,ex,node){
+  run.memories=run.memories||{};
+  const k=memKeyOf(ex,node);
+  if(!run.memories[k])run.memories[k]={key:k,node:node.id,scope:memScopeOf(node),
+    loopInstanceId:memScopeOf(node)==="run"?null:NN(ex.loopInstanceId),
+    items:Array.isArray(node.initial)?JSON.parse(JSON.stringify(node.initial)):[],
+    applied:[],ops:[]};
+  return run.memories[k];}
+function memShape(node,items){
+  const out=node.out||"items";
+  if(out==="items")return rvOf(items.slice());
+  if(out==="last")return rvOf(items.length?items[items.length-1]:null);
+  if(out==="first")return rvOf(items.length?items[0]:null);
+  if(out==="count")return rvOf(items.length);
+  throw{code:"MEMORY_OUT",retryable:false,
+    message:`${node.id}: 知らない「出し方」 "${out}"（${MEM_OUTS.join(" / ")}）`};}
+async function runMemory(spec,run,ex,node,log){
+  const mem=memStoreOf(run,ex,node);
+  const conf=isConfluenceNode(spec,node.id);
+  const ds=run.deliveries.filter(d=>d.toNodeId===node.id&&deliveryMatchesExec(d,ex,conf))
+    .sort((a,b)=>((a.arrival||0)-(b.arrival||0))||(String(a.deliveryId)<String(b.deliveryId)?-1:1));
+  const done=new Set(mem.applied);
+  const cap=(node.max!=null&&node.max!=="")?Number(node.max):null;
+  const used=ex._used=[];
+  const now=[];
+  for(const d of ds){
+    const port=d.toPort||"in";
+    const e=(spec.edges||[])[parseInt(String(d.edgeId).slice(1))];
+    used.push({port,from:d.fromNodeId,edgeId:d.edgeId,position:d.position,
+      arrival:d.arrival==null?null:d.arrival,pick:(e&&e.pick)||null});
+    if(done.has(d.deliveryId))continue;              // もう使った分は二度足さない
+    const rule=memRuleOf(node,port);
+    if(!rule)throw{code:"MEMORY_NO_RULE",retryable:false,
+      message:`${node.id}: 入口 "${port}" に何をするか（${MEM_OPS.join(" / ")}）が書かれていない`};
+    if(!MEM_OPS.includes(rule.op))throw{code:"MEMORY_OP",retryable:false,
+      message:`${node.id}: 入口 "${port}" の扱いが不正 "${rule.op}"（${MEM_OPS.join(" / ")}）`};
+    const rv=applyEdgeAndValidate(d.runtimeValue,e||{},node,port);
+    const v=rv?rv.value:null;
+    let skipped=false;
+    if(rule.op==="append"){
+      if(node.unique&&mem.items.some(x=>JSON.stringify(x)===JSON.stringify(v)))skipped=true;
+      else mem.items.push(v);}
+    else if(rule.op==="replace")mem.items=[v];
+    else if(rule.op==="clear")mem.items=[];
+    let dropped=0;
+    if(cap!=null&&mem.items.length>cap){dropped=mem.items.length-cap;mem.items=mem.items.slice(-cap);}
+    mem.applied.push(d.deliveryId);done.add(d.deliveryId);
+    const op={deliveryId:d.deliveryId,from:d.fromNodeId,port,op:rule.op,
+      size:mem.items.length,dropped,skipped,at:new Date().toISOString()};
+    mem.ops.push(op);now.push(op);
+  }
+  const rv=memShape(node,mem.items);
+  const emit=node.emit||"always";
+  let pass=true,why=null;
+  if(emit==="never"){pass=false;why="出さない設定";}
+  else if(emit==="when"){
+    if(!String(node.when||"").trim())throw{code:"MEMORY_NO_WHEN",retryable:false,
+      message:`${node.id}: 出す条件（when）が書かれていない`};
+    const ctx=buildCtx(run,spec,ex.loopInstanceId);
+    const locals=Object.assign(localsOf(rv,ex),
+      {memory:mem.items.slice(),count:mem.items.length},mapLocals(run,ex));
+    pass=await evalCondition(node.when,node.lang,ctx,locals,`${node.id} の出す条件`);
+    if(!pass)why="出す条件に当たらない";}
+  else if(!MEM_EMITS.includes(emit))throw{code:"MEMORY_EMIT",retryable:false,
+    message:`${node.id}: 知らない「いつ出すか」 "${emit}"（${MEM_EMITS.join(" / ")}）`};
+  log&&log("node",`▤ ${node.id}（記憶・${mem.scope==="run"?"Runで1つ":"場ごと"}） `
+    +(now.length?now.map(o=>`${o.from}→${o.port}:${o.op}`+(o.skipped?"(同じなので足さない)":"")
+        +(o.dropped?`(古い${o.dropped}件を捨てた)`:"")).join(" / "):"（新しく届いた分は無し）")
+    +` → ${mem.items.length}件`+(pass?` / 出す ${shortVal(rv.value)}`:` / 流さない（${why}）`));
+  return{rv,emit:pass,why,mem,applied:now};
 }
 /* 点検（assert）。Run そのものの成否とは分けて数える（テスト用）。 */
 const ASSERT_SEVERITY=["fail","warn","info"];
@@ -2663,7 +2997,10 @@ function pickNextWork(spec,run){
     const wi=run.workQueue[i];const ex=run.executions[wi.execId];
     if(!ex)return i;                                  // 壊れた項目は先に片付ける
     if(wi.phase==="execute"&&!execInputsReady(run,spec,ex))continue;
-    const k=Object.assign({s:wi.phase==="route"?-1:arrivalRank(spec,run,ex)},layoutRank(spec,ex.nodeId));
+    // 先着(race)だけは、残りの候補が動く前に順番を取る（それが「早く決める」の意味）。
+    // route（もう動いたノードの後片付け）よりは後。ほかの種類の順番は変えていない。
+    const isRace=wi.phase==="execute"&&isRaceNode((spec.nodes||[]).find(n=>n.id===ex.nodeId));
+    const k=Object.assign({s:wi.phase==="route"?-1:(isRace?-0.5:arrivalRank(spec,run,ex))},layoutRank(spec,ex.nodeId));
     if(best<0||rankLess(k,bk)){best=i;bk=k;}
   }
   return best;
@@ -2676,10 +3013,14 @@ async function processOneWorkItem(spec,run,store,log,ctl){
         (run.nodeRuns[e.nodeId]=run.nodeRuns[e.nodeId]||[]).push({execId:e.execId,out:null,raw:null,usage:null,meta:{len:null,tokens:null,bytes:null},status:"cancelled",cancelReason:"user_requested"});}}
     run.workQueue=[];run.status="cancelled";run.resumable=false;if(store)store.save(run);return{kind:"cancelled"};}
   if(run.status!=="running")return{kind:"idle"};
-  if(run.workQueue.length===0)return{kind:"idle"};
+  if(run.workQueue.length===0){
+    // 先着が待ったまま候補が全部止まった、という形をここで拾う
+    if(wakeWaitingRaces(spec,run,log)){if(store)store.save(run);return{kind:"woke_race"};}
+    return{kind:"idle"};}
   const byId={};spec.nodes.forEach(n=>byId[n.id]=n);
   const loopEntries={};for(const e of spec.edges||[])if(e.loop&&!isLoopNode(byId[e.to.node]))loopEntries[e.to.node]={loopId:e.loop.id,edge:e};
-  const at=pickNextWork(spec,run);
+  let at=pickNextWork(spec,run);
+  if(at<0&&wakeWaitingRaces(spec,run,log)){if(store)store.save(run);return{kind:"woke_race"};}
   if(at<0){
     // どれも入力が揃っていない＝これ以上進めない。何を待っているのかを必ず言う
     const why=whyNotRun(spec,run).filter(w=>w.delivered.length||w.missing.length);
@@ -2749,6 +3090,35 @@ async function processOneWorkItem(spec,run,store,log,ctl){
         const q=rv.value;
         log&&log("node",`⚖ ${node.id}（多数決） 賛成${q.agree}/反対${q.against}・届いた${q.arrived}/${q.total}・必要${q.required} → `
           +`${q.pass?"合格":"不合格"}${q.decided?"（確定）":"（まだ決まらない）"}`);}
+      else if(node.type==="memory"){
+        const res=await runMemory(spec,run,ex,node,log);
+        rv=res.rv;usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};
+        ex._memNoEmit=!res.emit;ex._memWhy=res.why;}
+      else if(node.type==="race"){
+        const dec=await runRace(spec,run,ex,node,inputs);
+        const got=raceDecide(spec,run,ex,node,dec,log);
+        if(!got){
+          // まだ来る候補があるので、この実行はいったん畳んで次の到着を待つ
+          ex.status="waiting";
+          {const aw=ex.attempts[ex.attempts.length-1];aw.status="waiting";aw.endedAt=Date.now();}
+          (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,
+            loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:null,raw:null,usage:null,
+            meta:{len:null,tokens:null,bytes:null},status:"waiting",
+            race:{arrived:dec.arrived,total:dec.total,terminal:dec.terminal,pending:dec.pending}});
+          run.workQueue.splice(at,1);
+          log&&log("dim",`⏳ ${node.id}（先着） 届いた${dec.arrived}/${dec.total}`
+            +`${dec.terminal?`・もう来ない${dec.terminal}`:""}・まだ来る${dec.pending} → 通ったものが無いので待つ`);
+          if(store)store.save(run);
+          return{kind:"waiting"};}
+        rv=got.rv;
+        usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};
+        ex._raceRec=got.rec;
+        const wtxt=got.rec.by==="condition"
+          ?`${got.rec.winner.from||("#"+(got.rec.winner.index+1))} を採用`
+          :({none_null:"どれも通らず null",none_value:"どれも通らず決めた値",
+             none_best:"どれも通らず いちばん良いもの"})[got.rec.by]||got.rec.by;
+        log&&log("node",`⚑ ${node.id}（先着） 見た${got.rec.tried.length}/${dec.total}`
+          +`${dec.terminal?`・もう来ない${dec.terminal}`:""} → ${wtxt} ${shortVal(rv.value)}`);}
       else if(node.type==="assert"){
         const ka=Object.keys(inputs)[0];const va=ka!==undefined?inputs[ka]:undefined;
         const inRV=Array.isArray(va)?mergeToRV(va,node.merge):(va!==undefined&&va!==null?va:{type:"text",value:""});
@@ -2785,7 +3155,12 @@ async function processOneWorkItem(spec,run,store,log,ctl){
   try{outcome=await routeExec(spec,run,ex,byId,loopEntries,log);}catch(err){
     failRun(run,ex.nodeId,err,store,false);return{kind:"failed"};}
   if(outcome.kind==="paused"){run.status="paused";if(store)store.save(run);return{kind:"paused"};}
-  run.workQueue.splice(at,1);ex.status="completed";if(store)store.save(run);return{kind:"routed"};
+  run.workQueue.splice(at,1);ex.status="completed";
+  // 先着が決まったので、まだ動いていない候補を止める（待ち行列を触るのはここまで来てから）
+  if(isRaceNode(node)&&ex._raceRec){
+    const killed=cancelRaceLosers(run,spec,ex,node,log);
+    if(killed.length)ex._raceRec.cancelled=killed;}
+  if(store)store.save(run);return{kind:"routed"};
 }
 /* ---- ループノード ----
    入ってきた値をそのまま通し、出口を「繰り返す先（本体）」と「抜けたあと」に振り分ける。
@@ -2996,6 +3371,10 @@ async function routeExec(spec,run,ex,byId,loopEntries,log){
   if(isLoopNode(node))return await routeLoopNode(spec,run,ex,node,log);
   if(isMapNode(node))return await routeMapNode(spec,run,ex,node,log);
   if(node.type==="cond")return await routeCondNode(spec,run,ex,node,log);
+  if(isMemoryNode(node)&&ex._memNoEmit){
+    log&&log("dim",`▫ ${node.id}（記憶） 先へは流さない（${ex._memWhy||"出さない設定"}）。`
+      +`値は ${node.id}.out から読める`);
+    return{kind:"completed"};}
   if(outEdges.length===0)return{kind:"completed"};
   const loopEdge=outEdges.find(e=>e.loop&&!isLoopNode(byId[e.to.node]));
   if(loopEdge){const lid=loopEdge.loop.id;const inst=ex.loopInstanceId;const iter=run.loopInstances[inst].iteration;const max=loopEdge.loop.max;
@@ -3056,7 +3435,8 @@ function remapNodeIds(spec,map){
     if(n.loop){if(n.loop.until)n.loop.until=fixExpr(n.loop.until);}
     if(Array.isArray(n.ports))n.ports.forEach(c=>{if(c.expr)c.expr=fixExpr(c.expr);});
     if(n.type==="calc"&&n.lang!=="js"&&n.code)n.code=fixExpr(n.code);
-    if(n.type==="quorum"&&n.lang!=="js"&&n.condition)n.condition=fixExpr(n.condition);
+    if((n.type==="quorum"||n.type==="race")&&n.lang!=="js"&&n.condition)n.condition=fixExpr(n.condition);
+    if(n.type==="memory"&&n.lang!=="js"&&n.when)n.when=fixExpr(n.when);
     if(n.type==="assert"&&Array.isArray(n.asserts))
       n.asserts.forEach(a=>{if(a&&a.expr&&(a.lang||n.lang)!=="js")a.expr=fixExpr(a.expr);});
     if(n.prompt){const P=n.prompt;
@@ -3185,6 +3565,9 @@ function whyNotRun(spec,run){
     if(last&&last.status==="stopped")why=`このノード自身がエラーで止まった（onError=skip・${last.errorKind}）。先へは何も流していない`;
     else if(last&&last.status==="error")why=`このノード自身が失敗した（${last.errorKind}）`;
     else if(last&&last.status==="cancelled")why=`取り消された（${last.cancelReason||"理由不明"}）`;
+    else if(last&&last.status==="waiting")why=`先着がまだ決まっていない`
+      +(last.race?`（届いた${last.race.arrived}/${last.race.total}・まだ来る${last.race.pending}）`:"")
+      +`。届いた分に条件へ通るものが無く、次の候補を待っている`;
     else if(!srcs.length&&(n.type||"llm")!=="input")why="入ってくる線が1本も無いので、始まりようがない";
     else if(!srcs.length)why="まだ動かされていない（入力ノード）";
     else if(!got.length)why=`何も届いていない。来るはずの元: ${srcs.join(", ")}`;
@@ -3236,6 +3619,8 @@ function traceReport(spec,run,opt){
       input:traceVal(run.input,cap),result:run.result?traceVal(run.result.value,cap):null},
     errors:run.errors||[],
     assertions:run.assertions||[],
+    races:run.races||[],                // 先着の1回ぶんずつ（見た候補・通ったか・止めた枝）
+    memories:run.memories||{},          // 記憶ノードの中身と、いつ何をしたか
     log:(run.log||[]).slice(),          // 画面のログに出た行ぜんぶ（古い分を落としたら logDropped に数）
     logDropped:run.logDropped||0,
     notRun:whyNotRun(spec,run),
@@ -3274,6 +3659,12 @@ function runSummary(spec,run,extra){
     recoveredErrors:t.recoveredErrors||0,stoppedNodes:t.stoppedNodes||0,
     retries,truncateRetries:t.truncateRetries||0,badOutputRetries:t.badOutputRetries||0,
     assertions:asr,
+    memories:Object.values(run.memories||{}).map(m=>({node:m.node,scope:m.scope,
+      loopInstanceId:m.loopInstanceId,size:(m.items||[]).length,ops:(m.ops||[]).length})),
+    races:(run.races||[]).map(r=>({node:r.node,decided:!!r.decided,by:r.by,
+      winner:r.winner?(r.winner.from||("#"+(r.winner.index+1))):null,
+      tried:(r.tried||[]).length,arrived:r.arrived,total:r.total,
+      cancelled:(r.cancelled||[]).slice()})),
     models,providers:provs,
     seed:null,                                  // seed を受ける Provider はまだ無い（受けたらここに入れる）
     runId:run.runId
@@ -3295,7 +3686,9 @@ async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
     if((guard%20)===0)await new Promise(r=>setTimeout(r,0));
     const r=await processOneWorkItem(spec,run,store,log,ctl);
     if(ctl&&ctl.onStep)try{ctl.onStep(run,r);}catch(_){}
-    if(r.kind==="idle"||r.kind==="cancelled")break;if(run.status==="running"&&run.workQueue.length===0)break;}
+    if(r.kind==="idle"||r.kind==="cancelled")break;
+    // 待ち行列が空になっても、先着が「もう来ない候補」を数え直せる場合だけは続ける
+    if(run.status==="running"&&run.workQueue.length===0&&!wakeWaitingRaces(spec,run,log))break;}
   if(hitGuard&&run.status==="running"){
     run.status="paused";run.resumable=true;
     log&&log("err",`■ 安全装置: ${RUN_GUARD}回まわったので止めた（打ち切り条件が真にならないか、無限ループ）。Resume で続けられる`);
@@ -3606,11 +3999,12 @@ const NODE_KINDS=[
   {type:"pass",label:"そのまま通す",desc:"値を変えずに中継する（名前を付けて追いやすくする）"},
   {type:"reduce",label:"まとめる",desc:"並んだ値を合計・平均・いちばん良いもの…にする"},
   {type:"quorum",label:"多数決",desc:"何人が条件を満たしたら合格かを決める"},
+  {type:"race",label:"先着",desc:"先に条件を満たしたものを採り、残りの候補を止める"},
   {type:"assert",label:"点検",desc:"条件が成り立っているかを調べる（テスト用）"},
   {type:"output",label:"出力",desc:"最終結果を受け取る"}
 ];
 const TYPE_LABEL={input:"入力",llm:"LLM",join:"Join",loop:"ループ",cond:"条件分岐",calc:"計算",
-  reduce:"まとめる",quorum:"多数決",assert:"点検",module:"モジュール",pass:"そのまま通す",
+  reduce:"まとめる",quorum:"多数決",race:"先着",assert:"点検",module:"モジュール",pass:"そのまま通す",
   map:"1件ずつ",output:"出力",tool:"ツール"};
 const LANGS=[{v:"expr",t:"かんたんな式（+ - * / と比較）"},{v:"js",t:"JavaScript（この端末で動く）"}];
 const LANG_LABEL={expr:"式",js:"JavaScript"};
@@ -3978,6 +4372,14 @@ function nodeSub(n){
   if(n.type==="cond")return "条件分岐"+st;
   if(n.type==="calc")return "計算"+st;
   if(n.type==="join")return "Join・"+(n.op||"(op未設定)")+st;
+  // モデルを呼ばない種類は provider を出さない（出すと「未設定」に見えてしまう）
+  if(n.type==="reduce")return "まとめる・"+(n.op||"sum")+(n.path?"("+n.path+")":"")+st;
+  if(n.type==="quorum")return "多数決"+st;
+  if(n.type==="race")return "先着"+((n.cancel||"pending")==="none"?"・止めない":"")+st;
+  if(n.type==="assert")return "点検×"+((n.asserts||[]).length)+st;
+  if(n.type==="module")return "モジュール "+(n.module||"(未選択)")+st;
+  if(n.type==="pass")return "そのまま通す"+st;
+  if(n.type==="map")return "1件ずつ"+st;
   const pv=n.provider?n.provider:(n.mock?"mock":"(provider未設定)");
   const r=n.routing&&n.routing.mode?" / "+n.routing.mode:"";
   return pv+r+st;
@@ -4683,6 +5085,37 @@ function openNodeSheet(id){
     h+=fld("条件が読めない要素があったとき",sel("__onBadItem",n.onBadItem==="false"?"false":"",
       [{v:"",t:"エラーにして止める（既定）"},{v:"false",t:"反対票として数える"}]));
   }
+  if(n.type==="race"){
+    const ins=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop&&!e.map);
+    const cnt=ins.length;
+    h+=fld("条件の書き方",sel("lang",n.lang||"expr",LANGS));
+    h+=fld("採用する条件（届いた順に1つずつ当てる）",txt("condition",n.condition,"value.score >= 80"));
+    h+=`<div class="mini">1つ分の値は <code>value</code>、何番目かは <code>index</code>。`
+      +`中身がJSONなら <code>score</code> のようにキー名もそのまま書ける。`
+      +`<br><b>最初に届いたものでよい</b>なら <code>has(value)</code> と書く。</div>`;
+    h+=fld("どれも通らなかったとき",sel("onNone",n.onNone||"error",[
+      {v:"error",t:"失敗にする（既定）"},{v:"null",t:"null を流す"},
+      {v:"value",t:"決めた値を流す"},{v:"best",t:"いちばん良いものを流す"}]));
+    if((n.onNone||"error")==="value")
+      h+=fld("そのとき流す値（JSON）",txt("__onNoneValue",
+        n.onNoneValue===undefined?"":JSON.stringify(n.onNoneValue),'"（該当なし）" / {"score":0}'));
+    if(n.onNone==="best")
+      h+=fld("どこを見て良し悪しを決めるか",txt("path",n.path,"score / 評価.点数 のような入れ子は a.b"));
+    h+=fld("決まったとき",sel("cancel",n.cancel||"pending",[
+      {v:"pending",t:"まだ動いていない候補を止める（既定・推論しない）"},
+      {v:"none",t:"止めない（最後まで動かす）"}]));
+    h+=fld("全部で何件来るか（空なら入ってきた線の数）",num("total",n.total,String(cnt||"")));
+    h+=`<div class="mini">いま候補は <b>${cnt}</b> 本。`
+      +`<b>届いた順</b>に条件へ当てて、<b>最初に通ったものの値そのもの</b>を次へ流す`
+      +`（多数決のように数を返すのではない）。`
+      +`<br>上の「このノードが動き出す条件」は <b>どれか来たら</b> にしておく`
+      +`（そうでないと候補が全部動いてから選ぶことになり、止める意味が無くなる）。`
+      +`<br>入力元が <b>onError:"skip"</b> などで止まっていたら、その分は<b>もう来ない</b>ものとして数える。`
+      +`<br>止めた候補は <code>cancelled（race_decided）</code> として残る（失敗ではない）。`
+      +`1回ぶんの中身は「実行の記録」の <code>races</code> に入る。</div>`;
+    h+=fld("条件が読めない候補があったとき",sel("__onBadItem",n.onBadItem==="false"?"false":"",
+      [{v:"",t:"エラーにして止める（既定）"},{v:"false",t:"通らなかったことにして次を見る"}]));
+  }
   if(n.type==="assert"){
     const as=Array.isArray(n.asserts)?n.asserts:[];
     h+=fld("式の書き方",sel("lang",n.lang||"expr",LANGS));
@@ -5226,6 +5659,20 @@ function openNodeSheet(id){
    if(sm)sm.onchange=()=>{if(sm.value)n.skipMissing=true;else delete n.skipMissing;syncFromCanvas();};}
   {const bi=$("#sheetBody").querySelector('select[data-f="__onBadItem"]');
    if(bi)bi.onchange=()=>{if(bi.value)n.onBadItem="false";else delete n.onBadItem;syncFromCanvas();};}
+  // 先着で「どれも通らなかったとき」に流す値。JSON として読めないものは受け取らない（黙って文字にしない）
+  {const nv=$("#sheetBody").querySelector('[data-f="__onNoneValue"]');
+   if(nv)nv.oninput=()=>{
+     const t=nv.value.trim();
+     if(!t){delete n.onNoneValue;nv.style.borderColor="";syncFromCanvas();return;}
+     try{n.onNoneValue=JSON.parse(t);nv.style.borderColor="";}
+     catch(_){nv.style.borderColor="var(--err)";return;}
+     syncFromCanvas();};}
+  // 「どれも通らなかったとき」を選び直したら、いらない欄は消して編集を開き直す
+  {const on=$("#sheetBody").querySelector('select[data-f="onNone"]');
+   if(on)on.onchange=()=>{n.onNone=on.value;
+     if(n.onNone!=="value")delete n.onNoneValue;
+     if(n.onNone!=="best")delete n.path;
+     syncFromCanvas();openNodeSheet(n.id);};}
   {const writeAs=()=>{
      const rows=[];
      $("#sheetBody").querySelectorAll("[data-as-name]").forEach(el=>{
@@ -5342,7 +5789,7 @@ function openAddSheet(){
 }
 function addNode(type){
   const base={input:"in",llm:"llm",join:"jn",loop:"lp",cond:"cd",calc:"cl",
-    reduce:"rd",quorum:"qm",assert:"chk",module:"mod",pass:"ps",map:"mp",output:"out"}[type]||"n";
+    reduce:"rd",quorum:"qm",race:"rc",assert:"chk",module:"mod",pass:"ps",map:"mp",output:"out"}[type]||"n";
   const id=newId(base);
   const n={id,type};
   if(type==="llm"){const provs=Object.keys(Ed.spec.providers||{});
@@ -5357,6 +5804,8 @@ function addNode(type){
   if(type==="reduce"){n.op="best";n.path="score";n.inputs={in:{type:"any",cardinality:"many"}};}
   if(type==="quorum"){n.lang="expr";n.condition="value.score >= 80";n.required=2;
     n.inputs={in:{type:"any",cardinality:"many"}};n.start={mode:"all"};}
+  if(type==="race"){n.lang="expr";n.condition="value.score >= 80";n.onNone="error";n.cancel="pending";
+    n.inputs={in:{type:"any",cardinality:"many"}};n.start={mode:"any"};}
   if(type==="module")n.module=Object.keys(Ed.spec.modules||{})[0]||"";
   if(type==="map"){n.map={id};n.order="input";n.onItemError="error";
     n.inputs={in:{type:"any",cardinality:"many"}};}
@@ -6615,6 +7064,16 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 結果は \`{"pass":true,"decided":true,"agree":2,"against":1,"arrived":3,"total":3,"required":2,"results":[…]}\`。
 - **早く決めたいとき**は「このノードが動き出す条件」を**どれか来たら**にする。届くたびに数え直し、\`decided\` が true になった時点でもう結果は変わらない（条件分岐で \`decided == true\` を見て先へ進める）。
 
+**先着（race）** — 候補を並べておいて、**先に条件を満たしたものを採り、残りの候補を止める**。
+- 多数決との違い: 多数決は「何人そろったか」を数えて**その集計**を返す。先着は**1つを選んで、その値そのもの**を次へ流す。
+- 届いた順に条件へ当てる。通ったものが出たら、**まだ動いていない候補はそこで止める**（そのぶんモデルを呼ばない＝速い・軽い）。
+- 止めた候補は「取り消し（race_decided）」として残る。**失敗ではない**。
+- 「このノードが動き出す条件」は**どれか来たら**にしておく（足したときはそうなっている）。
+  そうしないと候補が全部動いてから選ぶことになって、止める意味が無くなる。
+- 通ったものが1つも無いときの扱いを選べる（失敗にする／null／決めた値／**いちばん良いもの**）。
+- 「最初に届いたものでよい」なら条件に \`has(value)\` と書く。
+- **先着以外にも線を出している候補は止めない**（止めるとその先も道連れになるため）。図の⚠がその旨を出す。
+
 **点検（assert）** — 条件を並べて、成り立っているかを数える（テスト用）。
 - 1行が1つの点検。名前・式・重さ（落ちたら不合格／注意／参考）を決める。
 - 結果は \`{"total":3,"passed":2,"failed":1,"tests":[…]}\`。
@@ -6672,7 +7131,9 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 ## 12. モデル（この端末の中で動くLLM）
 - 初回だけダウンロードして端末の中に残る（このサイトから配っている分は速い）。「消えないようにする」で消えにくくなる。
 - 落ちる・固まるときは **文脈の長さを短く** するか、**小さいモデル**にするか、**CPUで動かす**に替える。
-- 同時に載せるモデルは1つ（別のモデルを読むと前のモデルは片付ける）。
+- **常駐は「GPUで動かす分から1つ」＋「CPUで動かす分から1つ」**。
+  GPU（内蔵LLM / WebLLM）の中で別のモデルを読むと前のを片付ける。CPU（Wllama）の中でも同じ。
+  **GPU用とCPU用は別枠なので、その2つは同時に載る。**（小さい端末が落ちないようにするため）
 
 ## 13. うまくいかないとき
 - 赤い ⚠ は**実行前に分かった直すところ**。その場で直せるものはボタンが出る（「schema を付ける」「出口の流し方を決める」「条件の見る先を変える」など）。
@@ -6807,7 +7268,8 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 ~~~
 
 - **id** … 必須。かぶらない名前。日本語でよい。
-- **type** … \`input\` \`llm\` \`join\` \`loop\` \`cond\` \`calc\` \`output\` \`tool\`。書かないと \`llm\`。
+- **type** … \`input\` \`llm\` \`join\` \`loop\` \`cond\` \`calc\` \`output\` \`tool\`
+  \`reduce\` \`quorum\` \`race\` \`assert\` \`module\` \`pass\` \`map\`。書かないと \`llm\`。
 - **merge** … 1つの入口に線が2本以上入ったとき、どう1つにするか。
   - \`op\`: \`concat\`（改行でつなぐ・既定）/ \`numbered\`（1. 2. …）/ \`markdown\`（## 名前）/ \`csv\` / \`json_array\`
   - \`labels\`: つないだ順の名前（numbered / markdown / csv で使う）
@@ -6975,6 +7437,26 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 - \`onBadItem\` … \`"error"\`（既定）か \`"false"\`（条件が読めない要素を反対票にする）。
 - 返る形: \`{"pass":…,"decided":…,"agree":…,"against":…,"arrived":…,"total":…,"required":…,"results":[…]}\`
 - \`start\` を \`{"mode":"any"}\` にすると届くたびに数え直す（早期確定）。\`decided\` が true ならもう結果は変わらない。
+
+## race（先着 / First Accept）
+~~~
+{"id":"pick","type":"race","lang":"expr","condition":"value.score >= 80",
+ "onNone":"best", "onNoneValue":null, "path":"score",
+ "cancel":"pending", "total":3, "onBadItem":"error",
+ "inputs":{"in":{"type":"any","cardinality":"many"}},
+ "start":{"mode":"any"}}
+~~~
+- \`condition\` … 1つ分に当てる条件。1つ分は \`value\`、何番目かは \`index\`。\`lang\` は \`expr\` か \`js\`。
+  最初に届いたものでよければ \`"has(value)"\`。
+- **届いた順**に当てて、**最初に通った候補の値そのもの**を流す（集計は返さない）。
+- \`onNone\` … どれも通らなかったとき。\`"error"\`（既定）/ \`"null"\` / \`"value"\`（\`onNoneValue\` が要る）/ \`"best"\`（\`path\` の数がいちばん大きい候補）。
+- \`cancel\` … \`"pending"\`（既定・まだ動いていない候補を止める）/ \`"none"\`（止めない）。
+- \`total\` … 全部で何件来るか。書かなければ入ってきた線の数。
+- \`onBadItem\` … \`"error"\`（既定）か \`"false"\`（条件が読めない候補を「通らなかった」ことにする）。
+- \`start\` は \`{"mode":"any"}\` にする（\`normalizeSpec\` が書いていなければ埋める）。
+  \`"all"\` にすると候補が全部動いてから選ぶ（止める意味が無くなる）。
+- 止めた候補は \`nodeRuns\` に \`status:"cancelled"\` / \`cancelReason:"race_decided"\` で残る。
+  1回ぶんの中身は実行の記録の \`races\` に入る。
 
 ## assert（点検）
 ~~~
@@ -7380,7 +7862,19 @@ const DEEP_EXAMPLES=[
    {from:{node:"3軸",port:"out"},to:{node:"門番",port:"in"},position:3},
    {from:{node:"門番",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
    {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}])},
-{name:"16. 総合（ループ＋3Judge＋quorum＋点検＋条件分岐＋2つのOutput）",
+{name:"16. 先着（2番目で決まって3番目は動かない）",
+ note:"C1=50 は不合格、C2=90 で決まる。C3 は一度も動かない（apiCalls は 3 ではなく 2）。"
+   +"止めた C3 は cancelled(race_decided) として残る。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},
+   ...[50,90,95].map((v,i)=>M("C"+(i+1),{fixed:{score:v}},
+     {schema:{type:"object",required:["score"],properties:{score:{type:"integer"}}}})),
+   {id:"先着",type:"race",lang:"expr",condition:"score >= 80",
+    onNone:"best",path:"score",cancel:"pending",inputs:MANY,start:{mode:"any"}},
+   {id:"out",type:"output"}],
+  [...[1,2,3].map(i=>({from:{node:"in",port:"out"},to:{node:"C"+i,port:"in"}})),
+   ...[1,2,3].map((i,ix)=>({from:{node:"C"+i,port:"out"},to:{node:"先着",port:"in"},position:ix})),
+   {from:{node:"先着",port:"out"},to:{node:"out",port:"in"}}])},
+{name:"17. 総合（ループ＋3Judge＋quorum＋点検＋条件分岐＋2つのOutput）",
  note:"1つは onError:value、1つは onError:skip。quorum は「どれか来たら」で数え直し、"
    +"点検は Run の成否とは別に数える。Retry と Resume がそのまま効く形。",
  spec:BASE([{id:"in",type:"input"},
@@ -7950,6 +8444,7 @@ m1#1/i0|m2#5/i1 … Map の中の Map
 | \`failed\` | 失敗した | 出ない | **できる** |
 | \`cancelled\` | 止められた（兄弟の失敗・緊急停止） | 出ない | 枝ごと Retry |
 | \`stopped\` | \`onError:"skip"\` / Map の1件の失敗 | 出ない | － |
+| \`waiting\` | 先着（race）が次の候補を待っている | まだ | － |
 
 **ノードの記録（nodeRuns）**
 
@@ -7960,6 +8455,7 @@ m1#1/i0|m2#5/i1 … Map の中の Map
 | \`error\` | 失敗した | 読めない |
 | \`cancelled\` | 止められた（部分出力は捨てる） | 読めない |
 | \`stopped\` | \`skip\` された | 読めない |
+| \`waiting\` | **先着（race）がまだ決まっていない** | 読めない |
 
 ## 30. \`<node>.out\` はどの回の値か
 
@@ -8285,7 +8781,9 @@ WebGPU が無い端末（古い iPhone Safari など）でも動く adapter。
 | \`compatWasmUrl\` | \`<base>compat/wllama.wasm\` |
 | \`moduleTimeoutMs\` | \`30000\`（本体そのものが読めないときの打ち切り） |
 
-**同時に載せるのは1つだけ（singleton）。**
+**同時に載せるのは adapter ごとに1つだけ（singleton）。**
+\`wllama\` の中で1つ、\`webllm\` の中で1つ。**この2つは別枠なので同時に載る**
+（「同時に載るモデルは1つ」ではない）。
 
 - 別の \`url\` / \`contextSize\` の wllama を使おうとすると、
   **先に載っていた方を \`exit()\` で片付けてから**新しい方を読む
@@ -8419,6 +8917,77 @@ generation:{maxTokens:160, temperature:0.7}}\` が入る。
 - \`onBadItem:"false"\` にすると、条件が読めない票を**反対票**として数える（既定はエラー）。
 - **早く決めたいとき**は \`start\` を \`{"mode":"any"}\` にする。届くたびに数え直し、
   \`decided:true\` になった時点でもう変わらない。その先を \`cond\` で \`decided == true\` で分ける。
+
+## 43.5 先着（race / First Accept）
+
+~~~
+{"id":"pick","type":"race","lang":"expr","condition":"value.score >= 80",
+ "onNone":"best","path":"score","cancel":"pending","total":3,"onBadItem":"error",
+ "inputs":{"in":{"type":"any","cardinality":"many"}},
+ "start":{"mode":"any"}}
+~~~
+
+**候補を届いた順に条件へ当てて、最初に通ったものの値そのものを流す。
+決まったら、まだ動いていない候補を止める。**
+
+| | 多数決（quorum） | 先着（race） |
+|---|---|---|
+| 返すもの | 集計の JSON（\`pass\` \`agree\` \`decided\` …） | **選ばれた候補の値そのもの** |
+| 見る順 | 入口の順（全部見る） | **届いた順**（通ったらそこで打ち切り） |
+| 残りの候補 | 動き続ける | **止める**（\`cancel:"pending"\`） |
+| 向いている場面 | 何人そろったかで判断したい | **1つあればよい。速く・安く済ませたい** |
+
+**動く順番（実測）**
+
+先着ノードは、**残りの候補が動く前に**順番を取る。だから「早く決める」ことができる。
+
+~~~
+in → C1 → 先着（C1 は不合格 → 待つ）
+   → C2 → 先着（C2 が合格 → C2 の値を流す・C3 を止める）
+   C3 は一度も動かない（apiCalls は 3 ではなく 2）
+~~~
+
+- 順番を先に取るのは **race だけ**。ほかの種類の並び順は変えていない。
+- 「もう動いてしまったノード」は止めない（記録を消さないため）。止まるのは**まだ始まっていない**候補だけ。
+
+**まだ決まらないとき**
+
+その実行は \`waiting\` になり、待ち行列から外れる。次の候補が届くと**新しい実行**が作られて、
+届いている候補を**ぜんぶ**もう一度見る（Delivery は消えないので取りこぼさない）。
+\`nodeRuns\` には \`status:"waiting"\` の記録が1回ぶんずつ残る（\`<node>.out\` からは読めない）。
+
+**止まる候補の決め方**
+
+その先着ノードへ辿れるノードのうち、**先着以外にも線を出しているものは止めない**
+（止めるとその先も道連れになるため）。図の⚠が「候補 X は先着以外にも線を出しているので止めない」と出す。
+
+**どれも通らなかったとき（\`onNone\`）**
+
+| 値 | 動き |
+|---|---|
+| \`"error"\`（既定） | \`RACE_NO_MATCH\` で失敗 |
+| \`"null"\` | \`null\` を流す |
+| \`"value"\` | \`onNoneValue\` を流す（書いていないと \`RACE_NO_VALUE\`） |
+| \`"best"\` | 届いた候補のうち \`path\` の数がいちばん大きいものを流す（\`reduce\` の \`best\` と同じ） |
+
+**「もう来ない」の数え方は多数決と同じ。**
+入力元が \`onError:"skip"\` などで止まっていたら、その分は \`terminal\` として数え、
+\`pending\` が 0 になった時点で \`onNone\` に進む（待ち続けない）。
+
+**記録**
+
+- 止めた候補 … \`nodeRuns\` に \`status:"cancelled"\` / \`cancelReason:"race_decided"\`。
+  **\`failed\` ではない**ので、Run は失敗しないし fail_fast も動かない。
+- 1回ぶんの中身 … 実行の記録の \`races\` に
+  \`{node, decided, by, winner, tried:[{index,from,pass,error}], arrived, terminal, pending, total, cancelled:[…]}\`。
+  \`by\` は \`"condition"\` / \`"none_null"\` / \`"none_value"\` / \`"none_best"\`。
+
+**既存の組み合わせでできること・できないこと**
+
+- 「全部動かしてから、いちばん良いものを選ぶ」なら **\`reduce\` の \`best\`** で足りる（先着は要らない）。
+- 「何人そろったか」で決めたいなら **\`quorum\`** を使う。
+- 先着にしかできないのは「**残りの候補を止めてモデルを呼ばないこと**」。それが要らないなら
+  \`cancel:"none"\` ではなく、素直に \`reduce\` か \`quorum\` を使う方が図が分かりやすい。
 
 ## 44. 点検（assert）
 
@@ -8693,8 +9262,9 @@ JSON を書くだけでは存在が分からないが、画面にあるもの。
 - **消えないようにする** … ブラウザに「消さないで」と申請する。
   **使用容量 / 上限容量 / 長期保存の申請状態**も出る。保存されるのは**モデルの重み**。
   ハーネスや Checkpoint は別の場所（localStorage）に入る。
-- **同時に端末に載せるモデルは1つ**。別のモデルのノードへ進むと、前のモデルを片付けてから読み込む
-  （小さい端末が落ちないようにするため）。CPU（wllama）は別枠なので、GPU 側とは別に扱う。
+- **常駐は adapter ごとに1つ**。GPU（\`webllm\`）の中で1つ、CPU（\`wllama\`）の中で1つ。
+  同じ adapter の別のモデルのノードへ進むと、前のモデルを片付けてから読み込む
+  （小さい端末が落ちないようにするため）。**GPU用とCPU用は別枠なので、その2つは同時に載る。**
 
 **接続の確認（上級者向け）**
 - Provider（mock / OpenAI互換ローカル / 内蔵LLM）を切り替えて、**接続とモデルの読み込みだけ**を試せる。
@@ -9960,7 +10530,7 @@ export async function CreateMLCEngine(model,opt){
   }
   const 止まった=ran.filter(x=>x.status!=="success"&&x.status!=="paused");
   ok("75 使い方の「詳しい動き」: 載せた完全な例が全部 検証を通り、mock で最後まで動く",
-    DEEP_EXAMPLES.length>=16&&bad.length===0&&止まった.length===0
+    DEEP_EXAMPLES.length>=17&&bad.length===0&&止まった.length===0
     &&HELP_DEEP.indexOf(DEEP_EXAMPLE_TEXT)>0
     &&/## 1\. 値が流れる仕組み/.test(HELP_DEEP)&&/## 57\. よく事故る組み合わせ/.test(HELP_DEEP));
   if(bad.length)out.push(`<span class="fail">↳</span>  ${esc(bad.slice(0,4).join(" / "))}`);
@@ -10116,6 +10686,181 @@ export async function CreateMLCEngine(model,opt){
     urlRequired&&defaults&&k1!==k2&&k1===k3&&onlySameAdapter&&vendor&&overridden);
   if(!(urlRequired&&defaults&&k1!==k2&&k1===k3&&onlySameAdapter&&vendor&&overridden))
     out.push(`<span class="fail">↳</span>  url=${urlRequired} def=${defaults} key=${k1!==k2}/${k1===k3} rel=${onlySameAdapter} vendor=${vendor}/${overridden}`);}
+ // 79 先着（race）: 届いた順に当てて最初に通ったものを流し、まだ動いていない候補を止める
+ {const SC={type:"object",required:["score"],properties:{score:{type:"integer"}}};
+  const mk=(scores,opt)=>{const ids=scores.map((_,i)=>"C"+(i+1));
+    return{metadata:{version:"1",layout:Object.fromEntries(ids.map((id,i)=>[id,{x:0,y:i*100}]))},
+      providers:{m:{adapter:"mock"}},
+      nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+        ...ids.map((id,i)=>({id,type:"llm",provider:"m",mock:{fixed:{score:scores[i]}},schema:SC})),
+        Object.assign({id:"pick",type:"race",lang:"expr",condition:"score >= 80",
+          inputs:{in:{type:"any",cardinality:"many"}},start:{mode:"any"}},opt||{}),
+        {id:"out",type:"output"}],
+      edges:[...ids.map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"}})),
+        ...ids.map((id,i)=>({from:{node:id,port:"out"},to:{node:"pick",port:"in"},position:i})),
+        {from:{node:"pick",port:"out"},to:{node:"out",port:"in"}}]};};
+  const canc=r=>Object.entries(r.nodeRuns||{})
+    .filter(([k,v])=>v.some(h=>h.status==="cancelled"&&h.cancelReason==="race_decided")).map(([k])=>k);
+  const wait=r=>(r.nodeRuns.pick||[]).filter(h=>h.status==="waiting").length;
+  const r2=await fullRun(mk([50,90,95]),{in:"Q"});          // 2番目で決まる
+  const r1=await fullRun(mk([90,95,99]),{in:"Q"});          // 1番目で決まる
+  const rE=await fullRun(mk([10,20,30]),{in:"Q"});          // どれも通らない（既定=error）
+  const rN=await fullRun(mk([10,20,30],{onNone:"null"}),{in:"Q"});
+  const rV=await fullRun(mk([10,20,30],{onNone:"value",onNoneValue:{score:0}}),{in:"Q"});
+  const rB=await fullRun(mk([10,30,20],{onNone:"best",path:"score"}),{in:"Q"});
+  const rC=await fullRun(mk([50,90,95],{cancel:"none"}),{in:"Q"});
+  const rA=await fullRun(mk([50,90,95],{start:{mode:"all"}}),{in:"Q"});
+  const rH=await fullRun(mk([50,90,95],{condition:"has(value)"}),{in:"Q"});
+  const ok2=r2.status==="success"&&r2.result.value.score===90&&r2.totals.apiCalls===2
+    &&JSON.stringify(canc(r2))==='["C3"]'&&wait(r2)===1
+    &&r2.races.length===2&&r2.races[1].by==="condition"&&r2.races[1].winner.from==="C2"
+    &&JSON.stringify(r2.races[1].cancelled)==='["C3"]';
+  const ok1=r1.status==="success"&&r1.result.value.score===90&&r1.totals.apiCalls===1
+    &&JSON.stringify(canc(r1))==='["C2","C3"]'&&wait(r1)===0;
+  const okE=rE.status==="failed"&&rE.errors[0].kind==="RACE_NO_MATCH"&&rE.totals.apiCalls===3;
+  const okN=rN.status==="success"&&rN.result.value===null;
+  const okV=rV.status==="success"&&rV.result.value.score===0;
+  const okB=rB.status==="success"&&rB.result.value.score===30&&rB.races.slice(-1)[0].by==="none_best";
+  const okC=rC.status==="success"&&rC.totals.apiCalls===3&&canc(rC).length===0;   // 止めない
+  const okA=rA.status==="success"&&rA.result.value.score===90&&rA.totals.apiCalls===3&&wait(rA)===0;
+  const okH=rH.status==="success"&&rH.result.value.score===50&&rH.totals.apiCalls===1;
+  // 検証: 条件が無い・onNone が不正・onNoneValue 無し・止め方が不正
+  const bad=sp=>validate(sp).length>0;
+  const okVal=bad(mk([50,90],{condition:""}))&&bad(mk([50,90],{onNone:"なにか"}))
+    &&bad(mk([50,90],{onNone:"value"}))&&bad(mk([50,90],{cancel:"どうにか"}));
+  // 先着以外にも線を出している候補は止めない
+  const spShare=mk([50,90,95]);
+  spShare.nodes.push({id:"控え",type:"output"});
+  spShare.edges.push({from:{node:"C3",port:"out"},to:{node:"控え",port:"in"}});
+  spShare.nodes.find(n=>n.id==="C3").routing={mode:"parallel",failurePolicy:"fail_fast"};
+  const rS=await fullRun(spShare,{in:"Q"});
+  const okShare=rS.status==="success"&&canc(rS).length===0&&rS.totals.apiCalls===3;
+  // start を書かなければ normalizeSpec が「どれか来たら」を埋める（隠さず JSON に残す）
+  const spNo=mk([50,90,95]);delete spNo.nodes.find(n=>n.id==="pick").start;
+  const changed=normalizeSpec(spNo);
+  const okNorm=changed===true&&spNo.nodes.find(n=>n.id==="pick").start.mode==="any";
+  // HSL に書き出して読み直しても同じ（set で往復する）
+  const spH=mk([50,90,95],{onNone:"best",path:"score",cancel:"pending",total:3});
+  spH.metadata.name="先着の例";                  // 名前が無いと往復で "untitled" が入る（HSL の仕様）
+  const hslDiff=hslRoundTripDiff(spH);          // 違いが無ければ null を返す
+  const okHSL=(hslDiff===null||hslDiff.length===0)
+    &&hslToSpec(specToHSL(spH)).nodes.find(n=>n.id==="pick").condition==="score >= 80";
+  ok("79 先着（race）: 届いた順に最初に通ったものを流し、まだ動いていない候補を止める（onNone 4種・cancel:none・start:all・HSL往復）",
+    ok2&&ok1&&okE&&okN&&okV&&okB&&okC&&okA&&okH&&okVal&&okShare&&okNorm&&okHSL);
+  if(!(ok2&&ok1&&okE&&okN&&okV&&okB&&okC&&okA&&okH&&okVal&&okShare&&okNorm&&okHSL))
+    out.push(`<span class="fail">↳</span>  2=${ok2} 1=${ok1} E=${okE} N=${okN} V=${okV} B=${okB} C=${okC} A=${okA} H=${okH} val=${okVal} share=${okShare} norm=${okNorm} hsl=${okHSL} ${esc(JSON.stringify(hslDiff).slice(0,200))}`);}
+ // 80 検証がモデルを呼ぶノード以外にも届く（以前は llm / tool 以外を素通りしていた）
+ {const mk=n=>({metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},n,{id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"x",port:"in"}},
+      {from:{node:"x",port:"out"},to:{node:"out",port:"in"}}]});
+  const hit=(n,re)=>validate(mk(n)).some(m=>re.test(m));
+  ok("80 検証: reduce / quorum / assert / map / race / calc の決まりが（llm でなくても）効く",
+    hit({id:"x",type:"reduce",op:"ないop"},/まとめ方\(op\)が不正/)
+    &&hit({id:"x",type:"quorum",lang:"expr",condition:""},/多数決の合格条件/)
+    &&hit({id:"x",type:"assert",asserts:[]},/点検する条件/)
+    &&hit({id:"x",type:"map"},/Mapの/)
+    &&hit({id:"x",type:"race",lang:"expr",condition:""},/先着の採用条件/)
+    &&hit({id:"x",type:"calc",lang:"expr",code:"1",onError:"value"},/onErrorValue/)
+    &&hit({id:"x",type:"module",module:"ないモジュール"},/modules に無い/)
+    &&hit({id:"x",type:"calc",lang:"expr",code:"1",
+      schema:{type:"object",properties:{"a b":{type:"string"}}}},/キー名に使えない文字/)
+    &&validate(mk({id:"x",type:"calc",lang:"expr",code:"1"})).length===0);}
+ // 81 先着: ループの中・Map の1件ごと・候補が止まったとき・待っている途中で Resume
+ {const MANY={in:{type:"any",cardinality:"many"}};
+  const SC={type:"object",required:["score"],properties:{score:{type:"integer"}}};
+  const canc=r=>Object.entries(r.nodeRuns||{})
+    .filter(([k,v])=>v.some(h=>h.cancelReason==="race_decided")).map(([k])=>k);
+  const tag=r=>(r.races||[]).map(x=>(x.decided?"決:"+x.by:"待")+"@"+(x.loopInstanceId||"root")+":"+x.iteration);
+  // (a) ループの中の先着。1周目はどちらも不合格→best、2周目で合格して B を止める
+  const spL={metadata:{version:"1",layout:{A:{x:0,y:0},B:{x:0,y:100}}},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},
+      {id:"lp",type:"loop",loop:{id:"lp",max:3,until:"pick.out.score >= 80"},routing:{failurePolicy:"fail_fast"}},
+      {id:"配る",type:"pass",inputs:MANY,start:{mode:"any"},routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+      {id:"A",type:"llm",provider:"m",mock:{scoreByIteration:[10,90]},schema:SC},
+      {id:"B",type:"llm",provider:"m",mock:{scoreByIteration:[20,95]},schema:SC},
+      {id:"pick",type:"race",lang:"expr",condition:"score >= 80",onNone:"best",path:"score",
+       inputs:MANY,start:{mode:"any"}},
+      {id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+      {from:{node:"lp",port:"out"},to:{node:"配る",port:"in"},loopRole:"body",position:1},
+      {from:{node:"配る",port:"out"},to:{node:"A",port:"in"}},
+      {from:{node:"配る",port:"out"},to:{node:"B",port:"in"}},
+      {from:{node:"A",port:"out"},to:{node:"pick",port:"in"},position:0},
+      {from:{node:"B",port:"out"},to:{node:"pick",port:"in"},position:1},
+      {from:{node:"pick",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+      {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}]};
+  const rL=await fullRun(spL,{in:"Q"});
+  const okL=rL.status==="success"&&rL.result.value.score===90&&rL.iterationTotal===2
+    &&rL.totals.apiCalls===3                      // 2周目の B は動かない（4回ではない）
+    &&JSON.stringify(canc(rL))==='["B"]'
+    &&JSON.stringify(tag(rL))==='["待@lp#1:1","決:none_best@lp#1:1","決:condition@lp#1:2"]';
+  // (b) Map の1件ごとに先着。件ごとに場が分かれる
+  const spM={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},{id:"src",type:"calc",lang:"js",code:'return [1,2,3];'},
+      {id:"m",type:"map",map:{id:"m"}},
+      {id:"配る",type:"pass",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+      {id:"A",type:"calc",lang:"js",code:'return {score: value*10};'},
+      {id:"B",type:"calc",lang:"js",code:'return {score: value*50};'},
+      {id:"pick",type:"race",lang:"expr",condition:"score >= 50",onNone:"best",path:"score",
+       inputs:MANY,start:{mode:"any"}},
+      {id:"end",type:"pass"},{id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"src",port:"in"}},
+      {from:{node:"src",port:"out"},to:{node:"m",port:"in"},position:0},
+      {from:{node:"m",port:"out"},to:{node:"配る",port:"in"},mapRole:"body"},
+      {from:{node:"配る",port:"out"},to:{node:"A",port:"in"}},
+      {from:{node:"配る",port:"out"},to:{node:"B",port:"in"}},
+      {from:{node:"A",port:"out"},to:{node:"pick",port:"in"},position:0},
+      {from:{node:"B",port:"out"},to:{node:"pick",port:"in"},position:1},
+      {from:{node:"pick",port:"out"},to:{node:"m",port:"in"},map:{id:"m"},position:1},
+      {from:{node:"m",port:"out"},to:{node:"end",port:"in"},mapRole:"done"},
+      {from:{node:"end",port:"out"},to:{node:"out",port:"in"}}]};
+  const rM=await fullRun(spM,{in:"Q"});
+  const okM=rM.status==="success"
+    &&JSON.stringify(rM.result.value)==='[{"score":50},{"score":100},{"score":150}]'
+    &&(rM.races||[]).length===6
+    &&JSON.stringify([...new Set((rM.races||[]).map(x=>x.loopInstanceId))])==='["m#1/i0","m#1/i1","m#1/i2"]';
+  // (c) 候補が onError:"skip" で止まったら「もう来ない」ぶんとして数え、待たずに onNone へ
+  const spS={metadata:{version:"1",layout:{C1:{x:0,y:0},C2:{x:0,y:100}}},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+      {id:"C1",type:"llm",provider:"m",mock:{fixed:{score:10}},schema:SC},
+      {id:"C2",type:"llm",provider:"m",mock:{fail:"generic"},onError:"skip"},
+      {id:"pick",type:"race",lang:"expr",condition:"score >= 80",onNone:"value",onNoneValue:"だめ",
+       inputs:MANY,start:{mode:"any"}},
+      {id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"C1",port:"in"}},
+      {from:{node:"in",port:"out"},to:{node:"C2",port:"in"}},
+      {from:{node:"C1",port:"out"},to:{node:"pick",port:"in"},position:0},
+      {from:{node:"C2",port:"out"},to:{node:"pick",port:"in"},position:1},
+      {from:{node:"pick",port:"out"},to:{node:"out",port:"in"}}]};
+  const rS=await fullRun(spS,{in:"Q"});
+  const last=(rS.races||[]).slice(-1)[0]||{};
+  const okS=rS.status==="success"&&rS.result.value==="だめ"
+    &&last.by==="none_value"&&last.terminal===1&&last.pending===0
+    &&JSON.stringify(last.terminalFrom)==='["C2"]';
+  // (d) 待っている途中で保存して、続きから再開できる
+  const spR={metadata:{version:"1",layout:{C1:{x:0,y:0},C2:{x:0,y:100},C3:{x:0,y:200}}},
+    providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+      ...[10,90,95].map((v,i)=>({id:"C"+(i+1),type:"llm",provider:"m",mock:{fixed:{score:v}},schema:SC})),
+      {id:"pick",type:"race",lang:"expr",condition:"score >= 80",inputs:MANY,start:{mode:"any"}},
+      {id:"out",type:"output"}],
+    edges:[...[1,2,3].map(i=>({from:{node:"in",port:"out"},to:{node:"C"+i,port:"in"}})),
+      ...[1,2,3].map((i,ix)=>({from:{node:"C"+i,port:"out"},to:{node:"pick",port:"in"},position:ix})),
+      {from:{node:"pick",port:"out"},to:{node:"out",port:"in"}}]};
+  const run=makeRun(spR,{in:"Q"});const store=memStore();startRun(spR,run);
+  for(let i=0;i<40;i++){const r=await processOneWorkItem(spR,run,store,null,null);
+    if(r.kind==="idle"||!run.workQueue.length)break;
+    if((run.nodeRuns.pick||[]).some(h=>h.status==="waiting"))break;}
+  const midWait=(run.nodeRuns.pick||[]).filter(h=>h.status==="waiting").length;
+  const cp=JSON.parse(JSON.stringify(run));
+  const r2=await resumeRun(spR,cp,store,null,null);
+  const okR=midWait===1&&r2.status==="success"&&r2.result.value.score===90
+    &&r2.totals.apiCalls===2&&JSON.stringify(canc(r2))==='["C3"]';
+  ok("81 先着: ループの中・Map の1件ごと・候補が止まったら数え直す・待っている途中で Resume",
+    okL&&okM&&okS&&okR);
+  if(!(okL&&okM&&okS&&okR))out.push(`<span class="fail">↳</span>  L=${okL} M=${okM} S=${okS} R=${okR}`
+    +` / ${esc(JSON.stringify(tag(rL)))} calls=${rL.totals.apiCalls} canc=${esc(JSON.stringify(canc(rL)))}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
