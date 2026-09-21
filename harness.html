@@ -51,6 +51,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .nd .ndp{font-size:10px;color:var(--ink);margin-top:3px;max-height:26px;overflow:hidden;font-family:ui-monospace,monospace;line-height:1.3}
 .nd.t-input{border-color:#8fb4d8}.nd.t-output{border-color:#8fc8a8}.nd.t-join{border-color:#d8c08f}.nd.t-llm{border-color:#b8a6d8}
 .nd.t-loop{border-color:#e0a06c}.nd.t-cond{border-color:#c9a227}.nd.t-calc{border-color:#6fb3a8}
+.nd.t-reduce{border-color:#6fa3b3}.nd.t-quorum{border-color:#b38f6f}.nd.t-assert{border-color:#9ab36f}
 .nd .ndm{font-size:9px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;font-family:ui-monospace,monospace}
 .nd.st-running{border-color:var(--accent);animation:pulse 1s infinite alternate}
 .nd.st-success{border-color:var(--ok);background:#f2fbf6}
@@ -1775,6 +1776,24 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(n.onTruncate&&!["error","use","retry"].includes(n.onTruncate))errs.push("途中で切れたときの扱いが不正: "+n.id);
     if(n.onBadOutput&&!["error","retry"].includes(n.onBadOutput))errs.push("形に合わなかったときの扱いが不正: "+n.id);
     if(n.onError&&!ERROR_POLICIES.includes(n.onError))errs.push("エラーのときの扱いが不正（error / value / null / skip）: "+n.id);
+    if(n.type==="reduce"){
+      if(!REDUCE_OP_SET.has(n.op||"sum"))errs.push(`まとめ方(op)が不正: ${n.id} — ${n.op}（${[...REDUCE_OP_SET].join(" / ")}）`);
+      if(n.path!=null&&typeof n.path!=="string")errs.push("見る場所(path)は文字で書く: "+n.id);}
+    if(n.type==="quorum"){
+      if(!String(n.condition||"").trim())errs.push("多数決の合格条件(condition)が無い: "+n.id);
+      else if(n.lang!=="js"){try{compileExpr(n.condition);}catch(_){errs.push("多数決の条件が読めない: "+n.id+" — "+n.condition);}}
+      if(n.required!=null&&n.required!==""&&!(Number(n.required)>=1))errs.push("多数決の required は1以上にする: "+n.id);
+      if(n.requiredRatio!=null&&n.requiredRatio!==""&&!(Number(n.requiredRatio)>0&&Number(n.requiredRatio)<=1))
+        errs.push("多数決の requiredRatio は 0より大きく1以下にする: "+n.id);
+      if(n.lang&&!["expr","js"].includes(n.lang))errs.push("多数決の条件の書き方が不正（式か JavaScript）: "+n.id);}
+    if(n.type==="assert"){
+      const as=Array.isArray(n.asserts)?n.asserts:null;
+      if(!as||!as.length)errs.push("点検する条件(asserts)が1つも無い: "+n.id);
+      else as.forEach((a,i)=>{
+        if(!a||!String(a.expr||"").trim())errs.push(`点検 ${i+1} の式が無い: ${n.id}`);
+        else if((a.lang||n.lang)!=="js"){try{compileExpr(a.expr);}catch(_){errs.push(`点検「${a.name||i+1}」の式が読めない: ${n.id} — ${a.expr}`);}}
+        if(a&&a.severity&&!ASSERT_SEVERITY.includes(a.severity))errs.push(`点検「${a.name||i+1}」の重さが不正（fail / warn / info）: ${n.id}`);});
+      if(n.onFail&&!["continue","error"].includes(n.onFail))errs.push("点検に落ちたときの扱いが不正（continue / error）: "+n.id);}
     if(n.onError==="value"&&n.onErrorValue===undefined)errs.push("エラーのとき出す値（onErrorValue）が書かれていない: "+n.id);
     if(n.schema&&typeof n.schema!=="object")errs.push("schemaはobject必須: "+n.id);
     if(n.schema&&n.schema.type==="object"&&n.schema.properties&&!Object.keys(n.schema.properties).length)
@@ -1933,7 +1952,7 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
 function edgeIdOf(spec,edge){const i=(spec.edges||[]).indexOf(edge);return i>=0?"e"+i:null;}
 function makeRun(spec,input){return{runId:"run_"+Date.now(),status:"running",resumable:true,
   nodeRuns:{},deliveries:[],executions:{},workQueue:[],branchGroups:{},cancelRequested:false,
-  loopInstances:{},loopSeq:0,execSeq:0,actSeq:0,delivSeq:0,routeSeq:0,
+  loopInstances:{},loopSeq:0,execSeq:0,actSeq:0,delivSeq:0,routeSeq:0,assertions:[],
   totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0,recoveredErrors:0,stoppedNodes:0},iterationTotal:0,
   startedAt:new Date().toISOString(),errors:[],result:null,input:input||{},vars:spec.vars||{},
   harnessVersion:(spec.metadata&&spec.metadata.version)||"0",specCanon:canonSpec(spec),specSnapshot:spec};}
@@ -2016,6 +2035,8 @@ function applyEdgeAndValidate(rv,edge,toNode,toPort){
    ふつう: 何が動いて何秒かかって何が入ってきたか。
    詳しく: それに加えて、モデルへ送った文そのものと、切り詰めていない値。 */
 const LOGOPT={verbose:false};
+const clockOf=t=>{const d=new Date(t);const z=(v,n)=>String(v).padStart(n||2,"0");
+  return `${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}.${z(d.getMilliseconds(),3)}`;};
 const capStr=(t,n)=>{t=String(t==null?"":t);const a=[...t];return a.length<=n?t:a.slice(0,n).join("")+`…（全${a.length}字）`;};
 const shortVal=v=>LOGOPT.verbose?JSON.stringify(v):capStr(JSON.stringify(v),200);
 /* いまの実行がどの枝・どのループの何周目か。並列やループを追うのに要る。 */
@@ -2202,6 +2223,134 @@ const JOIN_TEXT_OPS=["concat","markdown","csv","template"];
 const joinLabel=(node,i)=>(node.labels&&node.labels[i]!=null)?String(node.labels[i]):null;
 const joinText=v=>typeof v==="string"?v:JSON.stringify(v);
 const csvCell=v=>{const t=joinText(v);return /[",\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t;};
+/* ---- まとめる(reduce) / 多数決(quorum) / 点検(assert) ----
+   どれも「入ってきた値」だけで決まる。Runtime は書かれた式を読むだけで、何も推測しない。 */
+const REDUCE_OPS=[
+  {v:"sum",t:"合計"},{v:"average",t:"平均"},
+  {v:"min",t:"いちばん小さい数"},{v:"max",t:"いちばん大きい数"},
+  {v:"count",t:"個数"},
+  {v:"all",t:"全部あてはまる（true / false）"},{v:"any",t:"どれかあてはまる（true / false）"},
+  {v:"first",t:"最初のもの（要素をそのまま）"},{v:"last",t:"最後のもの（要素をそのまま）"},
+  {v:"best",t:"いちばん良いもの（要素をそのまま）"},{v:"worst",t:"いちばん悪いもの（要素をそのまま）"}];
+const REDUCE_OP_SET=new Set(REDUCE_OPS.map(x=>x.v));
+/* "a.b.c" をたどる。無ければ undefined（空文字にはしない＝「無い」と「空」を混ぜない） */
+function atPath(v,path){
+  const p=String(path==null?"":path).trim();
+  if(!p)return v;
+  let cur=v;
+  for(const k of p.split(".")){if(cur==null||typeof cur!=="object")return undefined;cur=cur[k];}
+  return cur;
+}
+const rvVal=x=>(x&&typeof x==="object"&&"type" in x&&"value" in x)?x.value:x;
+/* 入ってきたものを「並び」にする。
+   配列が1つ来ていればその中身、線が何本も来ていればその並び。どちらも同じに扱う。 */
+function listOfInputs(inputs){
+  const ks=Object.keys(inputs);
+  const first=ks.length?inputs[ks[0]]:undefined;
+  if(Array.isArray(first)){
+    const vs=first.map(rvVal);
+    return (vs.length===1&&Array.isArray(vs[0]))?vs[0]:vs;   // 配列が1つだけ来たとき
+  }
+  const v=rvVal(first);
+  return Array.isArray(v)?v:(v===undefined?[]:[v]);
+}
+const inEdgeCount=(spec,id)=>(spec.edges||[]).filter(e=>e.to.node===id&&!e.loop).length;
+function runReduce(node,inputs){
+  const items=listOfInputs(inputs);
+  const op=node.op||"sum",path=node.path||"";
+  const where=`${node.id} のまとめ`;
+  const at=(x,i)=>{
+    const v=atPath(x,path);
+    if(v===undefined&&path){
+      if(node.skipMissing)return undefined;
+      throw{code:"REDUCE_PATH_MISSING",retryable:false,
+        message:`${where}: ${i+1}番目に "${path}" が無い（来たのは ${showVal(x)}）。見る場所を変えるか「無いものは飛ばす」にする`};}
+    return v;};
+  const num=(x,i)=>{const v=at(x,i);if(v===undefined)return undefined;
+    const q=typeof v==="number"?v:Number(v);
+    if(!isFinite(q))throw{code:"REDUCE_NOT_NUMBER",retryable:false,
+      message:`${where}: ${i+1}番目の ${path||"値"} が数ではない（${showVal(v)}）`};
+    return q;};
+  if(op==="count")return rvOf(items.length);
+  if(!items.length)throw{code:"REDUCE_EMPTY",retryable:false,message:`${where}: まとめる値が1つも来ていない`};
+  if(op==="first")return rvOf(items[0]);
+  if(op==="last")return rvOf(items[items.length-1]);
+  if(op==="all"||op==="any"){
+    const bs=items.map((x,i)=>!!at(x,i));
+    return rvOf(op==="all"?bs.every(Boolean):bs.some(Boolean));}
+  if(op==="best"||op==="worst"){
+    let bi=-1,bv=0;
+    items.forEach((x,i)=>{const v=num(x,i);if(v===undefined)return;
+      if(bi<0||(op==="best"?v>bv:v<bv)){bi=i;bv=v;}});
+    if(bi<0)throw{code:"REDUCE_EMPTY",retryable:false,message:`${where}: 比べられる数が1つも無い`};
+    return rvOf(items[bi]);}
+  const ns=[];items.forEach((x,i)=>{const v=num(x,i);if(v!==undefined)ns.push(v);});
+  if(!ns.length)throw{code:"REDUCE_EMPTY",retryable:false,message:`${where}: 数として見られる値が1つも無い`};
+  if(op==="sum")return rvOf(ns.reduce((a,b)=>a+b,0));
+  if(op==="average")return rvOf(ns.reduce((a,b)=>a+b,0)/ns.length);
+  if(op==="min")return rvOf(Math.min.apply(null,ns));
+  if(op==="max")return rvOf(Math.max.apply(null,ns));
+  throw{code:"REDUCE_OP",retryable:false,message:`${where}: 知らないまとめ方 "${op}"`};
+}
+/* 多数決。届いた分だけで数え、あと何本来る予定かまで見て「もう決まったか」も返す。
+   「動き出す条件」を どれか来たら にしておくと、届くたびに数え直す＝早期確定になる。 */
+async function runQuorum(spec,run,ex,node,inputs){
+  const items=listOfInputs(inputs);
+  const where=`${node.id} の多数決`;
+  if(!String(node.condition||"").trim())
+    throw{code:"QUORUM_NO_CONDITION",retryable:false,message:`${where}: 合格の条件が書かれていない`};
+  const ctx=buildCtx(run,spec,ex.loopInstanceId);
+  const results=[];
+  for(let i=0;i<items.length;i++){
+    const locals=Object.assign(localsOf(rvOf(items[i]),ex),{index:i});
+    let pass=false,err=null;
+    try{pass=await evalCondition(node.condition,node.lang,ctx,locals,`${where}（${i+1}番目）`);}
+    catch(e){
+      if(node.onBadItem!=="false")throw e;      // 既定は止める。"false" にすると反対票として数える
+      err=errText(e);pass=false;}
+    results.push({index:i,pass,error:err,value:items[i]});
+  }
+  const total=(node.total!=null&&node.total!=="")?Number(node.total)
+    :Math.max(items.length,inEdgeCount(spec,node.id));
+  const required=(node.required!=null&&node.required!=="")?Number(node.required)
+    :(node.requiredRatio!=null&&node.requiredRatio!==""?Math.ceil(Number(node.requiredRatio)*total)
+      :Math.floor(total/2)+1);
+  const agree=results.filter(r=>r.pass).length;
+  const against=results.length-agree;
+  const remaining=Math.max(0,total-results.length);
+  const pass=agree>=required;
+  return rvOf({pass,decided:pass||(agree+remaining<required),
+    agree,against,arrived:results.length,total,required,results});
+}
+/* 点検（assert）。Run そのものの成否とは分けて数える（テスト用）。 */
+const ASSERT_SEVERITY=["fail","warn","info"];
+async function runAssert(spec,run,ex,node,inRV){
+  const list=Array.isArray(node.asserts)?node.asserts:[];
+  if(!list.length)throw{code:"ASSERT_EMPTY",retryable:false,message:`${node.id}: 点検する条件が1つも書かれていない`};
+  const ctx=buildCtx(run,spec,ex.loopInstanceId);
+  const locals=localsOf(inRV,ex);
+  const tests=[];
+  for(let i=0;i<list.length;i++){
+    const a=list[i]||{};
+    const name=String(a.name||("点検"+(i+1)));
+    const sev=ASSERT_SEVERITY.includes(a.severity)?a.severity:"fail";
+    let pass=false,err=null;
+    try{pass=await evalCondition(a.expr,a.lang||node.lang,ctx,locals,`${node.id} の「${name}」`);}
+    catch(e){pass=false;err=errText(e);}
+    tests.push({name,expr:String(a.expr||""),severity:sev,pass,error:err});
+  }
+  const failed=tests.filter(t=>!t.pass&&t.severity==="fail").length;
+  const warned=tests.filter(t=>!t.pass&&t.severity==="warn").length;
+  const out={total:tests.length,passed:tests.filter(t=>t.pass).length,
+    failed,warned,info:tests.filter(t=>!t.pass&&t.severity==="info").length,tests};
+  run.assertions=run.assertions||[];
+  run.assertions.push(Object.assign({node:node.id,execId:ex.execId,at:new Date().toISOString()},out));
+  if(failed&&node.onFail==="error")
+    throw{code:"ASSERT_FAILED",retryable:false,
+      message:`${node.id}: 点検に落ちた（${failed}件）: `+tests.filter(t=>!t.pass&&t.severity==="fail")
+        .map(t=>t.name+(t.error?"（"+t.error+"）":"")).join(" / ")};
+  return rvOf(out);
+}
 function runJoin(node,inputs){const items=(inputs.items||[]).map(rv=>rv?rv.value:null);
   const wrap=t=>(node.prefix?node.prefix+"\n\n":"")+t+(node.suffix?"\n\n"+node.suffix:"");
   if(node.op==="json_array")return{type:"json",value:items};
@@ -2294,6 +2443,13 @@ function failRun(run,nodeId,err,store,recordNodeFailure){run.status="failed";run
 const ERROR_POLICIES=["error","value","null","skip"];
 const errorPolicyOf=n=>((n&&n.onError)||"error");
 const ERROR_POLICY_TEXT={value:"決めた値を出して先へ進む",null:"null を出して先へ進む",skip:"このノードだけ止めて先へ進む"};
+/* この実行が「いつ始まって いつ終わったか」。失敗した回のぶんも残す。 */
+function attemptTimes(ex){
+  const a=(ex.attempts||[])[(ex.attempts||[]).length-1];
+  if(!a||!a.startedAt)return{};
+  const end=a.endedAt||Date.now();
+  return{startedAt:new Date(a.startedAt).toISOString(),endedAt:new Date(end).toISOString(),ms:end-a.startedAt};
+}
 function errRec(run,ex,err,handledAs){
   if(ex.attempts&&ex.attempts.length){const at=ex.attempts[ex.attempts.length-1];
     at.status="failed";at.error={code:err.code||"ERROR",stage:err.stage};at.endedAt=Date.now();}
@@ -2313,9 +2469,9 @@ function applyNodeErrorPolicy(run,spec,ex,node,err,store,log,at){
   if(pol==="skip"){
     run.totals.stoppedNodes=(run.totals.stoppedNodes||0)+1;
     ex.status="stopped";ex.errorKind=err.code||"ERROR";
-    (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,
+    (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push(Object.assign({execId:ex.execId,loopInstanceId:ex.loopInstanceId,
       iteration:ex.iteration,out:null,raw:null,usage,meta,status:"stopped",errorKind:err.code||"ERROR",
-      stage:err.stage,handledAs:"skip",used:(ex._used||[]).slice()});
+      stage:err.stage,handledAs:"skip",used:(ex._used||[]).slice()},attemptTimes(ex)));
     const gid=findBranchGroupId(run,ex);
     if(gid&&run.branchGroups[gid]&&run.branchGroups[gid].branches[ex.execId])
       run.branchGroups[gid].branches[ex.execId].status="stopped";
@@ -2327,9 +2483,9 @@ function applyNodeErrorPolicy(run,spec,ex,node,err,store,log,at){
   }
   const rv=(pol==="null")?rvOf(null):rvOf(node.onErrorValue===undefined?null:node.onErrorValue);
   run.totals.recoveredErrors=(run.totals.recoveredErrors||0)+1;
-  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,
+  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push(Object.assign({execId:ex.execId,loopInstanceId:ex.loopInstanceId,
     iteration:ex.iteration,out:rv,raw:JSON.stringify(rv.value),usage,meta:metaOf(rv,null),
-    status:"recovered",errorKind:err.code||"ERROR",stage:err.stage,handledAs:pol,used:(ex._used||[]).slice()});
+    status:"recovered",errorKind:err.code||"ERROR",stage:err.stage,handledAs:pol,used:(ex._used||[]).slice()},attemptTimes(ex)));
   ex._rv=rv;ex.recoveredFrom=err.code||"ERROR";
   if(node.type==="output")run.result=rv;
   log&&log("data",`\u25cb ${ex.nodeId}（エラーの代わりの値） \u2192 ${JSON.stringify(rv.value).slice(0,200)}`);
@@ -2341,7 +2497,7 @@ function handleExecutionFailure(run,spec,ex,err,store,log){
   ex.status="failed";ex.errorKind=err.code||"ERROR";
   if(ex.attempts&&ex.attempts.length){const at=ex.attempts[ex.attempts.length-1];at.status="failed";at.error={code:err.code||"ERROR",stage:err.stage};at.endedAt=Date.now();}
   countUsage(run,err&&err.usage);      // 失敗した呼び出しも回数とトークンに数える
-  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:null,raw:null,usage:(err&&err.usage)||null,meta:{len:null,tokens:(err&&err.usage&&err.usage.outputTokens)||null,bytes:null},status:"error",errorKind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable,used:(ex._used||[]).slice()});
+  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push(Object.assign({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:null,raw:null,usage:(err&&err.usage)||null,meta:{len:null,tokens:(err&&err.usage&&err.usage.outputTokens)||null,bytes:null},status:"error",errorKind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable,used:(ex._used||[]).slice()},attemptTimes(ex)));
   run.errors.push({node:ex.nodeId,execId:ex.execId,kind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable,message:errText(err),handledAs:"error",loopInstanceId:ex.loopInstanceId||null,iteration:ex.iteration||null,at:new Date().toISOString()});
   log&&log("err",`✗ ${ex.nodeId} ${ctxTag(ex)}: ${err.code||"ERROR"}${err.stage?"("+err.stage+")":""} ${err.message||""}`);
   log&&log("dim",`  受け取っていた線: ${usedTag(ex)}`);
@@ -2453,6 +2609,7 @@ async function processOneWorkItem(spec,run,store,log,ctl){
   if(wi.phase==="execute"){
     ex.status="running";
     ex.attempts=ex.attempts||[];const attempt={attempt:ex.attempts.length+1,status:"running",error:null,partialOutput:null,startedAt:Date.now(),endedAt:null};ex.attempts.push(attempt);
+    log&&log("dim",`  ${node.id} ${ctxTag(ex)} 開始 ${clockOf(attempt.startedAt)}`);
     let rv,usage;
     try{const inputs=resolveInputsForExec(run,spec,ex);
       if(node.type==="output"){const k=Object.keys(inputs)[0];let rvOut=(k!==undefined&&inputs[k]!==undefined)?inputs[k]:null;
@@ -2485,6 +2642,26 @@ async function processOneWorkItem(spec,run,store,log,ctl){
         rv=Array.isArray(v)?mergeToRV(v,node.merge):(v!==undefined&&v!==null?v:{type:"text",value:""});
         usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};}
       else if(node.type==="join"){rv=runJoin(node,inputs);usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};log&&log("node",`⋈ JOIN(${node.id}) → ${JSON.stringify(rv.value)}`);}
+      else if(node.type==="reduce"){
+        rv=runReduce(node,inputs);
+        usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};
+        log&&log("node",`Σ ${node.id}（${node.op||"sum"}${node.path?" / "+node.path:""}） → ${shortVal(rv.value)}`);}
+      else if(node.type==="quorum"){
+        rv=await runQuorum(spec,run,ex,node,inputs);
+        usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};
+        const q=rv.value;
+        log&&log("node",`⚖ ${node.id}（多数決） 賛成${q.agree}/反対${q.against}・届いた${q.arrived}/${q.total}・必要${q.required} → `
+          +`${q.pass?"合格":"不合格"}${q.decided?"（確定）":"（まだ決まらない）"}`);}
+      else if(node.type==="assert"){
+        const ka=Object.keys(inputs)[0];const va=ka!==undefined?inputs[ka]:undefined;
+        const inRV=Array.isArray(va)?mergeToRV(va,node.merge):(va!==undefined&&va!==null?va:{type:"text",value:""});
+        rv=await runAssert(spec,run,ex,node,inRV);
+        usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};
+        const a=rv.value;
+        log&&log(a.failed?"err":"ok",`✓ ${node.id}（点検） ${a.passed}/${a.total} 通過`
+          +(a.failed?` ・落ち ${a.failed}`:"")+(a.warned?` ・注意 ${a.warned}`:""));
+        a.tests.forEach(t=>{if(!t.pass)log&&log(t.severity==="fail"?"err":"dim",
+          `   ✗ ${t.name}: ${t.expr}${t.error?" — "+t.error:""}`);});}
       else{
         const res=await invokeNode(spec,run,node,inputs,ex,ctl,log);
         if(res.cancelled){handleExecutionCancelled(run,ex,run.cancelRequested?"user_requested":"provider_cancelled",res.partial,store,log);return{kind:"cancelled_exec"};}
@@ -2498,9 +2675,10 @@ async function processOneWorkItem(spec,run,store,log,ctl){
     (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rv,raw:JSON.stringify(rv.value),usage,meta:metaOf(rv,useUsage),status:"success",used:(ex._used||[]).slice(),ms:null});
     countUsage(run,usage);ex._rv=rv;
     {const at=ex.attempts[ex.attempts.length-1];at.status="completed";at.endedAt=Date.now();
-     const ms=at.endedAt-at.startedAt;const hist=run.nodeRuns[node.id];hist[hist.length-1].ms=ms;
+     const ms=at.endedAt-at.startedAt;const hist=run.nodeRuns[node.id];const last=hist[hist.length-1];
+     last.ms=ms;last.startedAt=new Date(at.startedAt).toISOString();last.endedAt=new Date(at.endedAt).toISOString();
      const tk=(usage&&(usage.inputTokens||usage.outputTokens))?` in=${usage.inputTokens||0} out=${usage.outputTokens||0}`:"";
-     log&&log("dim",`  ${node.id} ${ctxTag(ex)} ${ms}ms${tk} ← ${usedTag(ex)}`);
+     log&&log("dim",`  ${node.id} ${ctxTag(ex)} 終了 ${clockOf(at.startedAt)} → ${clockOf(at.endedAt)}（${ms}ms）${tk} ← ${usedTag(ex)}`);
      if(LOGOPT.verbose)log&&log("dim",`    値ぜんぶ: ${JSON.stringify(rv.value)}`);}
     run.workQueue[at]={execId:ex.execId,phase:"route"};if(store)store.save(run);return{kind:"executed"};
   }
@@ -2659,14 +2837,18 @@ function traceReport(spec,run,opt){
     return{id:n.id,type:n.type||"llm",provider:n.provider||(n.mock?"mock":null),model:n.model||null,
       startMode:startModeOf(n),onError:n.onError||"error",onTruncate:n.onTruncate||"error",onBadOutput:n.onBadOutput||"error",
       runs:hist.map(h=>({execId:h.execId||null,loopInstanceId:h.loopInstanceId||null,iteration:h.iteration||null,
-        status:h.status,ms:h.ms==null?null:h.ms,errorKind:h.errorKind||null,stage:h.stage||null,handledAs:h.handledAs||null,
+        status:h.status,startedAt:h.startedAt||null,endedAt:h.endedAt||null,
+        ms:h.ms==null?null:h.ms,errorKind:h.errorKind||null,stage:h.stage||null,handledAs:h.handledAs||null,
         usage:h.usage||null,chars:(h.meta&&h.meta.len)!=null?h.meta.len:null,
         used:h.used||[],value:h.out?traceVal(h.out.value,cap):null}))};
   });
   const executions=Object.values(run.executions).map(e=>({execId:e.execId,node:e.nodeId,status:e.status,
     activationId:e.activationId||null,loopInstanceId:e.loopInstanceId||null,iteration:e.iteration||null,
     branchGroupId:e.branchGroupId||null,errorKind:e.errorKind||null,cancelReason:e.cancelReason||null,
-    attempts:(e.attempts||[]).map(a=>({attempt:a.attempt,status:a.status,ms:(a.endedAt&&a.startedAt)?a.endedAt-a.startedAt:null,
+    attempts:(e.attempts||[]).map(a=>({attempt:a.attempt,status:a.status,
+      startedAt:a.startedAt?new Date(a.startedAt).toISOString():null,
+      endedAt:a.endedAt?new Date(a.endedAt).toISOString():null,
+      ms:(a.endedAt&&a.startedAt)?a.endedAt-a.startedAt:null,
       error:a.error||null,request:a.request||null,
       partialOutput:a.partialOutput?traceVal(a.partialOutput,cap||2000):null}))}));
   const deliveries=run.deliveries.map(d=>({id:d.deliveryId,arrival:d.arrival,edgeId:d.edgeId,
@@ -2682,6 +2864,7 @@ function traceReport(spec,run,opt){
       totals:run.totals,iterationTotal:run.iterationTotal,
       input:traceVal(run.input,cap),result:run.result?traceVal(run.result.value,cap):null},
     errors:run.errors||[],
+    assertions:run.assertions||[],
     notRun:whyNotRun(spec,run),
     nodes,executions,deliveries,
     workQueue:(run.workQueue||[]).map(w=>({execId:w.execId,phase:w.phase})),
@@ -3000,9 +3183,13 @@ const NODE_KINDS=[
   {type:"loop",label:"ループ",desc:"条件が来るまで同じところを何回も回す"},
   {type:"cond",label:"条件分岐",desc:"条件で行き先を選ぶ（式・JavaScript）"},
   {type:"calc",label:"計算",desc:"入ってきた値を計算する（式・JavaScript）"},
+  {type:"reduce",label:"まとめる",desc:"並んだ値を合計・平均・いちばん良いもの…にする"},
+  {type:"quorum",label:"多数決",desc:"何人が条件を満たしたら合格かを決める"},
+  {type:"assert",label:"点検",desc:"条件が成り立っているかを調べる（テスト用）"},
   {type:"output",label:"出力",desc:"最終結果を受け取る"}
 ];
-const TYPE_LABEL={input:"入力",llm:"LLM",join:"Join",loop:"ループ",cond:"条件分岐",calc:"計算",output:"出力",tool:"ツール"};
+const TYPE_LABEL={input:"入力",llm:"LLM",join:"Join",loop:"ループ",cond:"条件分岐",calc:"計算",
+  reduce:"まとめる",quorum:"多数決",assert:"点検",output:"出力",tool:"ツール"};
 const LANGS=[{v:"expr",t:"かんたんな式（+ - * / と比較）"},{v:"js",t:"JavaScript（この端末で動く）"}];
 const LANG_LABEL={expr:"式",js:"JavaScript"};
 /* ブラウザの中で動かせる言語は JavaScript だけ。ここは正直に書く（選べるように見せない）。 */
@@ -3975,6 +4162,56 @@ function openNodeSheet(id){
       +(n.lang==="js"?`<br>別スレッドで動かすので画面は止まらない。3秒で終わらなければ打ち切る。`
                      :`<br>使える関数: len() has() regex() count() min() max() json_parse() json_stringify()。他のノードの値は <code>ノード名.out.項目</code> でも読める。`)+`</div>`;
   }
+  if(n.type==="reduce"){
+    const srcs=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop).map(e=>e.from.node);
+    h+=fld("まとめ方",sel("op",n.op||"sum",REDUCE_OPS));
+    h+=fld("どこを見るか（空なら値そのもの）",txt("path",n.path,"score / 評価.点数 のような入れ子は a.b"));
+    h+=`<div class="mini">配列が1つ来ればその中身を、線が何本も来ればその並びをまとめる`
+      +`（いま入っているのは ${srcs.length?esc(srcs.join(" / ")):"まだ0本"}）。`
+      +`<b>いちばん良いもの／悪いもの</b>は、その要素をまるごと次へ渡す。`
+      +`<b>全部あてはまる／どれか</b>は true / false を返す。</div>`;
+    h+=fld("見る場所が無い要素",sel("__skipMissing",n.skipMissing?"1":"",
+      [{v:"",t:"エラーにする（既定）"},{v:"1",t:"飛ばして残りだけでまとめる"}]));
+  }
+  if(n.type==="quorum"){
+    const cnt=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop).length;
+    h+=fld("条件の書き方",sel("lang",n.lang||"expr",LANGS));
+    h+=fld("合格とみなす条件（1つずつに当てる）",txt("condition",n.condition,"value.score >= 80"));
+    h+=`<div class="mini">1つ分の値は <code>value</code>、何番目かは <code>index</code>。`
+      +`中身がJSONなら <code>score</code> のようにキー名もそのまま書ける。</div>`;
+    h+=`<div class="fld2">${fld("何人そろえば合格か",num("required",n.required,String(Math.floor((n.total||cnt||3)/2)+1)))}`
+      +`${fld("または割合（0.67 など）",num("requiredRatio",n.requiredRatio,"空でよい"))}</div>`;
+    h+=fld("全部で何人か（空なら入ってきた線の数）",num("total",n.total,String(cnt||"")));
+    h+=`<div class="mini">いま線は <b>${cnt}</b> 本。結果は `
+      +`<code>{"pass":true,"decided":true,"agree":2,"against":1,"arrived":3,"total":3,"required":2,"results":[…]}</code>。`
+      +`<br><b>早く決めたいとき</b>は、上の「このノードが動き出す条件」を<b>どれか来たら</b>にする。`
+      +`届くたびに数え直し、<code>decided</code> が true になった時点でもう結果は変わらない`
+      +`（条件分岐ノードで <code>decided == true</code> を見て先へ進める）。</div>`;
+    h+=fld("条件が読めない要素があったとき",sel("__onBadItem",n.onBadItem==="false"?"false":"",
+      [{v:"",t:"エラーにして止める（既定）"},{v:"false",t:"反対票として数える"}]));
+  }
+  if(n.type==="assert"){
+    const as=Array.isArray(n.asserts)?n.asserts:[];
+    h+=fld("式の書き方",sel("lang",n.lang||"expr",LANGS));
+    h+=`<div class="fld"><span>点検する条件</span><div>`;
+    if(!as.length)h+=`<div class="mini">まだ1つも無い。下の「＋ 点検を足す」で足す。</div>`;
+    as.forEach((a,i)=>{
+      h+=`<div class="ordrow"><b>${i+1}</b>`
+        +`<input type="text" data-as-name="${i}" value="${esc(a.name||"")}" placeholder="名前" style="flex:1;min-width:70px">`
+        +`<select data-as-sev="${i}">`+ASSERT_SEVERITY.map(v=>
+          `<option value="${v}"${(a.severity||"fail")===v?" selected":""}>${({fail:"落ちたら不合格",warn:"注意",info:"参考"})[v]}</option>`).join("")+`</select>`
+        +`<button data-asdel="${i}">削除</button></div>`
+        +`<div class="ordrow"><b></b><input type="text" data-as-expr="${i}" value="${esc(a.expr||"")}" placeholder="評価.out.score >= 8" style="flex:1"></div>`;
+    });
+    h+=`</div></div><div class="mini"><button id="asAdd">＋ 点検を足す</button>`
+      +`（1つ分の値は <code>value</code>、他のノードは <code>ノード名.out.項目</code>、`
+      +`何周目かは <code>iteration</code>）</div>`;
+    h+=fld("落ちたとき",sel("onFail",n.onFail||"continue",
+      [{v:"continue",t:"実行は続ける（結果だけ残す・既定）"},{v:"error",t:"このノードをエラーにする"}]));
+    h+=`<div class="mini">点検の合否は<b>Runの成否とは別</b>に数える。結果は`
+      +` <code>{"total":3,"passed":2,"failed":1,"tests":[…]}</code> として次へ流れ、`
+      +`実行ログと「実行の記録」にもまとめて残る。</div>`;
+  }
   if(n.type==="cond"){
     const cs=n.ports||[];
     const keys=incomingKeys(n);
@@ -4464,9 +4701,28 @@ function openNodeSheet(id){
      else{try{n.onErrorValue=JSON.parse(v);ev.style.borderColor="";}
        catch(_){ev.style.borderColor="var(--err)";return;}}
      syncFromCanvas();};}
+  {const sm=$("#sheetBody").querySelector('select[data-f="__skipMissing"]');
+   if(sm)sm.onchange=()=>{if(sm.value)n.skipMissing=true;else delete n.skipMissing;syncFromCanvas();};}
+  {const bi=$("#sheetBody").querySelector('select[data-f="__onBadItem"]');
+   if(bi)bi.onchange=()=>{if(bi.value)n.onBadItem="false";else delete n.onBadItem;syncFromCanvas();};}
+  {const writeAs=()=>{
+     const rows=[];
+     $("#sheetBody").querySelectorAll("[data-as-name]").forEach(el=>{
+       const i=+el.dataset.asName;
+       const g=f=>{const x=$("#sheetBody").querySelector(`[data-as-${f}="${i}"]`);return x?x.value:"";};
+       rows[i]={name:el.value,expr:g("expr"),severity:g("sev")||"fail"};});
+     n.asserts=rows.filter(Boolean);syncFromCanvas();};
+   $("#sheetBody").querySelectorAll("[data-as-name],[data-as-expr]").forEach(el=>el.oninput=writeAs);
+   $("#sheetBody").querySelectorAll("[data-as-sev]").forEach(el=>el.onchange=writeAs);
+   $("#sheetBody").querySelectorAll("[data-asdel]").forEach(b=>b.onclick=()=>{
+     const as=(n.asserts||[]).slice();as.splice(+b.dataset.asdel,1);n.asserts=as;
+     syncFromCanvas();openNodeSheet(n.id);});
+   const aa=$("#asAdd");if(aa)aa.onclick=()=>{
+     n.asserts=(n.asserts||[]).concat([{name:"点検"+((n.asserts||[]).length+1),expr:"",severity:"fail"}]);
+     syncFromCanvas();openNodeSheet(n.id);};}
   const opSel=$("#sheetBody").querySelector('select[data-f="op"]');
   if(opSel)opSel.addEventListener("change",()=>{
-    if(!JOIN_TEXT_OPS.includes(n.op)){delete n.prefix;delete n.suffix;}
+    if(n.type!=="reduce"&&!JOIN_TEXT_OPS.includes(n.op)){delete n.prefix;delete n.suffix;}
     syncFromCanvas();openNodeSheet(n.id);});
   const rm=$("#sheetBody").querySelector('[data-f="routing.mode"]');
   if(rm)rm.onchange=()=>{const v=rm.value;
@@ -4488,11 +4744,57 @@ function openNodeSheet(id){
     delete layout()[id];setSize(id,null);Ed.sel=null;closeSheet();syncFromCanvas();setHint("削除: "+id);
   };
 }
+/* ノードの名前を変えるとき／モジュールを展開するときに、
+   その名前が書かれている場所を1つ残らず書き換える。
+   ここが漏れると「条件式が知らないノードを見ている」が後から出る。 */
+function remapNodeIds(spec,map){
+  const to=id=>Object.prototype.hasOwnProperty.call(map,id)?map[id]:id;
+  const reOf=id=>new RegExp(`(^|${NOTID})${id.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}(?![A-Za-z0-9_$\u0080-\uFFFF])`,"g");
+  const pairs=Object.keys(map).filter(k=>k!==map[k]).map(k=>({re:reOf(k),to:map[k]}));
+  const fixExpr=t=>{
+    if(t==null||!pairs.length)return t;
+    let x=String(t);
+    for(const q of pairs){q.re.lastIndex=0;x=x.replace(q.re,(m,p1)=>p1+q.to);}
+    return x;};
+  for(const n of spec.nodes||[]){
+    n.id=to(n.id);
+    if(n.start&&Array.isArray(n.start.groups))
+      n.start.groups.forEach(g=>{if(Array.isArray(g.from))g.from=g.from.map(to);});
+    if(n.loop){if(n.loop.until)n.loop.until=fixExpr(n.loop.until);}
+    if(Array.isArray(n.ports))n.ports.forEach(c=>{if(c.expr)c.expr=fixExpr(c.expr);});
+    if(n.type==="calc"&&n.lang!=="js"&&n.code)n.code=fixExpr(n.code);
+    if(n.type==="quorum"&&n.lang!=="js"&&n.condition)n.condition=fixExpr(n.condition);
+    if(n.type==="assert"&&Array.isArray(n.asserts))
+      n.asserts.forEach(a=>{if(a&&a.expr&&(a.lang||n.lang)!=="js")a.expr=fixExpr(a.expr);});
+    if(n.prompt){const P=n.prompt;
+      const fixTpl=t=>t==null?t:String(t).replace(/\{\{\{\s*run_input\s*\.\s*([^\s{}]+?)\s*\}\}\}/g,
+        (m,id)=>`{{{run_input.${to(id)}}}}`);
+      if(P.system)P.system=fixTpl(P.system);
+      if(P.prefix)P.prefix=fixTpl(P.prefix);
+      if(P.suffix)P.suffix=fixTpl(P.suffix);
+      if(P.template&&P.template.value)P.template.value=fixTpl(P.template.value);}
+  }
+  for(const e of spec.edges||[]){
+    e.from.node=to(e.from.node);e.to.node=to(e.to.node);
+    if(e.if)e.if=fixExpr(e.if);
+    if(e.loop&&e.loop.until)e.loop.until=fixExpr(e.loop.until);
+  }
+  return spec;
+}
+/* ループIDの付け替え（ループノードと、そこへ戻る線の両方） */
+function remapLoopIds(spec,map){
+  const to=id=>Object.prototype.hasOwnProperty.call(map,id)?map[id]:id;
+  for(const n of spec.nodes||[])if(n.loop&&n.loop.id)n.loop.id=to(n.loop.id);
+  for(const e of spec.edges||[])if(e.loop&&e.loop.id)e.loop.id=to(e.loop.id);
+  return spec;
+}
 function renameNode(oldId,newId){
   newId=String(newId||"").trim();if(!newId||newId===oldId)return;
   if((Ed.spec.nodes||[]).some(n=>n.id===newId&&n!==nodeById(oldId)))return;
-  const n=nodeById(oldId);if(!n)return;n.id=newId;
-  (Ed.spec.edges||[]).forEach(e=>{if(e.from.node===oldId)e.from.node=newId;if(e.to.node===oldId)e.to.node=newId;});
+  const n=nodeById(oldId);if(!n)return;
+  // 条件式・動き出す条件・差し込み・ループIDまで、書かれている所を全部つれていく
+  if(n.loop&&n.loop.id===oldId){const m={};m[oldId]=newId;remapLoopIds(Ed.spec,m);}
+  {const m={};m[oldId]=newId;remapNodeIds(Ed.spec,m);}
   const L=layout();if(L[oldId]){L[newId]=L[oldId];delete L[oldId];}
   {const q=sizeOf(oldId);if(q.set){setSize(newId,{w:q.w,h:q.h});setSize(oldId,null);}}
   if(Ed.sel&&Ed.sel.kind==="node"&&Ed.sel.id===oldId)Ed.sel.id=newId;
@@ -4562,7 +4864,8 @@ function openAddSheet(){
   $("#sheetBody").querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{addNode(b.dataset.add);});  // addNode が続けて中身の編集を開く
 }
 function addNode(type){
-  const base={input:"in",llm:"llm",join:"jn",loop:"lp",cond:"cd",calc:"cl",output:"out"}[type]||"n";
+  const base={input:"in",llm:"llm",join:"jn",loop:"lp",cond:"cd",calc:"cl",
+    reduce:"rd",quorum:"qm",assert:"chk",output:"out"}[type]||"n";
   const id=newId(base);
   const n={id,type};
   if(type==="llm"){const provs=Object.keys(Ed.spec.providers||{});
@@ -4574,6 +4877,11 @@ function addNode(type){
   if(type==="cond"){n.lang="expr";n.routing={onNoMatch:"error"};
     n.ports=[{id:"c1",label:"10文字以上",expr:"len(value) >= 10"},{id:"c2",label:"それ以外",else:true}];}
   if(type==="calc"){n.lang="expr";n.code="inputs[0]";}
+  if(type==="reduce"){n.op="best";n.path="score";n.inputs={in:{type:"any",cardinality:"many"}};}
+  if(type==="quorum"){n.lang="expr";n.condition="value.score >= 80";n.required=2;
+    n.inputs={in:{type:"any",cardinality:"many"}};n.start={mode:"all"};}
+  if(type==="assert"){n.lang="expr";n.onFail="continue";
+    n.asserts=[{name:"点数が8以上",expr:"value.score >= 8",severity:"fail"}];}
   Ed.spec.nodes=Ed.spec.nodes||[];Ed.spec.nodes.push(n);
   const r=$("#cv").getBoundingClientRect();
   const c=toWorld(r.left+r.width/2,r.top+r.height/2);
@@ -6894,6 +7202,59 @@ export async function CreateMLCEngine(model,opt){
     &&r.status==="success"
     &&sys==="元の質問: 雨の日にできること"&&/周回 1$/.test(usr)
     &&warn.some(f=>f.level==="warn"&&f.node==="j"&&/三重の波かっこ/.test(f.message)));}
+ // 67 まとめる / 多数決 / 点検、と 開始・終了の時刻
+ {const mk=(id,name,score)=>({id,type:"llm",mock:{fixed:{name,score}},routing:{mode:"parallel",failurePolicy:"fail_fast"}});
+  const many={in:{type:"any",cardinality:"many"}};
+  const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    mk("A","A",90),mk("B","B",65),mk("C","C",82),
+    {id:"best",type:"reduce",op:"best",path:"score",inputs:many},
+    {id:"avg",type:"reduce",op:"average",path:"score",inputs:many},
+    {id:"vote",type:"quorum",lang:"expr",condition:"score >= 80",required:2,inputs:many},
+    {id:"chk",type:"assert",lang:"expr",onFail:"continue",inputs:many,
+     asserts:[{name:"最良は90",expr:"best.out.score == 90"},
+              {name:"合格",expr:"vote.out.pass == true"},
+              {name:"わざと落とす",expr:"best.out.score > 100",severity:"warn"}]},
+    {id:"out",type:"output"}],
+   edges:[
+    ...["A","B","C"].map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"}})),
+    ...["A","B","C"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"best",port:"in"},position:i})),
+    ...["A","B","C"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"avg",port:"in"},position:i})),
+    ...["A","B","C"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"vote",port:"in"},position:i})),
+    {from:{node:"best",port:"out"},to:{node:"chk",port:"in"},position:0},
+    {from:{node:"vote",port:"out"},to:{node:"chk",port:"in"},position:1},
+    {from:{node:"chk",port:"out"},to:{node:"out",port:"in"}}]};
+  const r=await fullRun(sp,{});
+  const last=id=>(r.nodeRuns[id]||[]).slice(-1)[0]||{};
+  const T=traceReport(sp,r,{});
+  const ta=(T.nodes.find(x=>x.id==="A")||{}).runs[0]||{};
+  ok("67 まとめる（best / average）・多数決・点検、ノードごとの開始と終了の時刻",
+    validate(sp).length===0&&r.status==="success"
+    &&JSON.stringify(last("best").out.value)==='{"name":"A","score":90}'
+    &&last("avg").out.value===79
+    &&last("vote").out.value.pass===true&&last("vote").out.value.agree===2
+      &&last("vote").out.value.against===1&&last("vote").out.value.decided===true
+    &&r.result.value.total===3&&r.result.value.passed===2&&r.result.value.failed===0&&r.result.value.warned===1
+    &&(r.assertions||[]).length===1&&r.assertions[0].node==="chk"
+    &&/^\d{4}-/.test(ta.startedAt||"")&&/^\d{4}-/.test(ta.endedAt||"")&&ta.ms!=null);}
+ // 68 ノードの名前を変えると、条件式・動き出す条件・差し込み・ループIDも一緒に変わる
+ {const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"lp",type:"loop",loop:{id:"lp",max:3,until:"点数.out.score >= 8"}},
+    {id:"点数",type:"llm",mock:{fixed:{score:9}},start:{mode:"custom",op:"or",groups:[{op:"or",from:["lp","in"]}]},
+     prompt:{template:{syntax:"mustache",mode:"interpolation_only",value:"{{{run_input.in}}} を見る"}}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"}},
+     {from:{node:"lp",port:"out"},to:{node:"点数",port:"in"},loopRole:"body"},
+     {from:{node:"点数",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"}},
+     {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}]};
+  remapLoopIds(sp,{lp:"輪"});remapNodeIds(sp,{lp:"輪","点数":"評価","in":"質問"});
+  const nl=sp.nodes.find(n=>n.id==="輪"),ne=sp.nodes.find(n=>n.id==="評価");
+  ok("68 名前を変えると 条件式・動き出す条件・差し込み・ループID も一緒に変わる",
+    nl.loop.id==="輪"&&nl.loop.until==="評価.out.score >= 8"
+    &&JSON.stringify(ne.start.groups[0].from)==='["輪","質問"]'
+    &&ne.prompt.template.value==="{{{run_input.質問}}} を見る"
+    &&sp.edges[2].loop.id==="輪"&&validate(sp).length===0);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
