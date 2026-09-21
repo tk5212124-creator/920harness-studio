@@ -49,7 +49,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .nd .ndb{font-size:10px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
 .nd .ndp{font-size:10px;color:var(--ink);margin-top:3px;max-height:26px;overflow:hidden;font-family:ui-monospace,monospace;line-height:1.3}
 .nd.t-input{border-color:#8fb4d8}.nd.t-output{border-color:#8fc8a8}.nd.t-join{border-color:#d8c08f}.nd.t-llm{border-color:#b8a6d8}
-.nd.t-loop{border-color:#e0a06c}
+.nd.t-loop{border-color:#e0a06c}.nd.t-cond{border-color:#c9a227}.nd.t-calc{border-color:#6fb3a8}
 .nd .ndm{font-size:9px;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;font-family:ui-monospace,monospace}
 .nd.st-running{border-color:var(--accent);animation:pulse 1s infinite alternate}
 .nd.st-success{border-color:var(--ok);background:#f2fbf6}
@@ -271,6 +271,81 @@ function evalExpr(ast,ctx){
 const compileExpr=s=>parseE(tokenize(s));
 function evalBool(src,ctx){const v=evalExpr(compileExpr(src),ctx);
   if(v!==true&&v!==false)throw{code:"EXPRESSION_EVALUATION_ERROR",message:`式の答えが true/false にならない: "${src}"`};return v;}
+/* 値を返す式（計算ノード用）。どこで外れたかを1行で言う */
+function evalValAt(src,ctx,where){
+  try{return evalExpr(compileExpr(src),ctx);}
+  catch(e){throw{code:e.code||"EXPRESSION_EVALUATION_ERROR",retryable:false,
+    message:`${where} の式が読めない: "${src}"`+(e.message?` — ${e.message}`:"")};}
+}
+/* ---- プログラミングモード（JavaScript） ----
+   別スレッド（Worker）で走らせる。画面と切り離してあるので、
+   書いたコードが無限ループしても画面は止まらず、決めた時間で打ち切れる。
+   Worker が作れない端末では同じ画面の中で走らせる（その場合は打ち切れない＝正直に言う）。 */
+const JS_TIMEOUT_MS=3000;
+let jsWorker=null,jsWorkerBroken=false,jsSeq=0;
+function jsWorkerSrc(){
+  return `onmessage=function(e){var d=e.data;try{`
+    +`var f=Function.apply(null,d.names.concat(['"use strict";'+d.code]));`
+    +`var v=f.apply(null,d.vals);`
+    +`postMessage({id:d.id,ok:true,undef:v===undefined,v:v===undefined?null:v});`
+    +`}catch(err){postMessage({id:d.id,ok:false,err:String((err&&err.message)||err)});}};`;
+}
+function ensureJSWorker(){
+  if(jsWorker||jsWorkerBroken)return jsWorker;
+  try{jsWorker=new Worker(URL.createObjectURL(new Blob([jsWorkerSrc()],{type:"text/javascript"})));}
+  catch(e){jsWorkerBroken=true;jsWorker=null;}
+  return jsWorker;
+}
+function runJSHere(code,scope,where){          // Workerが作れない端末向け（打ち切れない）
+  let v;
+  try{v=new Function(...Object.keys(scope),'"use strict";'+code)(...Object.values(scope));}
+  catch(e){throw{code:"CODE_RUNTIME_ERROR",retryable:false,message:`${where}: 途中で止まった — ${errText(e)}`};}
+  if(v===undefined)throw{code:"CODE_NO_RETURN",retryable:false,message:`${where}: return で値を返していない`};
+  return v;
+}
+async function runJS(code,scope,where,ms){
+  const w=ensureJSWorker();
+  if(!w)return runJSHere(code,scope,where);
+  const id=++jsSeq,limit=ms||JS_TIMEOUT_MS;
+  let clean;
+  try{
+    return await new Promise((res,rej)=>{
+      const t=setTimeout(()=>{clean();
+        try{jsWorker.terminate();}catch(_){}
+        jsWorker=null;                        // 次回は作り直す
+        rej({code:"CODE_TIMEOUT",retryable:false,
+          message:`${where}: ${limit/1000}秒で終わらなかったので打ち切った（終わらない繰り返しを書いていないか）`});},limit);
+      const on=ev=>{const d=ev.data||{};if(d.id!==id)return;clean();
+        if(!d.ok)rej({code:"CODE_RUNTIME_ERROR",retryable:false,message:`${where}: 途中で止まった — ${d.err}`});
+        else if(d.undef)rej({code:"CODE_NO_RETURN",retryable:false,message:`${where}: return で値を返していない`});
+        else res(d.v);};
+      clean=()=>{clearTimeout(t);if(jsWorker)jsWorker.removeEventListener("message",on);};
+      w.addEventListener("message",on);
+      try{w.postMessage({id,code,names:Object.keys(scope),vals:Object.values(scope)});}
+      catch(e){clean();rej({code:"CODE_RUNTIME_ERROR",retryable:false,message:`${where}: 値を渡せない — ${errText(e)}`});}
+    });
+  }catch(e){
+    if(e&&e.code)throw e;
+    throw{code:"CODE_RUNTIME_ERROR",retryable:false,message:`${where}: ${errText(e)}`};
+  }
+}
+/* コード／式から使える名前。来た値そのもの（value）と、それがJSONならその項目、あと周回の回数。 */
+function localsOf(rv,ex){
+  const o={value:rv?rv.value:null,iteration:(ex&&ex.iteration)||1};
+  const v=rv?rv.value:null;
+  if(v&&typeof v==="object"&&!Array.isArray(v))for(const[k,x]of Object.entries(v))if(/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k)&&!(k in o))o[k]=x;
+  return o;
+}
+/* 条件を1つ調べる（式 / JavaScript のどちらでも）。true か false しか返さない。 */
+async function evalCondition(src,lang,ctx,locals,where){
+  if(lang==="js"){
+    const v=await runJS(src,Object.assign({},locals),where);
+    if(v!==true&&v!==false)throw{code:"CODE_RETURN_TYPE",retryable:false,
+      message:`${where}: return は true か false にする（返ってきたのは ${showVal(v)}）`};
+    return v;
+  }
+  return evalBoolAt(src,{root:Object.assign({},ctx.root,locals)},where);
+}
 /* 式が読めないときに、どの式のどこで外れたかを1行で言う */
 function evalBoolAt(src,ctx,where){
   try{return evalBool(src,ctx);}
@@ -711,6 +786,23 @@ function reviewSpec(spec){
     else if(noMax)add("info","最大回数が無い。打ち切り条件が真にならないと止まらない（緊急停止で止める）",n.id);
     if(!back.length)add("warn","戻り線が無いので1回しか流れない。本体の最後のノードからこのノードへつなぐ",n.id);
     if(!edges.some(e=>e.from.node===n.id&&e.loopRole==="done"))add("info","「抜けたあと」の線が無い。条件が真になった時点で終わる（出力に届かない）",n.id);
+  }
+  for(const n of nodes){
+    if(n.type==="cond"){
+      const cs=n.ports||[];
+      if(!cs.some(c=>c&&c.else))add("warn","「それ以外」の出口が無い。どの条件にも当たらないと失敗する",n.id);
+      const last=cs[cs.length-1];
+      if(cs.some(c=>c&&c.else)&&last&&!last.else)add("info","「それ以外」は一番下に置くと分かりやすい（上にあると下の条件が使われない）",n.id);
+      for(const c of cs)if(c&&!edges.some(e=>e.from.node===n.id&&(e.from.port||"out")===c.id))
+        add("warn",`出口「${c.label||c.id}」から線が出ていない（当たっても行き先が無い）`,n.id);
+      if(n.lang!=="js")for(const c of cs)if(c&&c.expr)checkExpr(c.expr,`${n.id} の「${c.label||c.id}」`);
+    }
+    if(n.type==="calc"){
+      if(n.lang==="js")add("info","JavaScript は別スレッドで動かす。3秒で終わらなければ打ち切る",n.id);
+      else if(n.code)checkExpr(n.code,`${n.id} の計算`);
+      const ins=edges.filter(e=>e.to.node===n.id&&!e.loop);
+      if(!ins.length)add("warn","入ってくる線が無いので、計算に使う値が無い",n.id);
+    }
   }
   // 使われていない provider
   const used=new Set(nodes.map(n=>n.provider).filter(Boolean));
@@ -1507,7 +1599,7 @@ function normalizeOutRouting(spec){
   const bySrc={};
   for(const e of spec.edges||[])(bySrc[e.from.node]=bySrc[e.from.node]||[]).push(e);
   for(const[id,es]of Object.entries(bySrc)){
-    const n=byId[id];if(!n||n.type==="loop"||n.type==="cond")continue;
+    const n=byId[id];if(!n||n.type==="loop"||n.type==="cond")continue;      // 出口が役割/条件で分かれる
     if(es.some(e=>e.if||e.else))continue;
     if(es.filter(e=>!e.loop&&!e.if&&!e.else).length<2)continue;
     const r=n.routing||{};
@@ -1567,7 +1659,9 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
      const fp=e.from.port||"out";
      if(fn&&fp!=="out"&&!outPortsOf(fn).some(x=>x.id===fp))
        errs.push(`出口 "${fp}" が ${e.from.node} に無い（ノード編集で出口を作る）`);
-     if(e.pick){try{parsePick(e.pick);}catch(_){errs.push("取り出し方が読めない: "+e.pick+" @ "+e.from.node+" → "+e.to.node);}}}
+     if(e.pick){try{parsePick(e.pick);}catch(_){errs.push("取り出し方が読めない: "+e.pick+" @ "+e.from.node+" → "+e.to.node);}}
+     if(e.as!=null&&!okVarName(e.as))
+       errs.push(`計算で使う名前に使えない（英数字で始め、JavaScriptの予約語は使えない）: "${e.as}" @ ${e.from.node} → ${e.to.node}`);}
     if(e.loopRole&&typeOf[e.from.node]!=="loop")errs.push("出口の役割はループノードの線だけに付けられる: "+e.from.node);
     if(e.loop&&typeOf[e.to.node]==="loop"){
       // ループノードへの戻り線。何回まわるか・いつ抜けるかはノード側が持つので、線には何も書かない
@@ -1594,7 +1688,11 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
   {const exprs=[];
    (spec.edges||[]).forEach(e=>{if(e.if)exprs.push({src:e.if,where:`${e.from.node} → ${e.to.node} の if`});
      if(e.loop&&e.loop.until)exprs.push({src:e.loop.until,where:`loop[${e.loop.id}] の until`});});
-   (spec.nodes||[]).forEach(n=>{if(n.type==="loop"&&n.loop&&n.loop.until)exprs.push({src:n.loop.until,where:`${n.id} の打ち切り条件`});});
+   (spec.nodes||[]).forEach(n=>{
+     if(n.lang==="js")return;                       // JavaScript の中は静的には読まない
+     if(n.type==="loop"&&n.loop&&n.loop.until&&n.loop.lang!=="js")exprs.push({src:n.loop.until,where:`${n.id} の打ち切り条件`});
+     if(n.type==="cond")(n.ports||[]).forEach(c=>{if(c&&c.expr)exprs.push({src:c.expr,where:`${n.id} の「${c.label||c.id}」`});});
+     if(n.type==="calc"&&n.code)exprs.push({src:n.code,where:`${n.id} の計算`});});
    const re=/\b([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*out\s*\.\s*([A-Za-z0-9_$]+)/g;
    const seen=new Set();
    for(const{src,where}of exprs){let m;re.lastIndex=0;
@@ -1641,10 +1739,26 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
       else seen.add(q.id);
       if(q&&q.pick){try{parsePick(q.pick);}catch(_){errs.push(`出口の取り出し方が読めない: ${n.id}.${q.id} = ${q.pick}`);}}});});
   spec.nodes.forEach(n=>{
+    if(n.type==="calc"){
+      if(n.lang&&!["expr","js"].includes(n.lang))errs.push(`計算のしかたが不正（式か JavaScript）: ${n.id}`);
+      if(!String(n.code||"").trim())errs.push("計算の中身が空: "+n.id);
+      else if(n.lang!=="js"){try{compileExpr(n.code);}catch(_){errs.push(`計算の式が読めない: ${n.id} — ${n.code}`);}}
+    }
+    if(n.type==="cond"){
+      const cs=n.ports||[];
+      if(!cs.length)errs.push("条件が1つも無い: "+n.id);
+      if(cs.filter(c=>c.else).length>1)errs.push("「それ以外」が2つ以上ある: "+n.id);
+      cs.forEach(c=>{
+        if(!c)return;
+        if(!c.else&&!String(c.expr||"").trim())errs.push(`条件が空: ${n.id}.${c.id}`);
+        else if(!c.else&&n.lang!=="js"){try{compileExpr(c.expr);}catch(_){errs.push(`条件の式が読めない: ${n.id}.${c.id} — ${c.expr}`);}}});
+      if(n.routing&&n.routing.onNoMatch&&!["error","stop"].includes(n.routing.onNoMatch))errs.push("どれにも当たらないときの指定が不正: "+n.id);
+    }
     if(n.type!=="loop")return;
     const cfg=n.loop||{};
     if(cfg.max!=null&&cfg.max!==""&&!(Number(cfg.max)>=1))errs.push("ループの最大回数が1以上でない: "+n.id);
-    if(cfg.until){try{compileExpr(cfg.until);}catch(_){errs.push("ループの打ち切り条件が読めない: "+n.id+" — "+cfg.until);}}
+    if(cfg.lang&&!["expr","js"].includes(cfg.lang))errs.push("ループの条件の書き方が不正（式か JavaScript）: "+n.id);
+    if(cfg.until&&cfg.lang!=="js"){try{compileExpr(cfg.until);}catch(_){errs.push("ループの打ち切り条件が読めない: "+n.id+" — "+cfg.until);}}
     const outs=(spec.edges||[]).filter(e=>e.from.node===n.id);
     const body=outs.filter(e=>e.loopRole!=="done"),fin=outs.filter(e=>e.loopRole==="done");
     if(!body.length)errs.push("ループの繰り返す先が無い（ループノードから線を1本出す）: "+n.id);
@@ -1654,7 +1768,7 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(!n.template||n.template.syntax!=="mustache")errs.push("template.syntax=mustache必須: "+n.id);
     if(!n.template||n.template.mode!=="interpolation_only")errs.push("template.mode=interpolation_only必須: "+n.id);}});
   Object.entries(bySrc).forEach(([src,es])=>{const node=spec.nodes.find(n=>n.id===src);const mode=node&&node.routing&&node.routing.mode;
-    if(node&&node.type==="loop")return;        // 出口は「繰り返す先 / 抜けたあと」で分かれている
+    if(node&&(node.type==="loop"||node.type==="cond"))return;   // 出口が役割/条件で分かれるノード
     const hasCond=es.some(e=>e.if||e.else);const hasPlainFanout=es.filter(e=>!e.if&&!e.else&&!e.loop).length>0;
     if(mode==="parallel"&&hasCond)errs.push("routing.mode=parallelなのに条件Edge(if/else)がある: "+src);
     // 無条件の出口が2本以上あるのに、どう流すかが書かれていない
@@ -1755,6 +1869,32 @@ function resolveInputsForExec(run,spec,ex){const node=spec.nodes.find(n=>n.id===
       inputs[port]=picked.map(d=>{const e=(spec.edges||[])[parseInt(String(d.edgeId).slice(1))];return applyEdgeAndValidate(d.runtimeValue,e||{},node,port);});}
     else{const first=ds[0];if(first){const e=(spec.edges||[])[parseInt(String(first.edgeId).slice(1))];inputs[port]=applyEdgeAndValidate(first.runtimeValue,e||{},node,port);}else inputs[port]=undefined;}}
   return inputs;}
+/* 計算ノードで使える名前。入ってきた線ごとに1つ（名前は線に書いてある as、無ければ項目名かノード名）。
+   JavaScript の予約語（in / class / return など）はそのまま名前にできないので in1, in2… にする。 */
+const JS_RESERVED=new Set(("break case catch class const continue debugger default delete do else enum export extends "
+ +"false finally for function if implements import in instanceof interface let new null package private protected public "
+ +"return static super switch this throw true try typeof var void while with yield await arguments eval undefined NaN Infinity")
+ .split(" "));
+const okVarName=v=>/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(String(v||""))&&!JS_RESERVED.has(String(v));
+const varNameOf=(e,i)=>{
+  for(const raw of [e.as,e.pick,e.from.node])if(okVarName(raw))return String(raw);
+  return "in"+(i+1);};
+function calcScope(run,spec,ex,node){
+  const conf=isConfluenceNode(spec,ex.nodeId);
+  const es=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&!e.loop)
+    .sort((a,b)=>(a.position||0)-(b.position||0));
+  const scope={},list=[];
+  es.forEach((e,i)=>{
+    const eid=edgeIdOf(spec,e);
+    const ds=deliveryPool(node,ex,run.deliveries.filter(d=>d.edgeId===eid&&d.toNodeId===ex.nodeId&&deliveryMatchesExec(d,ex,conf)));
+    const d=ds[ds.length-1];
+    const v=d?applyEdgeAndValidate(d.runtimeValue,e,node,e.to.port||"in"):undefined;
+    const val=v?v.value:null;
+    scope[varNameOf(e,i)]=val;list.push(val);
+  });
+  scope.inputs=list;scope.iteration=ex.iteration||1;
+  return scope;
+}
 function execInputsReady(run,spec,ex){const node=spec.nodes.find(n=>n.id===ex.nodeId);
   const conf=isConfluenceNode(spec,ex.nodeId);
   // ループノードの2周目以降は、戻り線が1本届けば回る（最初の入力を毎周待たない）
@@ -2004,6 +2144,20 @@ async function processOneWorkItem(spec,run,store,log,ctl){
         const k=Object.keys(inputs)[0];const v=k!==undefined?inputs[k]:undefined;
         rv=Array.isArray(v)?mergeToRV(v,node.merge):(v!==undefined&&v!==null?v:{type:"text",value:""});
         usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};}
+      else if(node.type==="calc"){
+        const scope=calcScope(run,spec,ex,node);
+        const where=`${node.id} の計算`;
+        if(!String(node.code||"").trim())throw{code:"CODE_EMPTY",retryable:false,message:`${where}: 中身が書かれていない`};
+        const v=(node.lang==="js")
+          ? await runJS(node.code,scope,where)
+          : evalValAt(node.code,{root:Object.assign({},buildCtx(run,spec,ex.loopInstanceId).root,scope)},where);
+        rv=rvOf(v===undefined?null:v);
+        usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};
+        log&&log("node",`Σ ${node.id}（${node.lang==="js"?"JavaScript":"式"}） → ${JSON.stringify(rv.value).slice(0,140)}`);}
+      else if(node.type==="cond"){
+        const k=Object.keys(inputs)[0];const v=k!==undefined?inputs[k]:undefined;
+        rv=Array.isArray(v)?mergeToRV(v,node.merge):(v!==undefined&&v!==null?v:{type:"text",value:""});
+        usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};}
       else if(node.type==="join"){rv=runJoin(node,inputs);usage={apiCalls:0,inputTokens:0,outputTokens:0,cost:null};log&&log("node",`⋈ JOIN(${node.id}) → ${JSON.stringify(rv.value)}`);}
       else{
         const res=await invokeNode(spec,run,node,inputs,ex,ctl,log);
@@ -2021,7 +2175,7 @@ async function processOneWorkItem(spec,run,store,log,ctl){
     run.workQueue[0]={execId:ex.execId,phase:"route"};if(store)store.save(run);return{kind:"executed"};
   }
   let outcome;
-  try{outcome=routeExec(spec,run,ex,byId,loopEntries,log);}catch(err){
+  try{outcome=await routeExec(spec,run,ex,byId,loopEntries,log);}catch(err){
     failRun(run,ex.nodeId,err,store,false);return{kind:"failed"};}
   if(outcome.kind==="paused"){run.status="paused";if(store)store.save(run);return{kind:"paused"};}
   run.workQueue.shift();ex.status="completed";if(store)store.save(run);return{kind:"routed"};
@@ -2032,7 +2186,7 @@ async function processOneWorkItem(spec,run,store,log,ctl){
    最大回数を空にすると止まらない（無限ループ）。止めるのは「緊急停止」。 */
 const loopBodyEdges=(spec,id)=>(spec.edges||[]).filter(e=>e.from.node===id&&e.loopRole!=="done");
 const loopDoneEdges=(spec,id)=>(spec.edges||[]).filter(e=>e.from.node===id&&e.loopRole==="done");
-function routeLoopNode(spec,run,ex,node,log){
+async function routeLoopNode(spec,run,ex,node,log){
   const cfg=node.loop||{};const lid=loopIdOf(node);
   let inst=ex.loopInstanceId;
   if(!inst||!run.loopInstances[inst]||run.loopInstances[inst].loopId!==lid){
@@ -2042,7 +2196,7 @@ function routeLoopNode(spec,run,ex,node,log){
   const done=st.iteration;                                  // ここまでに本体へ流した回数
   const max=(cfg.max==null||cfg.max==="")?null:Number(cfg.max);
   let untilTrue=false;
-  if(cfg.until&&done>=1)untilTrue=evalBoolAt(cfg.until,buildCtx(run,spec,inst),`${node.id} の打ち切り条件`);
+  if(cfg.until&&done>=1)untilTrue=await evalCondition(cfg.until,cfg.lang,buildCtx(run,spec,inst),localsOf(ex._rv,ex),`${node.id} の打ち切り条件`);
   const hitMax=max!=null&&done>=max;
   log&&log("loop",`↻ ${node.id}[${lid}] ${done}回まわった${max!=null?"/"+max:"（上限なし）"} 打ち切り=${untilTrue}`);
   const body=loopBodyEdges(spec,node.id),fin=loopDoneEdges(spec,node.id);
@@ -2066,9 +2220,37 @@ function routeEdgeSet(spec,run,ex,node,es,ctx,log,label){
     if(es.length>1&&nx){nx.branchGroupId=act;run.branchGroups[act].branches[nx.execId]={rootExecId:nx.execId,nodeId:e.to.node,status:"running"};}}
   log&&log("route",`↳ ${label}: ${es.map(e=>e.to.node).join(", ")}`);
   return{kind:"completed"};}
-function routeExec(spec,run,ex,byId,loopEntries,log){
+/* ---- 条件分岐ノード ----
+   出口が「条件」そのもの。上から順に調べて、最初に当たった出口だけに流す。
+   最後に「それ以外」を置けば必ずどこかに流れる。式でも JavaScript でも書ける。 */
+async function routeCondNode(spec,run,ex,node,log){
+  const cases=outPortsOf(node);
+  const ctx=buildCtx(run,spec,ex.loopInstanceId);
+  const locals=localsOf(ex._rv,ex);
+  let hit=null;
+  for(const c of cases){
+    if(c.else){hit=c;break;}
+    if(!c.expr)continue;
+    if(await evalCondition(c.expr,node.lang,ctx,locals,`${node.id} の「${c.label||c.id}」`)){hit=c;break;}
+  }
+  if(!hit){
+    const mode=(node.routing&&node.routing.onNoMatch)||"error";
+    if(mode==="error")throw{code:"NO_MATCH",retryable:false,
+      message:`${node.id}: どの条件にも当たらなかった（最後の出口を「それ以外」にすると必ず通る）`};
+    log&&log("route",`↳ ${node.id}: どれにも当たらないので止めた（Resumeできる）`);
+    return{kind:"paused"};
+  }
+  const es=(spec.edges||[]).filter(e=>e.from.node===node.id&&(e.from.port||"out")===hit.id);
+  const lab=hit.label||hit.id;
+  log&&log("route",`↳ ${node.id}: 「${lab}」→ ${es.map(e=>e.to.node).join(", ")||"（行き先なし）"}`);
+  if(!es.length)return{kind:"completed"};
+  return routeEdgeSet(spec,run,ex,node,es,
+    {activationId:ex.activationId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration},log,`「${lab}」`);
+}
+async function routeExec(spec,run,ex,byId,loopEntries,log){
   const node=byId[ex.nodeId];const outEdges=(spec.edges||[]).filter(e=>e.from.node===node.id);
-  if(isLoopNode(node))return routeLoopNode(spec,run,ex,node,log);
+  if(isLoopNode(node))return await routeLoopNode(spec,run,ex,node,log);
+  if(node.type==="cond")return await routeCondNode(spec,run,ex,node,log);
   if(outEdges.length===0)return{kind:"completed"};
   const loopEdge=outEdges.find(e=>e.loop&&!isLoopNode(byId[e.to.node]));
   if(loopEdge){const lid=loopEdge.loop.id;const inst=ex.loopInstanceId;const iter=run.loopInstances[inst].iteration;const max=loopEdge.loop.max;
@@ -2381,9 +2563,17 @@ const NODE_KINDS=[
   {type:"llm",label:"LLM",desc:"プロバイダで推論する"},
   {type:"join",label:"Join",desc:"複数の入力をまとめる"},
   {type:"loop",label:"ループ",desc:"条件が来るまで同じところを何回も回す"},
+  {type:"cond",label:"条件分岐",desc:"条件で行き先を選ぶ（式・JavaScript）"},
+  {type:"calc",label:"計算",desc:"入ってきた値を計算する（式・JavaScript）"},
   {type:"output",label:"出力",desc:"最終結果を受け取る"}
 ];
-const TYPE_LABEL={input:"入力",llm:"LLM",join:"Join",loop:"ループ",output:"出力",tool:"ツール"};
+const TYPE_LABEL={input:"入力",llm:"LLM",join:"Join",loop:"ループ",cond:"条件分岐",calc:"計算",output:"出力",tool:"ツール"};
+const LANGS=[{v:"expr",t:"かんたんな式（+ - * / と比較）"},{v:"js",t:"JavaScript（この端末で動く）"}];
+const LANG_LABEL={expr:"式",js:"JavaScript"};
+/* ブラウザの中で動かせる言語は JavaScript だけ。ここは正直に書く（選べるように見せない）。 */
+const LANG_NOTE=`この端末で動かせるのは<b>式</b>と<b>JavaScript</b>だけ。`
+  +`Python・C言語・Visual Basic はブラウザに実行系が無いので動かせない`
+  +`（動かすには数十MBの実行系を別に積むか、サーバに出すことになる。どちらもいまは入れていない）。`;
 const nodeById=id=>(Ed.spec.nodes||[]).find(n=>n.id===id);
 const outEdges=id=>(Ed.spec.edges||[]).filter(e=>e.from.node===id);
 function layout(){const m=Ed.spec.metadata=Ed.spec.metadata||{};return m.layout=m.layout||{};}
@@ -2666,6 +2856,8 @@ function shortModel(m){return String(m||"").replace(/^.*\//,"").replace(/\.gguf$
 function nodeModelText(n){
   if(n.type==="loop"){const c=n.loop||{};
     return (c.max==null||c.max===""?"上限なし":`最大${c.max}回`)+(c.until?"・条件あり":"");}
+  if(n.type==="cond")return `${(n.ports||[]).length}通り・${LANG_LABEL[n.lang||"expr"]}`;
+  if(n.type==="calc")return LANG_LABEL[n.lang||"expr"]+"・"+String(n.code||"").replace(/\s+/g," ").slice(0,22);
   if(n.type&&n.type!=="llm"&&n.type!=="tool")return "";
   if(n.mock)return "mock（推論しない）";
   const def=n.provider?(Ed.spec.providers||{})[n.provider]:null;
@@ -2676,12 +2868,17 @@ function nodeFullText(n){
   const def=n.provider?(Ed.spec.providers||{})[n.provider]:null;
   const m=n.model||(def&&def.model);
   return [n.id,TYPE_LABEL[n.type||"llm"]||n.type,m?("モデル: "+m+(n.model?"":"（providerの既定）")):"",
-    n.type==="loop"&&n.loop&&n.loop.until?("抜ける条件: "+n.loop.until):""].filter(Boolean).join(" / ");
+    n.type==="loop"&&n.loop&&n.loop.until?("抜ける条件: "+n.loop.until):"",
+    n.type==="calc"?("計算: "+String(n.code||"")):"",
+    n.type==="cond"?("条件: "+(n.ports||[]).map(c=>(c.label||c.id)+"="+(c.else?"それ以外":c.expr)).join(" / ")):""
+    ].filter(Boolean).join(" / ");
 }
 function nodeSub(n){
   if(n.type==="input")return "入力";
   if(n.type==="output")return "出力";
   if(n.type==="loop")return "ループ";
+  if(n.type==="cond")return "条件分岐";
+  if(n.type==="calc")return "計算";
   if(n.type==="join")return "Join・"+(n.op||"(op未設定)");
   const pv=n.provider?n.provider:(n.mock?"mock":"(provider未設定)");
   const r=n.routing&&n.routing.mode?" / "+n.routing.mode:"";
@@ -3035,6 +3232,15 @@ function parsePickSafe(pick){
   return{key:q.key||"",take};
 }
 const buildPick=(key,take)=>(key||"")+(take==="all"?"":((key?".":"")+take));
+/* 入ってくる値の項目名（上流のノードが宣言しているもの） */
+function incomingKeys(n){
+  const out=[];
+  for(const e of Ed.spec.edges||[]){
+    if(e.to.node!==n.id)continue;
+    for(const k of schemaKeys(nodeById(e.from.node)))if(!out.includes(k))out.push(k);
+  }
+  return out;
+}
 /* 入ってきた値の「どの項目を使うか」を、受け取る側で選ぶ */
 function inputPickFields(n){
   const es=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop);
@@ -3155,18 +3361,59 @@ function openNodeSheet(id){
     h+=fld("最初から入れておく文",area("default",n.default,"空なら空欄で始まる"));
     h+=`<div class="mini">ここに書いた文言が、上の「入出力」の入力欄の見出しになる。文言もハーネスと一緒に書き出される。</div>`;
   }
-  if(n.type==="output")h+=mergeFields(n);
+  if(n.type==="output"||n.type==="cond")h+=mergeFields(n);
+  if(n.type==="calc"){
+    const es=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop).sort((a,b)=>(a.position||0)-(b.position||0));
+    h+=`<div class="fld"><span>計算に使う値の名前（入ってきた線ごと）</span><div>`;
+    if(!es.length)h+=`<div class="mini">まだ線が入っていない。値を入れたいノードの ○ からここへ繋ぐ。</div>`;
+    es.forEach((e,i)=>{const gi=(Ed.spec.edges||[]).indexOf(e);
+      h+=`<div class="ordrow"><b>${i+1}</b><span class="nm">${esc(e.from.node)}${e.pick?"."+esc(e.pick):""}</span>`
+        +`<input type="text" data-as="${gi}" value="${esc(e.as||"")}" placeholder="${esc(varNameOf(e,i))}" style="flex:1;min-width:70px"></div>`;});
+    h+=`</div></div>`;
+    h+=fld("計算のしかた",sel("lang",n.lang||"expr",LANGS));
+    h+=`<div class="mini">${LANG_NOTE}</div>`;
+    h+=fld(n.lang==="js"?"JavaScript（return で値を返す）":"式",area("code",n.code,n.lang==="js"?"return score * 2 + 1;":"score * 2 + 1"));
+    h+=`<div class="mini">使える名前: <code>${esc(es.map((e,i)=>varNameOf(e,i)).join(", ")||"（まだ無い）")}</code>`
+      +`, <code>inputs</code>（つないだ順の配列）, <code>iteration</code>（何周目か）`
+      +(n.lang==="js"?`<br>別スレッドで動かすので画面は止まらない。3秒で終わらなければ打ち切る。`
+                     :`<br>使える関数: len() has() regex() count() min() max() json_parse() json_stringify()。他のノードの値は <code>ノード名.out.項目</code> でも読める。`)+`</div>`;
+  }
+  if(n.type==="cond"){
+    const cs=n.ports||[];
+    const keys=incomingKeys(n);
+    h+=fld("条件の書き方",sel("lang",n.lang||"expr",LANGS));
+    h+=`<div class="mini">${LANG_NOTE}</div>`;
+    h+=`<div class="fld"><span>条件（上から順に調べて、最初に当たった1本だけに流す）</span><div>`;
+    cs.forEach((c,i)=>{
+      h+=`<div class="ordrow"><b>${i+1}</b>`
+        +`<input type="text" data-cf="label" data-i="${i}" value="${esc(c.label||"")}" placeholder="名前（図に出る）" style="flex:1;min-width:60px">`
+        +`<select data-cf="kind" data-i="${i}"><option value="expr"${c.else?"":" selected"}>条件を書く</option><option value="else"${c.else?" selected":""}>それ以外（いつでも通る）</option></select>`
+        +`<button data-cfdel="${i}">削除</button></div>`;
+      if(!c.else)h+=`<div class="ordrow"><b></b>`
+        +`<input type="text" data-cf="expr" data-i="${i}" value="${esc(c.expr||"")}" placeholder="${n.lang==="js"?"return score >= 8;":"score >= 8"}" style="flex:1"></div>`;
+      if(keys.length)h+=`<div class="ordrow"><b></b><span class="mini">渡す値</span>`
+        +`<select data-cf="pick" data-i="${i}"><option value=""${c.pick?"":" selected"}>来た値ぜんぶ</option>`
+        +keys.map(k=>`<option value="${esc(k)}"${c.pick===k?" selected":""}>${esc(k)} だけ</option>`).join("")+`</select></div>`;
+    });
+    h+=`</div></div><div class="mini"><button id="cfAdd">＋ 条件を足す</button>`
+      +` 使える名前: <code>value</code>（来た値）, <code>iteration</code>`
+      +(keys.length?`, <code>${esc(keys.join(", "))}</code>`:"")
+      +`。他のノードの値は <code>ノード名.out.項目</code> でも読める。</div>`;
+    h+=fld("どれにも当たらないとき",sel("routing.onNoMatch",getP(n,"routing.onNoMatch")||"error",
+      [{v:"error",t:"失敗にする"},{v:"stop",t:"止める（Resumeで続けられる）"}]));
+  }
   if(n.type==="loop"){
     const cfg=n.loop=n.loop||{};
     h+=fld("最大の回数（空にすると止まらない・無限ループ）",num("loop.max",cfg.max,"空＝無限"));
     if(cfg.max==null||cfg.max==="")
       h+=`<div class="mini" style="color:var(--warn)">いま<b>無限ループ</b>。打ち切り条件が真にならないと止まらない。止めるときは画面右下の<b>■ 緊急停止</b>。</div>`;
-    const kd=untilKind(cfg.until),q=untilParts(cfg.until),nopts=untilNodeOpts(n);
+    const kd=cfg.lang==="js"?"js":untilKind(cfg.until),q=untilParts(cfg.until),nopts=untilNodeOpts(n);
     h+=fld("どうなったら抜ける？",sel("__ukind",kd,[
       {v:"",t:"回数だけで抜ける（条件を見ない）"},
       {v:"json",t:"JSONの値を見る（例: 点数が8以上）"},
       {v:"len",t:"文の長さを見る（何文字以上か）"},
-      {v:"free",t:"自分で式を書く"}]));
+      {v:"free",t:"自分で式を書く"},
+      {v:"js",t:"JavaScriptで書く"}]));
     if(kd==="json"||kd==="len"){
       if(!nopts.length)h+=`<div class="mini" style="color:var(--warn)">条件で見られるノードが無い（式では英数字の名前のノードしか指せない）。</div>`;
       const kys=schemaKeys(nodeById(q.node)||{});
@@ -3179,6 +3426,11 @@ function openNodeSheet(id){
       if(kd==="json")h+=`<div class="mini">見るノードには<b>出力の形</b>（点数・はい/いいえ など）が要る。文章のままだと項目が読めない。</div>`;
     }
     if(kd==="free")h+=fld("打ち切り条件（真になったら抜ける）",txt("loop.until",cfg.until,"critic.out.score >= 8"));
+    if(kd==="js"){
+      h+=fld("JavaScript（return で true / false。true になったら抜ける）",
+        area("loop.until",cfg.until,"return value.score >= 8;"));
+      h+=`<div class="mini">使える名前: <code>value</code>（周ってきた値）, <code>iteration</code>（何周目か）`
+        +`＋ 来た値がJSONならその項目。別スレッドで動かすので画面は止まらない（3秒で打ち切る）。<br>${LANG_NOTE}</div>`;}
     h+=`<div class="mini">いまの条件: <code id="uNow">${esc(cfg.until||"（なし）")}</code></div>`;
     const outs=outEdges(n.id);
     if(outs.length){
@@ -3255,7 +3507,7 @@ function openNodeSheet(id){
     if(JOIN_TEXT_OPS.includes(n.op))
       h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prefix",n.prefix))}${fld("必ず後ろに付ける文",txt("suffix",n.suffix))}</div>`;
   }
-  if(n.type!=="output")h+=splitFields(n);
+  if(n.type!=="output"&&n.type!=="cond")h+=splitFields(n);
   h+=inputPickFields(n);
   h+=inputOrderFields(n);
   if(n.type==="loop"){
@@ -3290,11 +3542,13 @@ function openNodeSheet(id){
   const uk=$("#sheetBody").querySelector('select[data-f="__ukind"]');
   if(uk)uk.onchange=()=>{
     const kd=uk.value;n.loop=n.loop||{};
-    if(kd===""||kd==="free"){if(kd==="")delete n.loop.until;}
+    if(kd==="js"){n.loop.lang="js";if(!n.loop.until)n.loop.until="return iteration >= 3;";}
+    else if(kd===""||kd==="free"){delete n.loop.lang;if(kd==="")delete n.loop.until;}
     else{const q=untilParts(n.loop.until);
       if(!q.node)q.node=(untilNodeOpts(n)[0]||{}).v||"";
       if(!q.op)q.op=">=";
       if(!q.val)q.val=(kd==="len"?"200":"8");
+      delete n.loop.lang;
       if(kd==="json"){const kk=schemaKeys(nodeById(q.node)||{});
         if(!q.field||(kk.length&&!kk.includes(q.field)))q.field=kk[0]||"score";}
       const u=buildUntil(kd,q);if(u)n.loop.until=u;else delete n.loop.until;}
@@ -3483,6 +3737,44 @@ function openNodeSheet(id){
     const lk=(outputsFromSchema(n.schema)||[]).find(o=>o.type==="list"||o.type==="list_number");
     n.ports.push({id:"p"+i,label:i+"つ目",pick:buildPick(lk?lk.key:"",String(i-1))});
     syncFromCanvas();openNodeSheet(n.id);};}
+  // 計算に使う値の名前
+  $("#sheetBody").querySelectorAll("[data-as]").forEach(el=>{el.oninput=()=>{
+    const e=(Ed.spec.edges||[])[+el.dataset.as];if(!e)return;
+    const v=el.value.trim();
+    if(v&&okVarName(v))e.as=v;else delete e.as;
+    el.style.borderColor=(v&&!okVarName(v))?"var(--err)":"";
+    syncFromCanvas();};});
+  // 条件（条件分岐ノードの出口）
+  $("#sheetBody").querySelectorAll("[data-cf]").forEach(el=>{
+    const upd=()=>{
+      const i=+el.dataset.i;const cs=n.ports||[];const c=cs[i];if(!c)return;
+      const f=el.dataset.cf;
+      if(f==="label"){if(el.value)c.label=el.value;else delete c.label;syncFromCanvas();return;}
+      if(f==="expr"){if(el.value)c.expr=el.value;else delete c.expr;syncFromCanvas();return;}
+      if(f==="pick"){if(el.value)c.pick=el.value;else delete c.pick;syncFromCanvas();return;}
+      if(f==="kind"){
+        if(el.value==="else"){c.else=true;delete c.expr;}
+        else{delete c.else;if(!c.expr)c.expr=(n.lang==="js"?"return true;":"len(value) >= 10");}
+        syncFromCanvas();openNodeSheet(n.id);return;}
+    };
+    if(el.tagName==="SELECT")el.onchange=upd;else el.oninput=upd;});
+  $("#sheetBody").querySelectorAll("[data-cfdel]").forEach(b=>{b.onclick=()=>{
+    const i=+b.dataset.cfdel;const cs=n.ports||[];const gone=cs[i];if(!gone)return;
+    cs.splice(i,1);
+    (Ed.spec.edges||[]).forEach(e=>{if(e.from.node===n.id&&(e.from.port||"out")===gone.id)
+      e.from.port=cs.length?cs[0].id:"out";});
+    syncFromCanvas();openNodeSheet(n.id);};});
+  {const ad=$("#cfAdd");if(ad)ad.onclick=()=>{
+    n.ports=n.ports||[];
+    let i=n.ports.length+1;while(n.ports.some(c=>c.id==="c"+i))i++;
+    const hasElse=n.ports.some(c=>c.else);
+    const c={id:"c"+i,label:"条件"+i};
+    if(hasElse){c.expr=(n.lang==="js"?"return true;":"len(value) >= 10");n.ports.splice(n.ports.findIndex(x=>x.else),0,c);}
+    else{c.expr=(n.lang==="js"?"return true;":"len(value) >= 10");n.ports.push(c);}
+    syncFromCanvas();openNodeSheet(n.id);};}
+  // 式 / JavaScript の切り替え（中身は書き換えない）
+  {const lg=$("#sheetBody").querySelector('select[data-f="lang"]');
+   if(lg)lg.onchange=()=>{n.lang=lg.value;syncFromCanvas();openNodeSheet(n.id);};}
   // 入ってきた値のどれを使うか
   $("#sheetBody").querySelectorAll("[data-ip]").forEach(sl=>{sl.onchange=()=>{
     const e=(Ed.spec.edges||[])[+sl.dataset.ip];if(!e)return;
@@ -3590,7 +3882,7 @@ function openAddSheet(){
   $("#sheetBody").querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{addNode(b.dataset.add);});  // addNode が続けて中身の編集を開く
 }
 function addNode(type){
-  const base={input:"in",llm:"llm",join:"jn",loop:"lp",output:"out"}[type]||"n";
+  const base={input:"in",llm:"llm",join:"jn",loop:"lp",cond:"cd",calc:"cl",output:"out"}[type]||"n";
   const id=newId(base);
   const n={id,type};
   if(type==="llm"){const provs=Object.keys(Ed.spec.providers||{});
@@ -3599,6 +3891,9 @@ function addNode(type){
     delete n.prompt.system;}
   if(type==="join"){n.op="markdown";n.inputs={items:{type:"any",cardinality:"many"}};}
   if(type==="loop")n.loop={id,max:5};      // 既定は5回。空にすれば無限（止めるのは緊急停止）
+  if(type==="cond"){n.lang="expr";n.routing={onNoMatch:"error"};
+    n.ports=[{id:"c1",label:"10文字以上",expr:"len(value) >= 10"},{id:"c2",label:"それ以外",else:true}];}
+  if(type==="calc"){n.lang="expr";n.code="inputs[0]";}
   Ed.spec.nodes=Ed.spec.nodes||[];Ed.spec.nodes.push(n);
   const r=$("#cv").getBoundingClientRect();
   const c=toWorld(r.left+r.width/2,r.top+r.height/2);
@@ -4966,6 +5261,63 @@ export async function CreateMLCEngine(model,opt){
     r1.status==="success"&&r1.result.value.received.value==="めも"
     &&r2.status==="failed"&&/nothere がその中に無い（あるのは: score, note）/.test(errText((r2.errors||[])[0]))
     &&vb.some(x=>/出口 "p9" が A に無い/.test(x)));}
+ // 53 計算ノード（式）: 入ってきた線ごとに名前を付けて計算する
+ {const sc=schemaFromOutputs([{key:"score",type:"integer"}]);
+  const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"A",type:"llm",mock:{fixed:{score:3}},schema:sc},
+    {id:"B",type:"llm",mock:{fixed:{score:4}},schema:sc},
+    {id:"cl",type:"calc",lang:"expr",code:"a + b * 2",inputs:{in:{type:"any",cardinality:"many"}}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},{from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"cl",port:"in"},pick:"score",as:"a",position:0},
+     {from:{node:"B",port:"out"},to:{node:"cl",port:"in"},pick:"score",as:"b",position:1},
+     {from:{node:"cl",port:"out"},to:{node:"out",port:"in"}}]};
+  const r=await fullRun(sp,{});
+  const bad=JSON.parse(JSON.stringify(sp));bad.nodes[3].code="a + ";
+  ok("53 計算ノード（式）: 線ごとに名前を付けて計算できる（3 + 4*2 = 11）",
+    validate(sp).length===0&&r.status==="success"&&r.result.value===11
+    &&validate(bad).some(x=>/計算の式が読めない/.test(x)));}
+ // 54 計算ノード（JavaScript）: 別スレッドで動き、終わらないコードは打ち切る
+ {const mkc=code=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"cl",type:"calc",lang:"js",code},{id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"cl",port:"in"}},{from:{node:"cl",port:"out"},to:{node:"out",port:"in"}}]});
+  const r1=await fullRun(mkc("return inputs[0].q.length * 2;"),{in:{q:"あいう"}});
+  const t0=Date.now();
+  const r2=await fullRun(mkc("while(true){}"),{in:1});
+  const ms=Date.now()-t0;
+  const r3=await fullRun(mkc("var x=1;"),{in:1});
+  ok("54 計算ノード（JavaScript）: 動く／終わらないコードは打ち切る／returnし忘れを言う",
+    r1.status==="success"&&r1.result.value===6
+    &&r2.status==="failed"&&/打ち切った/.test(errText((r2.errors||[])[0]))&&ms<9000
+    &&r3.status==="failed"&&/return で値を返していない/.test(errText((r3.errors||[])[0])));}
+ // 55 条件分岐ノード: 上から順に調べ、最初に当たった1本だけに流す
+ {const mkq=(score,ports)=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"A",type:"llm",mock:{fixed:{score}},schema:schemaFromOutputs([{key:"score",type:"integer"}])},
+    {id:"cd",type:"cond",lang:"expr",ports:ports||[
+      {id:"c1",label:"高い",expr:"score >= 8"},{id:"c2",label:"ふつう",expr:"score >= 5"},{id:"c3",label:"それ以外",else:true}]},
+    {id:"o1",type:"output"},{id:"o2",type:"output"},{id:"o3",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"cd",port:"in"}},
+     {from:{node:"cd",port:"c1"},to:{node:"o1",port:"in"}},
+     {from:{node:"cd",port:"c2"},to:{node:"o2",port:"in"}},
+     {from:{node:"cd",port:"c3"},to:{node:"o3",port:"in"}}]});
+  const ran=r=>["o1","o2","o3"].filter(k=>(r.nodeRuns[k]||[]).some(h=>h.status==="success")).join();
+  const r9=await fullRun(mkq(9),{});const r6=await fullRun(mkq(6),{});const r1=await fullRun(mkq(1),{});
+  const noElse=mkq(1,[{id:"c1",label:"高い",expr:"score >= 8"}]);
+  noElse.edges=noElse.edges.filter(e=>!(e.from.node==="cd"&&e.from.port!=="c1"));
+  const rn=await fullRun(noElse,{});
+  const jsv=await fullRun({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"cd",type:"cond",lang:"js",ports:[
+      {id:"c1",label:"長い",expr:"return String(value).length >= 3;"},{id:"c2",label:"それ以外",else:true}]},
+    {id:"o1",type:"output"},{id:"o2",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"cd",port:"in"}},
+     {from:{node:"cd",port:"c1"},to:{node:"o1",port:"in"}},{from:{node:"cd",port:"c2"},to:{node:"o2",port:"in"}}]},{in:"あいうえお"});
+  ok("55 条件分岐ノード: 最初に当たった1本だけに流す／それ以外が無いと落ちる／JavaScriptでも書ける",
+    validate(mkq(9)).length===0&&ran(r9)==="o1"&&ran(r6)==="o2"&&ran(r1)==="o3"
+    &&rn.status==="failed"&&/どの条件にも当たらなかった/.test(errText((rn.errors||[])[0]))
+    &&jsv.status==="success"&&ran(jsv)==="o1");}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
