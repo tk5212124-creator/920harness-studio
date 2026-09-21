@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — エラーの扱いと実行の記録 v0.24.0</title>
+<title>Harness Studio — ％と思考過程・差し込みの穴 v0.25.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -114,7 +114,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.24.0 · エラーの扱いと実行の記録</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.25.0 · ％と思考過程</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -793,6 +793,16 @@ function reviewSpec(spec){
     if(n.type==="llm"||n.type==="tool"){
       const t=n.prompt&&n.prompt.template&&n.prompt.template.value;
       if(!t&&!(n.prompt&&n.prompt.system))add("warn","プロンプトが空。前のノードの出力がそのまま渡る",n.id);
+      /* 「元質問は run_input.in」のように、波かっこ無しで書いても値は入らない。
+         モデルにはその文字列がそのまま行くので、判定が元の質問を見ないまま動いてしまう。 */
+      {const p=n.prompt||{};
+       const bare=/(?:^|[^{])\b(run_input|inputs|vars)\s*\.\s*[A-Za-z0-9_$\u3040-\u30ff\u3400-\u9fff]+/;
+       for(const[where,txt]of[["system",p.system],["本文テンプレ",p.template&&p.template.value],
+           ["prefix",p.prefix],["suffix",p.suffix]]){
+         if(!txt)continue;const m=bare.exec(String(txt));if(!m)continue;
+         const ref=m[0].replace(/^[^A-Za-z]+/,"");
+         add("warn",`${where} に「${ref}」と書いてあるが、これはそのままの文字列としてモデルに渡っている（値は入らない）。`
+           +`実際の値を入れるには {{{${ref}}}} と三重の波かっこで囲む`,n.id);}}
       if(!(n.generation&&n.generation.maxTokens!=null))add("info","maxTokens 未設定。ローカルLLMだと長く出力し続けることがある",n.id);
       if(n.provider){const def=(spec.providers||{})[n.provider];
         if(def&&def.adapter!=="mock"&&!def.model&&!n.model)add("error",`provider "${n.provider}" にモデルが無い`,n.id);
@@ -1576,10 +1586,13 @@ function buildMessages(node,inputs,ex,run){
     if(p.template.syntax!=="mustache"||p.template.mode!=="interpolation_only")throw{code:"TEMPLATE_NOT_ALLOWED",retryable:false,message:"prompt.templateは syntax=mustache / mode=interpolation_only 必須"};
     user=mustacheRender(p.template.value||"",scope,{escape:false});
   }else user=inText;
-  if(p.prefix)user=p.prefix+"\n\n"+user;     // 「命令時に必ず付ける文言」
-  if(p.suffix)user=user+"\n\n"+p.suffix;
+  /* system / prefix / suffix でも {{{ }}} を書いたらそこへ値が入る。
+     書いていない文はそのまま通す（前から動いている Spec の文面を壊さない）。 */
+  const fill=t=>{const x=String(t==null?"":t);return x.includes("{{{")?mustacheRender(x,scope,{escape:false}):x;};
+  if(p.prefix)user=fill(p.prefix)+"\n\n"+user;     // 「命令時に必ず付ける文言」
+  if(p.suffix)user=user+"\n\n"+fill(p.suffix);
   const messages=[];
-  if(p.system)messages.push({role:"system",content:p.system});
+  if(p.system)messages.push({role:"system",content:fill(p.system)});
   messages.push({role:"user",content:user});
   return messages;
 }
@@ -3051,6 +3064,9 @@ const SCHEMA_PRESETS=[
              ask:`必ず JSON だけで答える。余計な文は書かない。例: {"ok": true}`},
   {v:"text_item",t:"見出し付きの1件（題名と本文）",     schema:{type:"object",required:["title","body"],properties:{title:{type:"string"},body:{type:"string"}}},
              ask:`必ず JSON だけで答える。余計な文は書かない。例: {"title": "題名", "body": "本文"}`},
+  {v:"percent",t:"選択肢ごとの正しさ（％）だけ",       schema:undefined, ask:null},
+  {v:"think",t:"考えてから答える（考え→答え）",        schema:{type:"object",required:["thinking","answer"],properties:{thinking:{type:"string"},answer:{type:"string"}}},
+             ask:`必ず JSON だけで答える。余計な文は書かない。thinking に考えた筋道、answer に最終の答えだけを書く。例: {"thinking": "まず条件を数える。次に…", "answer": "ここに答え"}`},
   {v:"fields",t:"項目を決める（出力1・出力2…）",       schema:undefined, ask:null},
   {v:"custom",t:"自分で書く（JSON schema）",          schema:undefined, ask:null},
 ];
@@ -3061,6 +3077,11 @@ const SHAPE_NOTE={
   yesno:"true / false で返る。線の if に <code>この.out.ok == true</code> と書ける。",
   text_item:"題名と本文に分かれて返る。",
   custom:"JSON Schema をそのまま書く（type / required / properties / enum / minimum など）。",
+  percent:"選択肢を並べると、<b>それぞれに 0〜100 の整数</b>が返る。理由や文章は返らない（数字だけ）。<br>"
+    +"線の if や ループの打ち切りに <code>この.out.選択肢名 &gt;= 80</code> と書ける。複数の観点（支持できる / 質問に合っている / 矛盾が無い）を並べる使い方もできる。",
+  think:"考え（thinking）を先に書かせてから答え（answer）を出させる。<br>"
+    +"内蔵LLMは schema に書いた順に出すので、<b>考えが先</b>だと答えに効く。そのぶん maxTokens を食うので多めにする。"
+    +"次のノードへは線の「入ってきた値のどれを使うか」で <code>answer</code> だけ渡せる。",
 };
 /* 出力の項目（キー名と種類）。schema と行き来できる形だけを扱い、
    表せない schema は「自分で書く」に任せる（勝手に書き換えない）。 */
@@ -3120,8 +3141,9 @@ function askForOutputs(outs){
   const o={};
   for(const x of outs){
     const k=String(x.key==null?"":x.key).trim();if(!k)continue;
+    if(k===THINK_KEY){o[k]="まず条件を数える。次に…";continue;}
     o[k]=x.type==="number"?(x.min!=null?Number(x.min)+0.5:1.5)
-      :x.type==="integer"?(x.min!=null?Number(x.min):7)
+      :x.type==="integer"?(x.min!=null&&x.max!=null?Math.round((Number(x.min)+Number(x.max))/2):(x.min!=null?Number(x.min):7))
       :x.type==="boolean"?true
       :x.type==="list"?["ひとつめ","ふたつめ"]
       :x.type==="list_number"?[1,2]
@@ -3129,11 +3151,21 @@ function askForOutputs(outs){
   }
   return `必ず JSON だけで答える。余計な文は書かない。例: ${JSON.stringify(o)}`;
 }
+/* 「先に考えを書かせる」は、schema のいちばん先頭の項目 thinking（文章）で表す。
+   内蔵LLMは schema に書いた順に出すので、先頭に置くことに意味がある。 */
+const THINK_KEY="thinking";
+const hasThinkOut=o=>!!(o&&o.length&&o[0].key===THINK_KEY&&o[0].type==="text");
+const bodyOutsOf=sc=>{const o=outputsFromSchema(sc);if(!o)return null;return hasThinkOut(o)?o.slice(1):o;};
+/* 選択肢ごとの％＝thinking を除いた項目が全部「0〜100の整数」 */
+const isPercentSchema=sc=>{const b=bodyOutsOf(sc);
+  return !!(b&&b.length&&b.every(o=>o.type==="integer"&&o.min===0&&o.max===100));};
+const percentOut=k=>({key:k,type:"integer",min:0,max:100});
 const schemaPresetOf=sc=>{
   if(!sc)return "";
   const j=JSON.stringify(sc);
   const hit=SCHEMA_PRESETS.find(x=>x.schema&&JSON.stringify(x.schema)===j);
   if(hit)return hit.v;
+  if(isPercentSchema(sc))return "percent";
   return outputsFromSchema(sc)?"fields":"custom";      // 0個の配列も真なので fields のまま
 };
 /* 条件が見ているノードを差し替える（<古>.out.<項目> → <新>.out.<項目>）。
@@ -3638,7 +3670,7 @@ const MERGE_OPTS=[
   {v:"json_array",t:"JSONの配列にする"}];
 /* 出力の項目（出力1・出力2…）。キー名・種類・範囲をここで決める。schema はここから作る。 */
 function outFieldRows(n){
-  const outs=outputsFromSchema(n.schema)||[];
+  const outs=bodyOutsOf(n.schema)||[];
   let h=`<div class="fld"><span>出力の項目</span><div>`;
   outs.forEach((o,i)=>{
     h+=`<div class="ordrow"><b>${i+1}</b>`
@@ -3654,7 +3686,36 @@ function outFieldRows(n){
   h+=`</div></div><div class="mini"><button id="ofAdd">＋ 出力を足す</button>`
     +`（キー名は日本語でもよい。空白と <code>. " { } ></code> は使えない。`
     +`条件式から <code>${esc(n.id)}.out.キー名</code> で読める）</div>`;
+  h+=thinkRow(n);
   return h;
+}
+/* 選択肢ごとの正しさ（％）。名前だけ並べ、種類と範囲は 0〜100 の整数で固定する。 */
+function percentFieldRows(n){
+  const outs=bodyOutsOf(n.schema)||[];
+  let h=`<div class="fld"><span>選択肢（それぞれに 0〜100 の％が返る）</span><div>`;
+  if(!outs.length)h+=`<div class="mini">まだ1つも無い。下の「＋ 選択肢を足す」で足す。</div>`;
+  outs.forEach((o,i)=>{
+    h+=`<div class="ordrow"><b>${i+1}</b>`
+      +`<input type="text" data-of="key" data-i="${i}" value="${esc(o.key)}" placeholder="選択肢の名前" style="flex:1;min-width:90px">`
+      +`<input type="hidden" data-of="type" data-i="${i}" value="integer">`
+      +`<input type="hidden" data-of="min" data-i="${i}" value="0">`
+      +`<input type="hidden" data-of="max" data-i="${i}" value="100">`
+      +`<span class="mini">0〜100</span><button data-ofdel="${i}">削除</button></div>`;
+  });
+  h+=`</div></div><div class="mini"><button id="ofAdd">＋ 選択肢を足す</button>`
+    +`（名前は日本語でよい。モデルは<b>数字だけ</b>返す — 理由や文章は返らない。`
+    +`条件式からは <code>${esc(n.id)}.out.選択肢名</code> で読める）</div>`;
+  h+=thinkRow(n);
+  return h;
+}
+/* 答えの前に考えを書かせるか（schema の先頭に thinking を置くだけ） */
+function thinkRow(n){
+  const on=hasThinkOut(outputsFromSchema(n.schema)||[]);
+  return `<div class="mini"><label style="display:flex;align-items:center;gap:6px">`
+    +`<input type="checkbox" id="ofThink"${on?" checked":""}> 先に「考え」を書かせる（thinking）</label>`
+    +`答えの前に考えを出させる。そのぶん<b>maxTokens を食う</b>ので多めにする。`
+    +`考えは <code>${esc(n.id)}.out.thinking</code> で読める。`
+    +`次のノードへ答えだけ渡すときは、線の「入ってきた値のどれを使うか」で選ぶ。</div>`;
 }
 /* エラーが起きたとき、このノードが何を返すか。どの種類のノードにも付けられる。 */
 function errorFields(n){
@@ -4030,6 +4091,7 @@ function openNodeSheet(id){
     h+=fld("出力の形（内蔵LLMなら文法で強制する）",sel("__shape",pk,SCHEMA_PRESETS.map(x=>({v:x.v,t:x.t}))));
     if(SHAPE_NOTE[pk])h+=`<div class="mini">${SHAPE_NOTE[pk]}</div>`;
     if(pk==="fields")h+=outFieldRows(n);
+    if(pk==="percent")h+=percentFieldRows(n);
     if(pk==="custom"||pk==="")
       h+=fld(pk==="custom"?"JSON schema（自分で書く）":"JSON schema（空で無効）",
         `<textarea data-json="schema" placeholder='{"type":"object","required":["score"]}'>${esc(n.schema?JSON.stringify(n.schema):"")}</textarea>`);
@@ -4226,15 +4288,20 @@ function openNodeSheet(id){
     if(!pr)return;
     if(pr.v==="custom"){if(!n.schema)n.schema={type:"object",required:[],properties:{}};}
     else if(pr.v==="fields"){if(!outputsFromSchema(n.schema))n.schema=schemaFromOutputs([{key:"out1",type:"text"}]);}
+    else if(pr.v==="percent"){if(!isPercentSchema(n.schema))
+      n.schema=schemaFromOutputs([percentOut("候補A"),percentOut("候補B")]);}
     else if(pr.schema==null)delete n.schema;
     else n.schema=JSON.parse(JSON.stringify(pr.schema));
-    setAsk(n,pr.v==="fields"?askForOutputs(outputsFromSchema(n.schema)||[]):pr.ask);
+    setAsk(n,(pr.v==="fields"||pr.v==="percent")?askForOutputs(outputsFromSchema(n.schema)||[]):pr.ask);
     syncFromCanvas();openNodeSheet(n.id);
   };
   // 出力の項目（キー名・種類・範囲）
   const writeOuts=outs=>{
-    n.schema=schemaFromOutputs(outs);
-    setAsk(n,Object.keys(n.schema.properties).length?askForOutputs(outs):null);
+    const tk=$("#ofThink");
+    const body=outs.filter(o=>String(o.key==null?"":o.key).trim()!==THINK_KEY);
+    const all=(tk&&tk.checked)?[{key:THINK_KEY,type:"text"}].concat(body):body;
+    n.schema=schemaFromOutputs(all);
+    setAsk(n,Object.keys(n.schema.properties).length?askForOutputs(all):null);
   };
   /* いま画面に出ている行をそのまま読む。
      打っている途中でキー名が空になっても、行の並び（＝どの項目を直しているか）がずれない。 */
@@ -4261,9 +4328,15 @@ function openNodeSheet(id){
     writeOuts(outs);syncFromCanvas();openNodeSheet(n.id);};});
   {const ad=$("#ofAdd");if(ad)ad.onclick=()=>{
     const outs=readOutRows();
-    let i=outs.length+1;while(outs.some(o=>o.key==="out"+i))i++;
-    outs.push({key:"out"+i,type:"text"});
+    const pct=schemaPresetOf(n.schema)==="percent";
+    if(pct){let i=outs.length+1;const nm=()=>"候補"+i;
+      while(outs.some(o=>o.key===nm()))i++;
+      outs.push(percentOut(nm()));}
+    else{let i=outs.length+1;while(outs.some(o=>o.key==="out"+i))i++;
+      outs.push({key:"out"+i,type:"text"});}
     writeOuts(outs);syncFromCanvas();openNodeSheet(n.id);};}
+  {const tk=$("#ofThink");if(tk)tk.onchange=()=>{
+    writeOuts(readOutRows());syncFromCanvas();openNodeSheet(n.id);};}
   // 出口を分ける / まとめる
   {const sp=$("#sheetBody").querySelector('select[data-f="__split"]');
    if(sp)sp.onchange=()=>{
@@ -5408,7 +5481,10 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 **モデル** … ノードごとに選べる（provider の既定を上書きする）。図のノードにモデル名が出る。
 
 **文章の組み立て** … 上から順に \`system\` →（\`必ず前に付ける文\`）→ 本文 →（\`必ず後ろに付ける文\`）。
-本文テンプレでは次が使える。
+差し込み（\`{{{ }}}\`）は**本文テンプレでも system でも 前に付ける文・後ろに付ける文でも**使える。
+逆に、三重の波かっこで囲まずに \`run_input.in\` とだけ書いても**ただの文字列**としてモデルに届く（値は入らない）。
+とくに評価役のノードで「元の質問は run_input.in」と書いてしまうと、**元の質問を見ないまま点を付ける**。
+「診断する」はこの書き方を見つけて名指しする。使えるのは次。
 - \`{{{in}}}\` … 入ってきた値（複数なら上の「受け取り方」でまとめた文）
 - \`{{{inputs.<入口名>}}}\` … 入口ごとの値
 - \`{{{run_input.<入力ノード名>}}}\` … 実行時に入れた文
@@ -5417,8 +5493,17 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 
 **長さと振れ幅** … \`maxTokens\`（長く書かせるほど時間とメモリを使う）、\`temperature\`（小さいほど固い）。
 
-**出力の形** … 縛らない（文章のまま）／リスト／点数／はい・いいえ／題名+本文／**項目を決める**／自分で JSON schema を書く。
+**出力の形** … 縛らない（文章のまま）／リスト／点数／はい・いいえ／題名+本文／**選択肢ごとの正しさ（％）だけ**／**考えてから答える**／**項目を決める**／自分で JSON schema を書く。
 - 「項目を決める」では出力1・出力2… と項目を足し、**キー名**と**種類**（文章／数値／整数／はい・いいえ／文のリスト／数値のリスト）を選ぶ。数値は**最小・最大の範囲**を付けられる（小数もマイナスも可）。
+- 「**選択肢ごとの正しさ（％）だけ**」は、選択肢の名前を並べると**それぞれに 0〜100 の整数**だけが返る。理由も文章も返らない。
+  - 「候補A / 候補B / 候補C」のように**候補の確からしさ**を並べる使い方と、「支持できる / 質問に合っている / 矛盾が無い」のように**観点ごとの点**を並べる使い方ができる。
+  - 数字なので、線の if やループの打ち切りに \`この.out.支持できる >= 80\` と書ける。計算ノードで足し合わせるのも楽。
+  - 文章を書かせないぶん**短く終わる**ので、小さいモデルでも崩れにくい。
+- 「**考えてから答える**」は \`thinking\`（考えた筋道）→ \`answer\`（答え）の順で返る。
+  - 内蔵LLMは **schema に書いた順に出す**ので、考えが先にあることに意味がある（答えを出してから理由を書かせても答えは変わらない）。
+  - そのぶん \`maxTokens\` を食う。考えを出させるなら多めにする。
+  - 次のノードへ答えだけ渡すときは、線の「入ってきた値のどれを使うか」で \`answer\` を選ぶ。
+  - 「項目を決める」「選択肢ごとの％」では、チェック1つで**先に考えを書かせる**を足せる（\`thinking\` が先頭に入る）。
 - 内蔵LLMでは schema が**文法として強制**される（プロンプトに「JSONで出して」と書くだけでは縛りにならない）。
 - 条件式や計算からは \`ノード名.out.キー名\` で読める。
 
@@ -5678,6 +5763,10 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 - \`contextSize\` / \`overrides.context_window_size\` … 文脈の長さ。短いほどメモリが少なくて済む。
 - \`url\` … wllama のとき、置き場そのものがモデル。
 - \`prompt.template.value\` … 本文。\`syntax\` は \`"mustache"\`、\`mode\` は \`"interpolation_only"\` で固定（他を書くと検証で落ちる）。
+  差し込み（\`{{{ }}}\`）は \`prompt.system\` / \`prompt.prefix\` / \`prompt.suffix\` でも効く。
+  **三重の波かっこで囲まない \`run_input.in\` は、ただの文字列としてモデルに渡る**（値は入らない）。
+  評価役のノードに元の質問を渡したいときは、必ずこう書く:
+  \`"value": "元の質問: {{{run_input.in}}}\\n候補の回答: {{{in}}}"\`
   差し込める名前:
   - \`{{{in}}}\` … 入ってきた値
   - \`{{{inputs.items.0}}}\` … 入口 items の1つ目
@@ -5760,6 +5849,34 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 {"id":"out","type":"output","merge":{"op":"json_array"}}
 ~~~
 入ってきた値をそのまま結果にする。線が2本以上なら \`merge\` でまとめ方を決める。
+
+### 出力の形のよく使う型
+
+選択肢ごとの正しさ（％）だけ — 0〜100 の整数だけが返る。理由も文章も返らない。
+~~~
+"schema": {
+  "type":"object",
+  "required":["支持できる","質問に合っている","矛盾が無い"],
+  "properties":{
+    "支持できる":     {"type":"integer","minimum":0,"maximum":100},
+    "質問に合っている":{"type":"integer","minimum":0,"maximum":100},
+    "矛盾が無い":     {"type":"integer","minimum":0,"maximum":100}
+  }
+}
+~~~
+考えてから答える — \`thinking\` を**先頭**に置く（内蔵LLMは schema に書いた順に出す）。
+~~~
+"schema": {
+  "type":"object",
+  "required":["thinking","answer"],
+  "properties":{
+    "thinking":{"type":"string"},
+    "answer":  {"type":"string"}
+  }
+}
+~~~
+この2つは画面の「出力の形」のプルダウンからも選べる。組み合わせ（考え＋％）も、
+\`thinking\` を先頭に足すだけで作れる。考えを出させるぶん \`generation.maxTokens\` を多めにする。
 
 ## 7. schema（出力の形）
 
@@ -6745,6 +6862,38 @@ export async function CreateMLCEngine(model,opt){
     errs.length===0&&missing.length===0
     &&/^\{/.test(HELP_JSON_EXAMPLE.trim())&&HELP_JSON.indexOf(HELP_JSON_EXAMPLE)>0
     &&(r.status==="failed"||r.status==="success"));}
+ // 66 出力の形: 選択肢ごとの％／考えてから答える／system と suffix にも差し込みが効く
+ {const pc=schemaFromOutputs([percentOut("候補A"),percentOut("候補B")]);
+  const withThink=schemaFromOutputs([{key:"thinking",type:"text"},percentOut("候補A")]);
+  const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"判定",type:"llm",mock:{echoPrompt:true},
+     prompt:{system:"元の質問: {{{run_input.in}}}",
+       template:{syntax:"mustache",mode:"interpolation_only",value:"候補: {{{in}}}"},
+       suffix:"周回 {{{iteration}}}"}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"判定",port:"in"}},
+     {from:{node:"判定",port:"out"},to:{node:"out",port:"in"}}]};
+  const r=await fullRun(sp,{in:"雨の日にできること"});
+  const ex=Object.values(r.executions).find(e=>e.nodeId==="判定")||{};
+  const sent=(((ex.attempts||[])[0]||{}).request||{}).messages||[];
+  const sys=(sent.find(m=>m.role==="system")||{}).content||"";
+  const usr=(sent.find(m=>m.role==="user")||{}).content||"";
+  const warn=reviewSpec({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"j",type:"llm",prompt:{system:"元質問は run_input.in。厳格に見る。",
+      template:{syntax:"mustache",mode:"interpolation_only",value:"{{{in}}}"}}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"j",port:"in"}},
+     {from:{node:"j",port:"out"},to:{node:"out",port:"in"}}]});
+  ok("66 選択肢ごとの％／考えてから答える／system と suffix の差し込み／波かっこ無しの参照を診断で出す",
+    schemaPresetOf(pc)==="percent"&&schemaPresetOf(withThink)==="percent"
+    &&hasThinkOut(outputsFromSchema(withThink))&&(bodyOutsOf(withThink)||[]).length===1
+    &&schemaPresetOf(SCHEMA_PRESETS.find(x=>x.v==="think").schema)==="think"
+    &&/\{"候補A":50,"候補B":50\}/.test(askForOutputs([percentOut("候補A"),percentOut("候補B")]))
+    &&r.status==="success"
+    &&sys==="元の質問: 雨の日にできること"&&/周回 1$/.test(usr)
+    &&warn.some(f=>f.level==="warn"&&f.node==="j"&&/三重の波かっこ/.test(f.message)));}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

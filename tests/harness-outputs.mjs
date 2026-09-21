@@ -41,7 +41,7 @@ await p.fill('[data-of="max"][data-i="0"]', '10'); await p.waitForTimeout(250);
 const a1 = await nodeOf('A');
 R['① 数値の項目'] = { schema: a1.schema, 指示: (a1.prompt || {}).suffix };
 ok.numberField = JSON.stringify(a1.schema.properties.score) === '{"type":"integer","minimum":0,"maximum":10}'
-  && /例: \{"score":0\}/.test(R['① 数値の項目'].指示);
+  && /例: \{"score":5\}/.test(R['① 数値の項目'].指示);   // 範囲があるときは真ん中を例にする（下限を書くとモデルが写す）
 
 // ② 出力を足してリストにする
 await tap('#ofAdd');
@@ -136,6 +136,35 @@ ok.truncUI = R['⑧ 切れたときの選択肢'].length === 3 && R['⑧ 形が�
   && R['⑧ 入った値'].検証 === '（エラーなし）' && R['⑧ 会話の説明'];
 await p.selectOption('[data-f="onTruncate"]', ''); await p.waitForTimeout(250);
 ok.truncDefault = (await nodeOf('A')).onTruncate === undefined;
+await tap('#shClose');
+
+// ⑨ 出力の形「選択肢ごとの正しさ（％）だけ」と「先に考えを書かせる」
+await tap('.nd[data-id="A"]');
+await p.selectOption('[data-f="__shape"]', 'percent'); await p.waitForTimeout(300);
+const a9 = await nodeOf('A');
+R['⑨ ％の最初の形'] = a9.schema;
+ok.percentInit = JSON.stringify(a9.schema) ===
+  '{"type":"object","required":["候補A","候補B"],"properties":{"候補A":{"type":"integer","minimum":0,"maximum":100},"候補B":{"type":"integer","minimum":0,"maximum":100}}}';
+await p.fill('[data-of="key"][data-i="0"]', '支持できる'); await p.waitForTimeout(250);
+await tap('#ofAdd');                                   // 足した分も 0〜100 の整数になる
+const a9b = await nodeOf('A');
+R['⑨ 足したあと'] = { keys: Object.keys(a9b.schema.properties), 足した分: a9b.schema.properties['候補3'], 指示: (a9b.prompt || {}).suffix };
+ok.percentAdd = R['⑨ 足したあと'].keys.join() === '支持できる,候補B,候補3'
+  && JSON.stringify(R['⑨ 足したあと'].足した分) === '{"type":"integer","minimum":0,"maximum":100}'
+  && /"支持できる":50/.test(R['⑨ 足したあと'].指示);
+await p.locator('#ofThink').first().dispatchEvent('click'); await p.waitForTimeout(300);
+const a9c = await nodeOf('A');
+R['⑨ 考えを足す'] = { keys: Object.keys(a9c.schema.properties), 形: await p.inputValue('[data-f="__shape"]') };
+ok.thinkOn = R['⑨ 考えを足す'].keys[0] === 'thinking'     // 先頭でないと答えに効かない
+  && a9c.schema.properties.thinking.type === 'string'
+  && R['⑨ 考えを足す'].keys.length === 4 && R['⑨ 考えを足す'].形 === 'percent';
+await p.locator('#ofThink').first().dispatchEvent('click'); await p.waitForTimeout(300);
+ok.thinkOff = (await nodeOf('A')).schema.properties.thinking === undefined;
+await p.selectOption('[data-f="__shape"]', 'think'); await p.waitForTimeout(300);
+const a9d = await nodeOf('A');
+R['⑨ 考えてから答える'] = { keys: Object.keys(a9d.schema.properties), 検証: await vErr() || '（エラーなし）' };
+ok.thinkPreset = R['⑨ 考えてから答える'].keys.join() === 'thinking,answer'
+  && R['⑨ 考えてから答える'].検証 === '（エラーなし）';
 await tap('#shClose');
 
 R['pageerror'] = errs;

@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.24.0 エラーの扱いと実行の記録
+## 1. 現状 — v0.25.0 ％と思考過程・差し込みの穴
 
 | 段階 | 状態 |
 |---|---|
@@ -50,7 +50,8 @@ iPhone でもPCでも同じ操作。
 | ループの出口と条件 v0.21.0（本体は上・抜けたあとは下／条件は「入ってきた値」で書ける／項目の編集が消えない） | 実装済み |
 | 動き出す条件 v0.22.0（全部そろったら／どれか来たら／自分で組む（and・or・入れ子）・合流の連鎖を直す） | 実装済み |
 | 途中で切れたときの扱い v0.23.0（止める／使う／やり直す・形が違うときのやり直し・失敗した呼び出しも数える） | 実装済み |
-| **エラーの扱いと実行の記録 v0.24.0（ノードごとのエラー時の返し方・進めなくなった理由を名指し・機械が読む実行の記録・使い方のJSONタブ）** | **いまここ** |
+| エラーの扱いと実行の記録 v0.24.0（ノードごとのエラー時の返し方・進めなくなった理由を名指し・機械が読む実行の記録・使い方のJSONタブ） | 実装済み |
+| **％と思考過程 v0.25.0（選択肢ごとの正しさ％だけ／考えてから答える／system にも差し込み／波かっこ無しの参照を診断）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -159,6 +160,28 @@ critic: EXPRESSION_EVALUATION_ERROR loop[revise] の until の式が読めない
 **「必ず JSON だけで答える。形式: {"score": …}」** をそのノードの suffix にも入れる
 （schema だけだと小さいモデルは従いにくいため）。
 
+### 差し込み（`{{{ }}}`）は system / prefix / suffix でも効く
+
+`prompt.template.value` だけでなく `prompt.system` `prompt.prefix` `prompt.suffix` でも
+`{{{run_input.in}}}` などの差し込みが効く（`{{{` を書いた文だけ差し込む。書いていない文はそのまま通す）。
+
+**逆に、三重の波かっこで囲まないと値は入らない。** 実機で次のような書き方が見つかった:
+
+```json
+{"id":"judge","type":"llm",
+ "prompt":{"system":"厳格な評価担当。元質問は run_input.in。…",
+           "template":{"syntax":"mustache","mode":"interpolation_only","value":"{{{in}}}"}}}
+```
+
+`run_input.in` はそのままの文字列としてモデルに届くので、この judge は
+**元の質問を一度も見ないまま**候補回答だけを見て点を付ける（実際に、無関係な回答へ 8点が連発した）。
+これは Runtime のバグではなく書き方の問題なので、**診断で名指しする**ようにした:
+
+```
+⚠ judge: system に「run_input.in」と書いてあるが、これはそのままの文字列としてモデルに渡っている（値は入らない）。
+         実際の値を入れるには {{{run_input.in}}} と三重の波かっこで囲む
+```
+
 ### エラーが起きたとき、そのノードが何を返すか（`onError`）
 
 止まるかどうかは**ノードごとに決める**。Runtime が勝手に握りつぶすことはしない。
@@ -208,6 +231,35 @@ critic: EXPRESSION_EVALUATION_ERROR loop[revise] の until の式が読めない
 
 「まとめてコピー」にも（値を800字で切った形で）入る。ログの「**詳しく**」に印を付けると、
 モデルへ送った文と値の全文が実行ログにも出る。
+
+### 選択肢ごとの正しさ（％）だけ / 考えてから答える
+
+「出力の形」に2つ足した。どちらも schema なので、内蔵LLMでは**文法として強制**される。
+
+**選択肢ごとの正しさ（％）だけ** — 選択肢の名前を並べると、それぞれに 0〜100 の整数だけが返る。
+
+```json
+{"type":"object",
+ "required":["支持できる","質問に合っている","矛盾が無い"],
+ "properties":{"支持できる":{"type":"integer","minimum":0,"maximum":100},
+               "質問に合っている":{"type":"integer","minimum":0,"maximum":100},
+               "矛盾が無い":{"type":"integer","minimum":0,"maximum":100}}}
+```
+
+理由も文章も返らないので短く終わり、小さいモデルでも崩れにくい。
+数で返るので `この.out.支持できる >= 80` と条件に書け、計算ノードで足し合わせるのも楽。
+候補の確からしさ（候補A / 候補B / 候補C）にも、観点ごとの点にも使える。
+
+**考えてから答える** — `thinking`（考えた筋道）→ `answer`（答え）の順で返す。
+
+```json
+{"type":"object","required":["thinking","answer"],
+ "properties":{"thinking":{"type":"string"},"answer":{"type":"string"}}}
+```
+
+内蔵LLM（XGrammar）は **schema に書いた順**に出すので、`thinking` が先頭にあることに意味がある。
+そのぶん `maxTokens` を食う。次のノードへは線の `pick` で `answer` だけ渡せる。
+「項目を決める」「選択肢ごとの％」では、チェック1つで `thinking` を先頭に足せる。
 
 ### 出力の形をノードごとに決める
 
@@ -959,7 +1011,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト65件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録）
+node tests/harness-runtime.mjs      # 自己テスト66件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
