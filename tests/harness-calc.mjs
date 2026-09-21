@@ -122,14 +122,27 @@ R['⑥ 使い方'].コピー = (await p.textContent('#logMsg')).includes('コピ
 ok.help = R['⑥ 使い方'].見出し >= 10 && R['⑥ 使い方'].文字数 > 2000 && R['⑥ 使い方'].コピー;
 
 // ⑦ 使い方の「JSONで書く」タブ: JSONのかたまりが形のまま出て、全文コピーできる
-await tap('#hlTabJ');
+await tap('#hlTab_json');
 R['⑦ JSONタブ'] = { 見出し: await p.locator('.help h4').count(), かたまり: await p.locator('.help pre.hcode').count(),
   文字数: (await p.textContent('.help')).length,
   例にloopRole: (await p.textContent('.help')).includes('"loopRole": "done"'),
   onError: (await p.textContent('.help')).includes('onError'), コピー: null };
 await tap('#hlCopy');
 R['⑦ JSONタブ'].コピー = (await p.textContent('#logMsg')).includes('コピーした');
-await tap('#hlTabR');                                   // 読みものへ戻れる
+// ⑧ 3つ目のタブ「詳しい動き」
+await tap('#hlTab_deep');
+{const t = await p.textContent('.help');
+ R['⑧ 詳しい動き'] = { 見出し: await p.locator('.help h4').count(),
+   かたまり: await p.locator('.help pre.hcode').count(), 文字数: t.length,
+   章: ['値が流れる仕組み','start:any','onError','DEADLOCK','Retry と Resume',
+        'よく事故る組み合わせ','そのまま貼って動く例'].every(x=>t.includes(x)),
+   例: t.includes('"type": "map"') && t.includes('"type": "quorum"') && t.includes('"modules"') };
+ await tap('#hlCopy');
+ R['⑧ 詳しい動き'].コピー = (await p.textContent('#logMsg')).includes('コピーした');
+ ok.helpDeep = R['⑧ 詳しい動き'].見出し >= 40 && R['⑧ 詳しい動き'].文字数 > 30000
+   && R['⑧ 詳しい動き'].かたまり >= 25 && R['⑧ 詳しい動き'].章 && R['⑧ 詳しい動き'].例
+   && R['⑧ 詳しい動き'].コピー;}
+await tap('#hlTab_read');                               // 読みものへ戻れる
 R['⑦ 戻れる'] = (await p.textContent('.help')).includes('まず動かす');
 ok.helpJson = R['⑦ JSONタブ'].かたまり >= 15 && R['⑦ JSONタブ'].文字数 > 6000
   && R['⑦ JSONタブ'].例にloopRole && R['⑦ JSONタブ'].onError && R['⑦ JSONタブ'].コピー && R['⑦ 戻れる'];

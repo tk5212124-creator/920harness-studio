@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 1件ずつ（Map）と集計 v0.27.0</title>
+<title>Harness Studio — 詳しい動き v0.28.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -117,7 +117,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.27.0 · 1件ずつ（Map）</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.28.0 · 詳しい動き</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -2469,7 +2469,9 @@ const rvOf=v=>typeof v==="string"?{type:"text",value:v}:{type:"json",value:v};
 function parsePick(pick){
   const t=String(pick==null?"":pick).trim();if(!t)return null;
   const parts=t.split(".");let key=null;
-  if(/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(parts[0])){key=parts[0];parts.shift();}
+  // 項目名は日本語でもよい（schema も式もノード名も日本語を許しているので、ここだけ ASCII にしない）。
+  // "items.0" のような数字の指定とは、先頭の文字で区別できる。
+  if(new RegExp("^"+IDRE+"$").test(parts[0])){key=parts[0];parts.shift();}
   const rest=parts.join(".");
   if(rest==="")return{key,from:null,to:null,range:false};
   const m=/^(\d+)(?:\.\.(\d*))?$/.exec(rest);
@@ -6607,6 +6609,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 線が何本も入っていても、配列が1つ入っていても、同じように扱う。
 
 **多数決（quorum）** — 1つずつに条件を当てて、何人そろえば合格かを決める。
+- 入力元が「このノードだけ止める」で終わっていたら、**その票はもう来ない**ものとして数える（待ち続けない）。
 - 条件は \`value.score >= 80\`（1つ分の値は \`value\`、何番目かは \`index\`、中身がJSONならキー名もそのまま書ける）。
 - 「何人そろえば合格か」か「割合（0.67 など）」で決める。書かなければ過半数。
 - 結果は \`{"pass":true,"decided":true,"agree":2,"against":1,"arrived":3,"total":3,"required":2,"results":[…]}\`。
@@ -6627,6 +6630,14 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - **自分自身を呼ぶ（再帰）は使えない**。書くと実行前に落ちる。
 - ノード編集から「このモジュールだけを開く」で単体で動かして試せる。
 
+**1件ずつ（map）** — 配列の1件ずつに同じところを通して、**入力と同じ順番の配列**で返す。
+- 本体は1ノードでなくてよい（モジュール・ループ・並列＋Join・さらに 1件ずつ も入れられる）。
+- 1件の中では \`value\`（その件）と \`index\`（何件目か）が使える。
+- **1件だけ失敗したとき**を選べる（止める／その件を外す／null にする／決めた値にする）。
+  ノードごとの「エラーが起きたとき」が先に効く。
+- 途中で止めて続きから再開しても、**終わった件は二度実行しない**。
+- 速くはならない（1件ずつ順に処理する）。まとめて書けることと、件ごとに混ざらないことが利点。
+
 **そのまま通す（pass）** — 値を変えずに中継する。名前を付けて追いやすくしたいときに使う。
 
 ## 8.7 くらべる（実験）
@@ -6638,6 +6649,9 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 並ぶのは 状態・呼出回数・入出力トークン・かかった時間・周回・エラー数・やり直し回数・点検の結果・result。
 - 「result から見たい値」に \`score\` や \`best.score\` と書くと、その値が列になる。
 - 結果は **JSON でも CSV でもコピー／保存**できる。途中で閉じても残る。
+- **集計表**が上に出る。変種 × 入力ごとに runs・成功率・点検の通過率・エラー率・再試行率と、
+  呼び出し回数・トークン・時間・周回・取り出した値の **平均／中央／最小／最大／ばらつき**。
+  生の1回ずつの記録は下にそのまま残る（**平均だけ見て個々の失敗を見落とさない**ため）。
 
 ## 9. 出力ノード
 最後の結果を受け取る。いくつ置いてもよい（条件分岐で「合格」「不合格」を別々の出力に出せる）。
@@ -6664,7 +6678,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 赤い ⚠ は**実行前に分かった直すところ**。その場で直せるものはボタンが出る（「schema を付ける」「出口の流し方を決める」「条件の見る先を変える」など）。
 - 「診断する」で、機械で確実に分かることだけを一覧にする（LLMの意見ではない）。
 - 「実行ログ」→ **まとめてコピー**（Spec・ログ・失敗の理由・端末の対応状況・実行の記録が1つに入る）。そのまま相談先に貼れる。
-- 「**実行の記録をコピー**」は機械が読む用の全部入り（どのノードが何を受け取って何を返したか・掛かった時間・トークン・どの枝の何周目か・モデルへ送った文・動かなかったノードが何を待っていたか）。直させたいLLMにはこれを渡すのがいちばん早い。
+- 「**実行の記録をコピー**」は機械が読む用の全部入り。**画面のログに出た行もそのまま入っている**ので、記録だけ渡せば足りる（どのノードが何を受け取って何を返したか・掛かった時間・トークン・どの枝の何周目か・モデルへ送った文・動かなかったノードが何を待っていたか）。直させたいLLMにはこれを渡すのがいちばん早い。
 - ログの「**詳しく**」に印を付けると、次の実行からモデルへ送った文と値の全文もログに出る。
 - 実行ログには**ノードごとの開始時刻と終了時刻**（hh:mm:ss.mmm）と掛かった時間が出る。どこで待たされているかはここで分かる。
 - 進めなくなったとき・出力に届かず終わったときは、**どのノードが何を待っていたか**を名指しで出す。そのノードの「動き出す条件」を見る。
@@ -6677,6 +6691,16 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - **外部のLLMに直させる**: 「書き出す」→ 説明付きの1枚を渡し、返ってきた文を「取り込む」に貼ると、**差分を見てから**適用できる。
 - **取り込む**: HSL / JSON / 共有リンクのどれでも。読めないときは行番号付きで理由が出る。
 - **JSONで直に書く**: このシートの上の「**JSONで書く**」タブに、ノードと線に書ける設定が全部載っている。そこも全文コピーできるので、外部のLLMに渡す説明としてそのまま使える。
+
+## 14.5 この使い方には3つのタブがある
+
+- **読みもの**（いま見ているところ） … 画面の操作とノードの意味。はじめての人向け。
+- **JSONで書く** … ノード・線・metadata に書けるキーの一覧。書き方を調べるとき。
+- **詳しい動き** … Runtime が実際にどう動くか（何回動くか・値がどう混ざらないか・
+  失敗がどう伝わるか・Retry と Resume の違い）と、**そのまま貼って動く完全な例**。
+  組み合わせて設計するときと、外部のLLMに渡すときはここ。
+
+どのタブも「全部コピー」と「文で保存」ができる。
 
 ## 15. 気をつけること
 - 端末のメモリには限りがある。大きいモデル＋長い文脈＋並列は落ちやすい。
@@ -7154,6 +7178,1368 @@ ${HELP_JSON_EXAMPLE}
 - 「診断する」は機械で分かることだけを出す（LLMの意見ではない）。
 - 動かしたあと「実行の記録をコピー」を押すと、**どのノードが何を受け取って何を返したか／どれだけ掛かったか／動かなかったノードは何を待っていたか／モデルへ送った文**が全部入った JSON が出る。直すときはこれをそのまま貼ればいい。
 `;
+/* 「詳しい動き」に載せる、そのまま貼って動く例。
+   ここに置いた全部を自己テストで validate に通している（載っている例が動かない、を作らない）。 */
+const M=(id,mock,extra)=>Object.assign({id,type:"llm",provider:"m",mock},extra||{});
+const MANY={in:{type:"any",cardinality:"many"}};
+const PAR={mode:"parallel",failurePolicy:"fail_fast"};
+const BASE=(nodes,edges,extra)=>Object.assign(
+  {metadata:{name:"例",version:"1"},providers:{m:{adapter:"mock"}},nodes,edges},extra||{});
+const DEEP_EXAMPLES=[
+{name:"1. 3並列 → Join",note:"1つの入力を3つに配り、Markdown でまとめる。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},
+   M("A",{tag:"案A"}),M("B",{tag:"案B"}),M("C",{tag:"案C"}),
+   {id:"jn",type:"join",op:"markdown",labels:["案A","案B","案C"],inputs:{items:{type:"any",cardinality:"many"}}},
+   {id:"out",type:"output"}],
+  [...["A","B","C"].map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"}})),
+   ...["A","B","C"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"jn",port:"items"},position:i})),
+   {from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}])},
+{name:"2. start:any で再発火",note:"A が届いた時点で1回、C が届いてもう1回動く。2回目は A も一緒に見える。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},M("A",{tag:"A"}),M("B",{tag:"B"}),M("C",{tag:"C"}),
+   M("X",{echoPrompt:true},{inputs:MANY,start:{mode:"any"}}),
+   {id:"out",type:"output",inputs:MANY,start:{mode:"any"},merge:{op:"json_array"}}],
+  [{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+   {from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+   {from:{node:"A",port:"out"},to:{node:"X",port:"in"},position:0},
+   {from:{node:"B",port:"out"},to:{node:"C",port:"in"}},
+   {from:{node:"C",port:"out"},to:{node:"X",port:"in"},position:1},
+   {from:{node:"X",port:"out"},to:{node:"out",port:"in"},position:0}])},
+{name:"3. start:custom（(in) または (in かつ lp)）",note:"from に書くのは送り元のノードID。",
+ spec:BASE([{id:"in",type:"input"},
+   {id:"lp",type:"loop",loop:{id:"lp",max:2},inputs:MANY,start:{mode:"any"},routing:{failurePolicy:"fail_fast"}},
+   M("書く",{tag:"案"},{inputs:MANY,start:{mode:"custom",op:"or",
+     groups:[{op:"or",from:["in"]},{op:"and",from:["in","lp"]}]}}),
+   {id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+   {from:{node:"in",port:"out"},to:{node:"書く",port:"in"},position:0},
+   {from:{node:"lp",port:"out"},to:{node:"書く",port:"in"},loopRole:"body",position:1},
+   {from:{node:"書く",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+   {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}])},
+{name:"4. 改稿ループ（点数が8以上になるまで）",note:"until は1周まわってから見る。max は保険。",
+ spec:BASE([{id:"in",type:"input"},
+   {id:"lp",type:"loop",loop:{id:"lp",max:3,until:"評価.out.score >= 8"}},
+   M("書く",{tag:"案"},{inputs:MANY,start:{mode:"any"}}),
+   M("評価",{scoreByIteration:[5,9]},{schema:{type:"object",required:["score"],
+     properties:{score:{type:"integer",minimum:0,maximum:10}}}}),
+   {id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+   {from:{node:"lp",port:"out"},to:{node:"書く",port:"in"},loopRole:"body",position:1},
+   {from:{node:"書く",port:"out"},to:{node:"評価",port:"in"}},
+   {from:{node:"評価",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+   {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}])},
+{name:"5. onError の3種を並べて比べる",note:"value は値が届き、null は null が届き、skip は何も届かない（Join で詰まる）。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},
+   M("A",{fail:"oom"},{onError:"value",onErrorValue:"（代わり）"}),
+   M("B",{fail:"oom"},{onError:"null"}),
+   M("C",{fail:"oom"},{onError:"skip"}),
+   M("D",{tag:"D"}),
+   {id:"jn",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}},start:{mode:"any"}},
+   {id:"out",type:"output"}],
+  [...["A","B","C","D"].map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"}})),
+   ...["A","B","C","D"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"jn",port:"items"},position:i})),
+   {from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}])},
+{name:"6. 1本が落ちても最後まで行く（fail_fast を効かせない）",note:"落ちうる枝に onError を付けておく。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},
+   M("こわれる",{fail:"generic"},{onError:"skip"}),M("ふつう",{tag:"OK"}),
+   {id:"まとめ",type:"pass",inputs:MANY,start:{mode:"any"},merge:{op:"json_array"}},
+   {id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"こわれる",port:"in"}},
+   {from:{node:"in",port:"out"},to:{node:"ふつう",port:"in"}},
+   {from:{node:"こわれる",port:"out"},to:{node:"まとめ",port:"in"},position:0},
+   {from:{node:"ふつう",port:"out"},to:{node:"まとめ",port:"in"},position:1},
+   {from:{node:"まとめ",port:"out"},to:{node:"out",port:"in"}}])},
+{name:"7. ports + pick + transform",note:"出す側で項目を分け、受け取る側でさらに絞り、配列を箇条書きにする。",
+ spec:BASE([{id:"in",type:"input"},
+   M("A",{fixed:{score:7,items:["い","ろ","は"]}},{
+     schema:{type:"object",required:["score","items"],
+       properties:{score:{type:"integer"},items:{type:"array",items:{type:"string"}}}},
+     ports:[{id:"p1",label:"点数",pick:"score"},{id:"p2",label:"リスト",pick:"items"}],
+     routing:PAR}),
+   M("数を見る",{echoPrompt:true}),M("文にする",{echoPrompt:true}),
+   {id:"out",type:"output",inputs:MANY,merge:{op:"json_array"}}],
+  [{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+   {from:{node:"A",port:"p1"},to:{node:"数を見る",port:"in"}},
+   {from:{node:"A",port:"p2"},to:{node:"文にする",port:"in"},transform:"list_to_text"},
+   {from:{node:"数を見る",port:"out"},to:{node:"out",port:"in"},position:0},
+   {from:{node:"文にする",port:"out"},to:{node:"out",port:"in"},position:1}])},
+{name:"8. 複数 Output（最後に動いた方が run.result）",note:"確実に1つにしたいなら手前でまとめる。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},M("A",{tag:"A"}),M("B",{tag:"B"}),
+   {id:"o1",type:"output"},{id:"o2",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+   {from:{node:"in",port:"out"},to:{node:"B",port:"in"}},
+   {from:{node:"A",port:"out"},to:{node:"o1",port:"in"}},
+   {from:{node:"B",port:"out"},to:{node:"o2",port:"in"}}])},
+{name:"9. reduce（いちばん良いものを選ぶ）",note:"best は要素をまるごと返す。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},
+   M("A",{fixed:{name:"A",score:90}}),M("B",{fixed:{name:"B",score:65}}),M("C",{fixed:{name:"C",score:82}}),
+   {id:"best",type:"reduce",op:"best",path:"score",inputs:MANY},
+   {id:"out",type:"output"}],
+  [...["A","B","C"].map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"}})),
+   ...["A","B","C"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"best",port:"in"},position:i})),
+   {from:{node:"best",port:"out"},to:{node:"out",port:"in"}}])},
+{name:"10. quorum（3人中2人が80点以上なら合格）",note:"decided を cond で見てから先へ進める。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},
+   M("J1",{fixed:{score:90}}),M("J2",{fixed:{score:85}}),M("J3",{fixed:{score:40}}),
+   {id:"vote",type:"quorum",lang:"expr",condition:"score >= 80",required:2,inputs:MANY},
+   {id:"確定",type:"cond",lang:"expr",routing:{onNoMatch:"error"},
+    ports:[{id:"ok",label:"決まった",expr:"decided == true"},{id:"ng",label:"それ以外",else:true}]},
+   {id:"out",type:"output"},{id:"未確定",type:"output"}],
+  [...["J1","J2","J3"].map(id=>({from:{node:"in",port:"out"},to:{node:id,port:"in"}})),
+   ...["J1","J2","J3"].map((id,i)=>({from:{node:id,port:"out"},to:{node:"vote",port:"in"},position:i})),
+   {from:{node:"vote",port:"out"},to:{node:"確定",port:"in"}},
+   {from:{node:"確定",port:"ok"},to:{node:"out",port:"in"}},
+   {from:{node:"確定",port:"ng"},to:{node:"未確定",port:"in"}}])},
+{name:"11. assert（機械で確かめる・Run の成否とは別）",note:"onFail:\"continue\" なので落ちても止まらない。",
+ spec:BASE([{id:"in",type:"input"},
+   M("評価",{fixed:{score:9}},{schema:{type:"object",required:["score"],properties:{score:{type:"integer"}}}}),
+   {id:"点検",type:"assert",lang:"expr",onFail:"continue",
+    asserts:[{name:"8点以上",expr:"評価.out.score >= 8",severity:"fail"},
+             {name:"満点か",expr:"評価.out.score == 10",severity:"warn"}]},
+   {id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"評価",port:"in"}},
+   {from:{node:"評価",port:"out"},to:{node:"点検",port:"in"}},
+   {from:{node:"点検",port:"out"},to:{node:"out",port:"in"}}])},
+{name:"12. module（同じ部分ハーネスを2か所から呼ぶ）",note:"中のノードは w1__〜 / w2__〜 になる。",
+ spec:BASE([{id:"in",type:"input",routing:PAR},
+   {id:"w1",type:"module",module:"下書き"},{id:"w2",type:"module",module:"下書き"},
+   {id:"jn",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}},
+   {id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"w1",port:"in"}},
+   {from:{node:"in",port:"out"},to:{node:"w2",port:"in"}},
+   {from:{node:"w1",port:"out"},to:{node:"jn",port:"items"},position:0},
+   {from:{node:"w2",port:"out"},to:{node:"jn",port:"items"},position:1},
+   {from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}],
+  {modules:{"下書き":{version:"1",spec:{metadata:{name:"下書き",version:"1"},
+    nodes:[{id:"i",type:"input"},M("書く",{tag:"案"}),{id:"o",type:"output"}],
+    edges:[{from:{node:"i",port:"out"},to:{node:"書く",port:"in"}},
+           {from:{node:"書く",port:"out"},to:{node:"o",port:"in"}}]}}}})},
+{name:"13. map（配列の1件ずつを判定して配列で返す）",note:"1件だけ落ちても null にして続ける。",
+ spec:BASE([{id:"in",type:"input"},
+   {id:"主張",type:"calc",lang:"js",code:'return ["主張A","主張B","主張C"];'},
+   {id:"各件",type:"map",map:{id:"各件"},order:"input",onItemError:"null"},
+   {id:"判定",type:"calc",lang:"js",code:'return {claim:value, index:index, len:String(value).length};'},
+   {id:"まとめ",type:"pass"},{id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"主張",port:"in"}},
+   {from:{node:"主張",port:"out"},to:{node:"各件",port:"in"},position:0},
+   {from:{node:"各件",port:"out"},to:{node:"判定",port:"in"},mapRole:"body"},
+   {from:{node:"判定",port:"out"},to:{node:"各件",port:"in"},map:{id:"各件"},position:1},
+   {from:{node:"各件",port:"out"},to:{node:"まとめ",port:"in"},mapRole:"done"},
+   {from:{node:"まとめ",port:"out"},to:{node:"out",port:"in"}}])},
+{name:"14. map × module（1件ずつをモジュールに通す）",note:"Map と Module を組み合わせた形。",
+ spec:BASE([{id:"in",type:"input"},
+   {id:"主張",type:"calc",lang:"js",code:'return ["A","BB","CCC"];'},
+   {id:"各件",type:"map",map:{id:"各件"},onItemError:"skip"},
+   {id:"検証",type:"module",module:"検証"},
+   {id:"数える",type:"reduce",op:"count"},{id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"主張",port:"in"}},
+   {from:{node:"主張",port:"out"},to:{node:"各件",port:"in"},position:0},
+   {from:{node:"各件",port:"out"},to:{node:"検証",port:"in"},mapRole:"body"},
+   {from:{node:"検証",port:"out"},to:{node:"各件",port:"in"},map:{id:"各件"},position:1},
+   {from:{node:"各件",port:"out"},to:{node:"数える",port:"in"},mapRole:"done"},
+   {from:{node:"数える",port:"out"},to:{node:"out",port:"in"}}],
+  {modules:{"検証":{version:"1",spec:{metadata:{name:"検証",version:"1"},
+    nodes:[{id:"i",type:"input"},
+      {id:"c",type:"calc",lang:"js",code:'return {claim:inputs[0], ok:String(inputs[0]).length>1};'},
+      {id:"o",type:"output"}],
+    edges:[{from:{node:"i",port:"out"},to:{node:"c",port:"in"}},
+           {from:{node:"c",port:"out"},to:{node:"o",port:"in"}}]}}}})},
+{name:"15. JEV風（3つの型の判定 → 計算で門番 → ループ）",note:"Choice / Score / 3軸％ を並べて、計算ノードで合否を決める。",
+ spec:BASE([{id:"in",type:"input"},
+   {id:"lp",type:"loop",loop:{id:"lp",max:3,until:"門番.out.ok == true"},routing:{failurePolicy:"fail_fast"}},
+   M("書く",{tag:"案"},{inputs:MANY,start:{mode:"any"},routing:PAR}),
+   M("選ぶ",{fixed:{choice:"accept",confidence:80}},{schema:{type:"object",required:["choice","confidence"],
+     properties:{choice:{type:"string",enum:["accept","revise","regenerate","neither"]},
+       confidence:{type:"integer",minimum:0,maximum:100}}}}),
+   M("点数",{fixed:{score:9,confidence:70}},{schema:{type:"object",required:["score","confidence"],
+     properties:{score:{type:"integer",minimum:0,maximum:10},confidence:{type:"integer",minimum:0,maximum:100}}}}),
+   M("3軸",{fixed:{"支持できる":85,"質問に合っている":90,"矛盾が無い":88}},
+     {schema:{type:"object",required:["支持できる","質問に合っている","矛盾が無い"],
+       properties:{"支持できる":{type:"integer",minimum:0,maximum:100},
+         "質問に合っている":{type:"integer",minimum:0,maximum:100},
+         "矛盾が無い":{type:"integer",minimum:0,maximum:100}}}}),
+   {id:"門番",type:"calc",lang:"js",inputs:MANY,
+    code:"const a=inputs[0]||{},c=inputs[1]||{},s=inputs[2]||{},u=inputs[3]||{};\n"
+      +"const ok=c.choice==='accept'&&(c.confidence??0)>=70&&(s.score??0)>=8&&(s.confidence??0)>=65\n"
+      +"&&(u['支持できる']??0)>=80&&(u['質問に合っている']??0)>=80&&(u['矛盾が無い']??0)>=80;\n"
+      +"return{answer:String(a??''),ok,iteration};"},
+   {id:"out",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+   {from:{node:"lp",port:"out"},to:{node:"書く",port:"in"},loopRole:"body",position:1},
+   {from:{node:"書く",port:"out"},to:{node:"選ぶ",port:"in"}},
+   {from:{node:"書く",port:"out"},to:{node:"点数",port:"in"}},
+   {from:{node:"書く",port:"out"},to:{node:"3軸",port:"in"}},
+   {from:{node:"書く",port:"out"},to:{node:"門番",port:"in"},position:0},
+   {from:{node:"選ぶ",port:"out"},to:{node:"門番",port:"in"},position:1},
+   {from:{node:"点数",port:"out"},to:{node:"門番",port:"in"},position:2},
+   {from:{node:"3軸",port:"out"},to:{node:"門番",port:"in"},position:3},
+   {from:{node:"門番",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+   {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}])},
+{name:"16. 総合（ループ＋3Judge＋quorum＋点検＋条件分岐＋2つのOutput）",
+ note:"1つは onError:value、1つは onError:skip。quorum は「どれか来たら」で数え直し、"
+   +"点検は Run の成否とは別に数える。Retry と Resume がそのまま効く形。",
+ spec:BASE([{id:"in",type:"input"},
+   {id:"lp",type:"loop",loop:{id:"lp",max:3,until:"門番.out.ok == true"},routing:{failurePolicy:"fail_fast"}},
+   M("回答",{fixed:{answer:"雨の日は読書・料理・映画"}},{inputs:MANY,start:{mode:"any"},routing:PAR,
+     schema:{type:"object",required:["answer"],properties:{answer:{type:"string",minLength:1}}},
+     onTruncate:"retry",onBadOutput:"retry"}),
+   M("JudgeA",{fixed:{score:90}},{schema:{type:"object",required:["score"],
+     properties:{score:{type:"integer",minimum:0,maximum:100}}},
+     ports:[{id:"点",label:"点数",pick:"score"}]}),
+   M("JudgeB",{fail:"oom"},{onError:"value",onErrorValue:{score:0},
+     schema:{type:"object",required:["score"],properties:{score:{type:"integer",minimum:0,maximum:100}}}}),
+   M("JudgeC",{fail:"generic"},{onError:"skip",
+     schema:{type:"object",required:["score"],properties:{score:{type:"integer",minimum:0,maximum:100}}}}),
+   {id:"vote",type:"quorum",lang:"expr",condition:"value >= 80",required:2,total:3,
+    inputs:MANY,start:{mode:"any"}},
+   {id:"門番",type:"calc",lang:"js",inputs:MANY,
+    code:"const q=inputs[0]||{};return{ok:q.decided===true&&q.pass===true,agree:q.agree,decided:q.decided,iteration};"},
+   {id:"点検",type:"assert",lang:"expr",onFail:"continue",
+    asserts:[{name:"3周以内",expr:"iteration <= 3",severity:"fail"},
+             {name:"賛成が1票以上",expr:"門番.out.agree >= 1",severity:"warn"}]},
+   {id:"分ける",type:"cond",lang:"expr",routing:{onNoMatch:"error"},
+    ports:[{id:"ok",label:"合格",expr:"門番.out.ok == true"},{id:"ng",label:"それ以外",else:true}]},
+   {id:"合格",type:"output"},{id:"不合格",type:"output"}],
+  [{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+   {from:{node:"lp",port:"out"},to:{node:"回答",port:"in"},loopRole:"body",position:1},
+   {from:{node:"回答",port:"out"},to:{node:"JudgeA",port:"in"},pick:"answer"},
+   {from:{node:"回答",port:"out"},to:{node:"JudgeB",port:"in"},pick:"answer"},
+   {from:{node:"回答",port:"out"},to:{node:"JudgeC",port:"in"},pick:"answer"},
+   {from:{node:"JudgeA",port:"点"},to:{node:"vote",port:"in"},position:0},
+   {from:{node:"JudgeB",port:"out"},to:{node:"vote",port:"in"},pick:"score",position:1},
+   {from:{node:"JudgeC",port:"out"},to:{node:"vote",port:"in"},pick:"score",position:2},
+   {from:{node:"vote",port:"out"},to:{node:"門番",port:"in"},position:0},
+   {from:{node:"門番",port:"out"},to:{node:"点検",port:"in"}},
+   {from:{node:"点検",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+   {from:{node:"lp",port:"out"},to:{node:"分ける",port:"in"},loopRole:"done"},
+   {from:{node:"分ける",port:"ok"},to:{node:"合格",port:"in"}},
+   {from:{node:"分ける",port:"ng"},to:{node:"不合格",port:"in"}}])}
+];
+
+const DEEP_EXAMPLE_TEXT=DEEP_EXAMPLES.map((x,i)=>
+  `### ${x.name}\n${x.note}\n~~~\n${JSON.stringify(x.spec,null,1)}\n~~~`).join("\n\n");
+const HELP_DEEP=`# 詳しい動き（Runtimeの決まりごと）
+
+この章は「**画面を見なくても、ここだけ読めば JSON で全部書ける**」ようにするためのもの。
+初めての人は「読みもの」、キーを調べるときは「JSONで書く」、
+**組み合わせたときに何が起きるかを確かめたいとき**がここ。
+
+ここに書いてあるのは**いまの実装がそうなっている**ことだけ。
+確かめていないことは「未確認」と書いてある。
+
+## 1. 値が流れる仕組み（1歩ぶん）
+
+Runtime は**待ち行列（Work Item）を1つずつ**処理する。1つの Work Item は
+「ある実行の **execute**（動かす）」か「ある実行の **route**（次へ配る）」のどちらか1相。
+2つのノードが物理的に同時に動くことはない（＝端末の中で2つのLLMが同時に推論することはない）。
+
+1つの値が届いてから次へ流れるまでの順番は、実装ではこうなっている。
+
+~~~
+【配る側（route 相）】
+  ノードが出した値
+   → ports の pick（出口を分けているとき。出口ごとに切り出す）
+   → Delivery を作る（どの線で・どの場へ・何番目に届いたか を記録）
+   → 行き先の実行を作る／すでにある ready の実行に相乗りする
+
+【受け取る側（execute 相）】
+  その実行に合う Delivery を集める（場・活性・周回が合うものだけ）
+   → 入口ごとにまとめる
+   → position の小さい順に並べる
+   → edge の pick（受け取る側で項目を選ぶ）
+   → edge の transform（json_stringify / json_parse / list_to_text）
+   → 型の突き合わせ（inputs.<入口>.type）
+   → cardinality が many なら並び、one なら1つ
+   → merge（1つの入口に2本以上入っているとき1つの文にする）
+   → ノードを動かす
+   → schema の確認（LLM のとき）
+   → 成功なら値が決まる／失敗なら onError → Map の1件の扱い → 実行の失敗
+~~~
+
+大事なところ:
+
+- **ports の pick は出す側、edge の pick は受け取る側**。両方書くと**両方かかる**（出す側が先）。
+- **transform は pick のあと、型の突き合わせより前**。
+- **merge はいちばん最後**（pick も transform も、1本ずつに先にかかる）。
+- ここで失敗したときのエラーは、**受け取る側のノードのエラー**になる。
+  実測: \`A → B\` の線に \`transform:"json_parse"\` を付けて A が JSON を返すと、
+  \`TYPE_MISMATCH\` は **B のエラー**として記録される（A は成功のまま）。
+  だから \`onError\` は **B** に付ける。
+
+## 2. Delivery / 活性(activation) / 場(loopInstance) / 周回(iteration) / 実行(execution)
+
+- **Delivery** … 1本の線を1回流れた値。\`from\` \`to\` \`届いた順(arrival)\` \`活性\` \`場\` \`周回\` \`値\` を持つ。
+  **Delivery は消費されない**（読んでも残る）。あとから同じ実行がもう一度読める。
+- **実行（execution）** … 「このノードを、この活性・この場・この周回で動かす」1回分。
+  同じノードでも、活性や場や周回が違えば**別の実行**になる。
+- **活性（activationId）** … 分岐のかたまり。出口が2本以上あるノードから配るとき \`fork#N\` を作り、
+  そこから下は同じ活性になる。**活性が違う Delivery は同じ実行に混ざらない**。
+- **場（loopInstanceId）** … ループの1回ぶん／Map の1件ぶん。入れ子になると
+  \`m#1/i0|lp#2\` のように **外側|内側** と連なる。**外側の場から来た値は内側でも使える**が、
+  内側の場の値が外へ漏れることはない。
+- **周回（iteration）** … その場の中で何周目か。Map では「何件目か＋1」。
+- **試行（NodeAttempt）** … 1つの実行の中での呼び出し1回。\`onTruncate:"retry"\` や
+  \`onBadOutput:"retry"\` でやり直すと、同じ実行の中で試行が増える（実行は増えない）。
+
+同じノードが1回の Run で何度も動くのは次のとき。
+
+1. **ループ**（周回ごとに別の実行）
+2. **Map**（件ごとに別の実行）
+3. **start:any / custom の再発火**（新しい値が届くたびに別の実行）
+4. **Retry**（失敗した実行をもう一度 ready に戻す。実行は同じ、試行が増える）
+5. **別の活性**（並列の別の枝から来たとき）
+
+## 2.5 合流（同じ入口に別々の枝から入る）
+
+1つの入口に**別々の分岐から**線が入っているノードは「合流ノード」と呼ばれ、
+そこだけは**活性をまたいで1つの実行にまとめる**。そうしないと枝ごとに別の実行ができて、
+どちらも相手を待ち続けて止まる。場（ループの周・Map の件）は引き続き区別される。
+
+## 3. start:all（全部そろったら動く・既定）
+
+\`A → X\`、\`B → X\` で \`start\` を書かない（＝ \`all\`）とき。
+
+| できごと | X はどうなるか |
+|---|---|
+| A が届く | まだ動かない（B の Delivery が無い） |
+| B が届く | **動く**。A と B の両方を読む |
+| A がまた届く | **もう一度動く**。新しい A と、**残っている** B を読む |
+| B がまた届く | もう一度動く |
+
+**Delivery は消費されない。** 同じ線から複数回届いたときは:
+
+- \`cardinality:"many"\` … **線ごとに最後の1つ**を使う（線が3本なら値は3つ）
+- \`cardinality:"one"\` … 合うものの**最初の1つ**を使う
+
+実測: ループを抜けた値（1回だけ届く）と、別の枝の値の2本を \`all\` で受けると、
+X はちょうど1回動いて両方を読む。
+
+## 4. start:any（どれか来たら動く）
+
+**「1回だけ動く」ではない。新しい Delivery が届くたびに動く。**
+そして**そのときまでに届いている値を全部読む**（前の値も見える）。
+
+実測（A と C が別のタイミングで X に届く配線）:
+
+~~~
+1回目の X … "A1"          ← A だけ届いている
+2回目の X … "A1\\nC1"      ← C が届いたので動き直し、A も一緒に読む
+~~~
+
+ただし、**まだ動いていない（ready の）実行がある間に次が届いたら、同じ実行に相乗りする**。
+実測: A と B が同じ配り分けで同時に届くと、X は**1回だけ**動いて両方を読む。
+つまり「届いた回数＝動いた回数」ではない。
+
+## 5. start:custom（自分で条件を組む）
+
+~~~
+"start": {
+  "mode":"custom",
+  "op":"or",
+  "groups":[
+    {"op":"or","from":["in"]},
+    {"op":"and","from":["in","lp"]}
+  ]
+}
+~~~
+
+- **\`from\` に書くのは「送り元のノードID」**。入口の名前でも線の名前でもない。
+- \`groups[].op\` … その条件グループの中の見方。\`"or"\`＝どれか1つ届けば成立、\`"and"\`＝全部届けば成立。
+- いちばん外の \`op\` … 条件グループどうしのつなぎ方。
+- 上の例は画面の「**(in) または (in かつ lp)**」と同じ。
+- 成立するたびに動く（\`any\` と同じで**再発火する**）。
+- \`groups\` が空だと**絶対に成立しない**（止まる）。
+
+## 6. cardinality：one と many
+
+\`inputs\` の宣言。
+
+~~~
+"inputs":{"in":{"type":"any","cardinality":"many"}}
+~~~
+
+- **\`many\`** … その入口に入る**線ごとに1つずつ**値が並ぶ。\`position\` の小さい順。
+  「届いたイベントを全部ためる」のではない。同じ線から何度も届いたら**最後の1つ**が使われる。
+- **\`one\`**（書かないときの既定） … 合う Delivery の**最初の1つ**だけ。
+- 1つの入口に線を2本以上つないだのに \`many\` でないと、**検証エラー**（\`many以外への複数incoming\`）。
+  画面でつなぐと自動で \`many\` が入る。
+
+## 7. position（入口の順番）
+
+- 画面の「入力の順番」の ↑↓ がそのまま \`edge.position\` になる。
+- **\`edges[]\` に書いた順でも、届いた順でもない。** \`position\` だけで決まる。
+- \`many\` の入口では **0 から連番**でないと検証エラー（\`position未指定\` / \`position重複\` / \`position gap\`）。
+- 取り込みのときは、書いていなければ**線を書いた順**に 0,1,2… と振られる。
+- Join の \`items\` でも同じ。\`labels\` / \`keys\` はこの順番に対応する。
+
+## 8. merge（1つの入口に2本以上入ったとき）
+
+実測の入出力（\`A\` が \`{"n":1}\`、\`B\` が \`"B1"\` を返したとき）:
+
+| merge | 出る文字列 |
+|---|---|
+| 書かない／\`{"op":"concat"}\` | \`{"n":1}\` 改行 \`B1\` |
+| \`{"op":"concat","sep":" / "}\` | \`{"n":1} / B1\` |
+| \`{"op":"numbered"}\` | \`1. {"n":1}\` 改行 \`2. B1\` |
+| \`{"op":"numbered","labels":["甲","乙"]}\` | \`1. 甲: {"n":1}\` 改行 \`2. 乙: B1\` |
+| \`{"op":"markdown","labels":["甲","乙"]}\` | \`## 甲\` 空行 \`{"n":1}\` 空行 \`## 乙\` 空行 \`B1\` |
+| \`{"op":"markdown"}\`（labels なし） | \`- {"n":1}\` 空行 \`- B1\` |
+| \`{"op":"csv"}\` | \`"{""n"":1}",B1\` |
+| \`{"op":"csv","labels":["甲","乙"]}\` | \`甲,乙\` 改行 \`"{""n"":1}",B1\` |
+| \`{"op":"json_array"}\` | \`[{"n":1},"B1"]\`（**これだけ json 型**） |
+
+- **JSON の値は、\`json_array\` 以外では文字列に直されて混ざる**（\`JSON.stringify\` した形）。
+- \`labels\` が足りないときは、足りない分だけ名前なしで並ぶ（\`markdown\` は \`- \` の箇条書きになる）。
+- CSV の中の \`"\` は \`""\` に、\`,\` や改行を含む値は \`"\` で囲まれる。
+- **\`{{{in}}}\` は merge したあとの1つの文**。\`{{{inputs.<入口名>}}}\` も同じく merge 後。
+  1本ずつ触りたいときは \`{{{inputs.items.0}}}\` のように番号で指す。
+
+## 9. merge と Join の違い
+
+| | merge | Join ノード |
+|---|---|---|
+| どこに書くか | 受け取るノード自身の \`merge\` | 別に置いた \`type:"join"\` |
+| 形 | 文（\`json_array\` だけ配列） | \`concat/markdown/csv/json_array/json_object/template\` |
+| 名前 | \`merge.labels\` | \`labels\` / \`keys\` |
+| 前後の文 | 付けられない | \`prefix\` / \`suffix\`（文になる op のときだけ） |
+| 入口 | \`in\`（既定） | **\`items\` 固定** |
+| 向いている場面 | LLM に「まとめて渡す」 | まとめた形そのものを次へ渡す・図に残す |
+
+## 10. Join
+
+~~~
+{"id":"bundle","type":"join","op":"markdown",
+ "labels":["案A","案B"],
+ "inputs":{"items":{"type":"any","cardinality":"many"}}}
+~~~
+
+- 入口は **\`items\`**。線は \`"to":{"node":"bundle","port":"items"}\` と書く。\`cardinality:"many"\` は必須。
+- \`op\` … \`concat\` / \`markdown\` / \`csv\` / \`json_array\` / \`json_object\` / \`template\`
+- \`labels\` … \`["案A","案B"]\`。\`position\` の順に対応する。
+- \`keys\` … **\`[{"key":"a","position":0},{"key":"b","position":1}]\`**（\`json_object\` のときの明示指定）。
+  **\`labels\` とは書き方が違う**。両方あるときは \`keys\` が使われる。
+- \`prefix\` / \`suffix\` … \`concat\` / \`markdown\` / \`csv\` / \`template\` のときだけ付く。
+- \`template\` … \`{"syntax":"mustache","mode":"interpolation_only","value":"A: {{{items.0}}}"}\`。
+  \`{{{items.N}}}\` と \`{{{labels.N}}}\` が使える。
+
+## 11. Join に届かない枝があるとき
+
+\`A\` \`B\` \`C\` → Join で、**B が \`onError:"skip"\` になった**ときの実測。
+
+| Join の start | 結果 |
+|---|---|
+| \`all\`（既定） | **DEADLOCK で失敗**。B の値を待ち続ける |
+| \`{"mode":"any"}\` | 成功。\`["A1","C1"]\` |
+| \`{"mode":"custom", from:["A","C"]}\` | 成功。\`["A1","C1"]\` |
+
+**\`position\` の穴は残らない。** \`[A,null,C]\` ではなく \`[A,C]\` と**詰まる**。
+穴を残したいなら \`skip\` ではなく **\`onError:"null"\`** を使う（\`[A,null,C]\` になる）。
+
+## 12. ports（出口を分ける）
+
+~~~
+"ports":[
+  {"id":"p1","label":"点数","pick":"score"},
+  {"id":"p2","label":"理由","pick":"理由"}
+]
+~~~
+
+- \`id\` … 線の \`from.port\` に書く名前。
+- \`label\` … 画面に出す表示名だけ（Runtime は見ない）。
+- \`pick\` … その出口から出す値の切り出し方。空なら丸ごと。
+
+**ports を書いたノードから \`port:"out"\` で出した線・\`port\` を書かない線は、
+いちばん最初の出口（上の例では \`p1\`）として扱われる。**
+\`"out"\` という出口が別にあるわけではない。
+
+~~~
+"from":{"node":"A","port":"p2"}   → 理由
+"from":{"node":"A","port":"out"}  → p1 と同じ（点数）
+"from":{"node":"A"}               → 同上
+~~~
+
+知らない出口名を書くと **実行前の検証で落ちる**。
+
+## 13. pick（値の切り出し）
+
+実測（値は \`{"items":["い","ろ","は"],"score":7,"flag":true,"none":null,"empty":[]}\`）:
+
+| pick | 結果 |
+|---|---|
+| \`score\` | \`7\` |
+| \`flag\` | \`true\` |
+| \`none\` | \`null\` |
+| \`items.0\` | \`"い"\` |
+| \`items.1..2\` | \`["ろ","は"]\`（**両端を含む**） |
+| \`items.1..\` | \`["ろ","は"]\`（最後まで） |
+| \`items.2..1\` | \`[]\`（逆向きはエラーにならず空） |
+| \`items.9\` | エラー \`リストに 10 個目が無い（3個しかない）\` |
+| \`empty.0\` | エラー \`リストに 1 個目が無い（0個しかない）\` |
+| \`nokey\` | エラー \`nokey がその中に無い（あるのは: items, score, ...）\` |
+| \`score.0\` | エラー \`リストではないので 1 個目を取り出せない\` |
+
+- **項目名は日本語でもよい**（\`pick:"支持できる"\` が動く）。
+- 範囲指定（\`..\`）は**エラーにならず空配列**になることがあるので、後ろで件数を見ること。
+- 値そのものが配列でなく \`{"items":[...]}\` の形でも、\`items\` を見に行く。
+
+## 14. transform（値の作り変え）
+
+| transform | 入力 | 出力 |
+|---|---|---|
+| \`json_stringify\` | json か text | text（JSON の文字列） |
+| \`json_parse\` | **text だけ** | json |
+| \`list_to_text\` | 配列 か \`{"items":[…]}\` | text（\`- \` の箇条書き） |
+
+- 型が合わないと \`TYPE_MISMATCH\`。**受け取る側のノードのエラー**になる（実測確認済み）。
+  だから \`onError\` は受け取る側に付ける。
+- 順番は **pick → transform → 型の突き合わせ**。
+
+## 15. validation.typeCheck:"bypass"
+
+~~~
+{"from":{"node":"A"},"to":{"node":"B"},"validation":{"typeCheck":"bypass"}}
+~~~
+
+**\`inputs.<入口>.type\` との突き合わせだけ**をやめる。
+LLM の \`schema\` の確認には関係しない（あちらは値が返ってきたときに必ず効く）。
+\`type\` を書いていない／\`any\` の入口では、そもそも突き合わせが無いので意味がない。
+
+## 16. 流れる値の種類（RuntimeValue）
+
+流れる値は **\`text\`** と **\`json\`** の2つだけ。
+
+- 文字列 → \`text\`
+- 数値・真偽・\`null\`・配列・オブジェクト → **\`json\`**
+- LLM に \`schema\` が無ければ \`text\`、あれば \`json\`
+- 計算ノードが文字列を返せば \`text\`、それ以外は \`json\`
+- \`{{{in}}}\` に入るときは、\`json\` は \`JSON.stringify\` した文字列になる
+
+## 17. parallel（並列）
+
+~~~
+"routing":{"mode":"parallel","failurePolicy":"fail_fast"}
+~~~
+
+意味は「**1つの実行から複数の線へ同時に配り、同じ分岐グループにする**」。
+**物理的に同時に推論する保証ではない**（Runtime は待ち行列を1つずつ処理する）。
+出口が2本以上あるノードで \`routing.mode\` が無いと検証エラー。取り込み時に既定が入る。
+
+## 18. fail_fast（失敗の波及）
+
+\`A\` から \`B\` \`C\` \`D\` へ並列に配って **B が失敗**したとき:
+
+- **まだ動いていない兄弟**（C・D）は \`cancelled\`（理由 \`sibling_failed\`）になり、待ち行列から外れる
+- **もう動き終わった兄弟**はそのまま（\`success\` のまま、使用量も残る）
+- Run は \`failed\`・\`resumable:true\`
+
+\`failurePolicy\` は **いま使えるのは \`fail_fast\` だけ**。
+\`wait_all\` / \`isolate\` は**予約済みで未実装**。書くと検証で
+\`UNSUPPORTED_FAILURE_POLICY(予約済み・未実装)\` と落ちる。
+
+## 19. onError（ノードごとのエラーの扱い）
+
+| | \`error\`（既定） | \`value\` | \`null\` | \`skip\` |
+|---|---|---|---|---|
+| 先の線に値が流れる | 流れない | **決めた値**が流れる | **null** が流れる | **流れない** |
+| 下流から見えるもの | なし | その値 | \`null\` | なし |
+| そのノードの記録 | \`error\` | \`recovered\` | \`recovered\` | \`stopped\` |
+| \`run.errors\` | 残る | 残る（\`handledAs:"value"\`） | 残る | 残る（\`handledAs:"skip"\`） |
+| 使用量 | 失敗した呼び出しも数える | 同左 | 同左 | 同左 |
+| 兄弟（fail_fast） | **止まる** | 止まらない | 止まらない | 止まらない |
+| 下流が \`start:all\` | 届かないので止まる | 動く | 動く | **届かないので止まる** |
+| 下流が \`start:any\` | 他が来れば動く | 動く | 動く | 他が来れば動く |
+| Join | 待ち続ける | 値が入る | \`null\` が入る | **その分が詰まる** |
+
+実測（\`A\` が失敗、\`B\` \`C\` は成功、3本とも Join へ）:
+
+~~~
+onError なし   … Run は failed。B と C は cancelled
+onError:value … 成功。["代","B1","C1"]
+onError:null  … 成功。[null,"B1","C1"]
+onError:skip  … 成功。["B1","C1"]     ← 穴は詰まる
+~~~
+
+**\`null\` と \`skip\` の違いはここ。** \`null\` は値が届く。\`skip\` は**何も届かない**。
+
+## 20. DEADLOCK（進めなくなった）
+
+待ち行列に実行が残っているのに、**どれも入力が揃っていない**ときに \`DEADLOCK\` として失敗する。
+よくあるのは:
+
+- \`start:all\` のノードが、**もう来ない**入力を待っている（上流が \`skip\` / 失敗 / 未接続）
+- ループの戻り線が無く、周回の値を待っている
+- 別々の分岐から1つの入口に入っているのに合流にならない配線
+
+このとき**どのノードが何を待っていたか**をログと \`run.errors\` に名指しで出す。
+Output に届かないまま終わったときも同じ説明が出る（\`UNSATISFIED_INPUT\`）。
+
+## 21. ループ（4つの接続点）
+
+~~~
+上 ● 入口 ： 外から入ってくる線
+上 ○ 本体 ： もう一周させる先（mapRole ではなく loopRole:"body"／既定）
+下 ● 戻り ： 本体の終わりから戻る線（edge.loop:{id}）
+下 ○ 抜けたあと ： 条件が成立したら下へ流れる（loopRole:"done"）
+~~~
+
+~~~
+{"id":"lp","type":"loop","loop":{"id":"lp","max":3,"until":"評価.out.score >= 8","lang":"expr"}}
+
+{"from":{"node":"in","port":"out"},"to":{"node":"lp","port":"in"},"position":0}
+{"from":{"node":"lp","port":"out"},"to":{"node":"書く","port":"in"},"loopRole":"body"}
+{"from":{"node":"評価","port":"out"},"to":{"node":"lp","port":"in"},"loop":{"id":"lp"},"position":1}
+{"from":{"node":"lp","port":"out"},"to":{"node":"out","port":"in"},"loopRole":"done"}
+~~~
+
+**周回の進み方（実測）**
+
+~~~
+lp が外から値を受ける      → 周回 1 で本体へ配る
+本体が戻ってくる（周回1）  → until を見る → 偽なら 周回 2 で本体へ配る
+本体が戻ってくる（周回2）  → until を見る → 真なら「抜けたあと」へ
+~~~
+
+- **\`iteration\` は本体へ配るときに増える。** 本体のノードは 1,2,3… を見る。
+- **\`until\` は1周まわってから**しか見ない（最初の入口では見ない）。
+- 抜けるときに流れる値は、**最後に戻ってきた値**。
+- \`loop.max\` と \`loop.until\` の組み合わせ（実測。\`until\` は2周目で真になる mock）
+
+| 書き方 | 本体が動いた回数 |
+|---|---|
+| \`{"max":2}\` だけ | 2 |
+| \`{"until":"…"}\` だけ | 2（真になったら抜ける。**真にならないと止まらない**） |
+| \`{"max":5,"until":"…"}\` | 2（どちらか先に来た方） |
+| どちらも書かない | **止まらない**（緊急停止か安全装置で止まる） |
+
+- 抜けたあとの \`iteration\` は**元の場の周回に戻る**（いちばん外なら \`null\`）。
+
+## 22. ループの外から入る値
+
+~~~
+in ────────→ 書く
+lp（本体）──→ 書く
+~~~
+
+のように、ループの**中**のノードがループの**外**からも値を受けるとき:
+
+- 外から来た値は場が「外」なので、**どの周回でもそのまま読める**（毎周待ち直さない）。
+- ただし \`start\` が \`all\` のままだと、外の値は周ごとに新しく届かないので
+  **周回の値と外の値の両方を待って止まる**ことがある。
+  → その場合は \`"start":{"mode":"any"}\` にする（画面の「どれか来たら動く」）。
+- ループノード自身は、**2周目以降は戻ってきた値だけ**を読む（最初の外部入力は混ぜない）。
+
+## 23. 入れ子（ループの中のループ・Map の中のループ…）
+
+場は \`外側|内側\` と連なるので、何段でも入れ子にできる。
+
+~~~
+m#1/i0          … Map「m」の1件目
+m#1/i0|lp#3     … その1件の中のループ
+m1#1/i0|m2#5/i1 … Map の中の Map
+~~~
+
+- **内側の場の値は外へ漏れない**。**外側の場の値は内側で読める**。
+- 内側のループを抜けると、**入る前の場に戻る**（\`null\` に落ちない）。
+- 条件式の \`iteration\` は**その場の周回**。
+- 実測: Map 2件 × 中のループ2周 で本体が 4 回動き、件どうしは混ざらない。
+
+## 24. Cond（条件分岐ノード）
+
+~~~
+{"id":"check","type":"cond","lang":"expr",
+ "routing":{"onNoMatch":"error"},
+ "merge":{"op":"concat"},
+ "ports":[
+   {"id":"pass","label":"合格","expr":"score >= 8"},
+   {"id":"fail","label":"それ以外","else":true}
+ ]}
+~~~
+
+- 入口が複数のときは \`merge\` で1つにしてから見る（LLM ノードと同じ決め方）。
+- 条件の中では **\`value\`**（入ってきた値そのもの）、\`iteration\`、
+  中身が JSON ならそのキー名がそのまま使える（\`score\` など）。他のノードは \`ノード名.out.項目\`。
+- \`ports\` を**上から順に**見て、**最初に当たった1本だけ**に流す。
+- \`else:true\` の出口は必ず当たる。
+- 流れる値は**入ってきた値そのまま**（条件で作り変えない）。出口に \`pick\` を書けば絞れる。
+- どれにも当たらないとき:
+  - \`onNoMatch:"error"\`（既定） … \`NO_MATCH\` で失敗
+  - \`onNoMatch:"stop"\` … **Run は \`paused\`**（\`resumable:true\`、\`run.errors\` は空）。Resume で続きから
+- \`lang\` は \`"expr"\` か \`"js"\`（\`return true/false\`）。
+
+## 25. Cond と routing.mode:"first_match" の違い
+
+| | Cond ノード | \`routing.mode:"first_match"\` |
+|---|---|---|
+| 条件を書く場所 | ノードの \`ports[].expr\` | **線の \`if\` / \`else\`** |
+| 見る順 | \`ports\` の並び順 | \`priority\` の小さい順 |
+| \`value\` が使えるか | 使える | 使えない（\`ノード名.out.項目\` で書く） |
+| 出る値 | 入ってきた値 | そのノードが出した値 |
+| どれにも当たらない | \`onNoMatch\`（error / stop） | \`routing.onNoMatch\`（error / stop） |
+| 向いている場面 | 分岐そのものを図に残したい | 既存ノードの出口をそのまま条件で分けたい |
+
+\`first_match\` の決まり:
+
+- \`priority\` を書かないと \`0\` 扱い。**同じ \`priority\` は検証エラー**（\`priority重複\`）。
+- \`else\` は1本まで。\`if\` のどれにも当たらなければ \`else\` へ。
+- 同じノードから**条件つきの線と無条件の線を混ぜると検証エラー**（\`routing混在\`）。
+
+## 26. Output（出力ノード）
+
+- 入ってきた値がそのまま \`run.result\` になる。線が2本以上なら \`merge\` でまとめる。
+- **Output は何個置いてもよいが、\`run.result\` は「最後に動いた Output」で上書きされる。**
+  実測: \`o1\` と \`o2\` が両方動くと、\`run.result\` は後に動いた方の値になる（両方の記録は残る）。
+- 確実に1つの結果にしたいなら、**Output の手前で Join か reduce にまとめる**。
+
+## 27. Input（入力ノード）
+
+- 入力ノードが複数あると、画面の入力欄も**ノードごと**に増える。
+- 実行の起点になるのは **最初の1つだけ**（\`spec.nodes\` の並びで最初の \`type:"input"\`）。
+  他の入力ノードは、線でつながっていればそこから値が流れる。
+- 値の入り方: \`run.input\` が**ノードIDをキーにしたオブジェクト**。
+  そのノードIDのキーがあればその値、無ければ \`run.input\` 全体が流れる。
+- 差し込みからは \`{{{run_input.<入力ノードID>}}}\`、式からは \`run.input.<入力ノードID>\`。
+
+## 28. Retry と Resume
+
+| | Retry | Resume（前回の続き） |
+|---|---|---|
+| 何をする | **失敗した実行だけ**を ready に戻して動かし直す | 保存してある Run を**止まった所から**続ける |
+| 押せるとき | 失敗した実行があるとき | 前回の Run が \`success\` 以外で \`resumable\` のとき |
+| ページを閉じたあと | 消える | **残る**（端末に保存してある） |
+| 済んだノード | そのまま | **そのまま。もう一度モデルを呼ばない** |
+| fail_fast の枝の中 | **枝ごとやり直す**（止められた兄弟も戻す） | 止まった所だけ |
+
+- Resume の入口は画面のいちばん上。前回の Run があると「**前回の続きを開く**」と「**捨てる**」が出る。
+  保存されているのは Run 1つぶん（\`status\` / 実行 / Delivery / 使用量 / ループと Map の場 / ログ）。
+- **Resume は「最初からもう1回」ではない。** Provider を呼び終わって配る前で止まった実行は、
+  配るところから続く（**同じ推論をもう一度しない＝二重に課金しない**）。
+  これは自己テストで確かめている（\`execute→route Resume Provider再実行なし\` / \`pause Resume source再実行なし\`）。
+- Map も同じ。終わった件は \`run.mapInstances\` に残っているので**再開しても二度実行しない**。
+- \`cond\` の \`onNoMatch:"stop"\` と、安全装置（下記）で止まった Run も Resume できる。
+
+## 29. 実行の状態（status）
+
+**実行（execution）**
+
+| status | 意味 | 線が出るか | Retry |
+|---|---|---|---|
+| \`ready\` | 入力待ち／順番待ち | まだ | － |
+| \`running\` | 動いている | まだ | － |
+| \`completed\` | 終わって配り終えた | 出た | 不要 |
+| \`failed\` | 失敗した | 出ない | **できる** |
+| \`cancelled\` | 止められた（兄弟の失敗・緊急停止） | 出ない | 枝ごと Retry |
+| \`stopped\` | \`onError:"skip"\` / Map の1件の失敗 | 出ない | － |
+
+**ノードの記録（nodeRuns）**
+
+| status | 意味 | \`<node>.out\` から読めるか |
+|---|---|---|
+| \`success\` | ふつうに成功 | **読める** |
+| \`recovered\` | \`onError:"value"\` / \`"null"\` で代わりの値を出した | **読める** |
+| \`error\` | 失敗した | 読めない |
+| \`cancelled\` | 止められた（部分出力は捨てる） | 読めない |
+| \`stopped\` | \`skip\` された | 読めない |
+
+## 30. \`<node>.out\` はどの回の値か
+
+**そのノードの、\`success\` か \`recovered\` の記録のうち、いちばん最後のもの。**
+活性や場では絞っていない。つまり:
+
+- ループの中で何周も動いたノードは、**いちばん新しい周の値**が読まれる
+- \`start:any\` で再発火したノードも、**いちばん新しい実行**の値
+- 失敗した回・止められた回は飛ばされる
+
+\`<node>.meta.len\` はその同じ回の**文字数**（\`text\` はそのまま、\`json\` は \`JSON.stringify\` の長さ）。
+\`<node>.meta.tokens\` は Provider が返した \`outputTokens\`（**返さない Provider では \`null\`**。推測で埋めない）。
+
+## 31. 式・差し込み・JavaScript で使える名前
+
+○＝使える。
+
+| 名前 | 本文テンプレ等 | 式(expr) | 計算JS | 条件JS | ループJS |
+|---|---|---|---|---|---|
+| \`{{{in}}}\` | ○ | － | － | － | － |
+| \`{{{inputs.<入口>}}}\` | ○ | － | － | － | － |
+| \`{{{run_input.<入力ID>}}}\` | ○ | － | － | － | － |
+| \`{{{iteration}}}\` | ○ | － | － | － | － |
+| \`{{{vars.<名前>}}}\` | ○ | － | － | － | － |
+| \`value\` | － | ○ | Map の1件の中だけ | ○ | ○ |
+| \`index\` | － | Map の1件の中だけ | Map の1件の中だけ | Map の1件の中だけ | Map の1件の中だけ |
+| \`iteration\` | ○（差し込み） | ○ | ○ | ○ | ○ |
+| \`inputs\`（配列） | － | ○ | ○ | － | － |
+| \`vars.<名前>\` | \`{{{vars.x}}}\` | ○ | － | － | － |
+| \`run.input.<入力ID>\` | \`{{{run_input.x}}}\` | ○ | － | － | － |
+| \`<node>.out.<項目>\` | － | ○ | ○（式のとき） | ○ | ○ |
+| \`<node>.meta.len\` / \`.tokens\` | － | ○ | ○（式のとき） | ○ | ○ |
+| 入ってきた JSON のキー名 | － | ○ | 線の \`as\` 名として | ○ | ○ |
+
+**いちばん間違えやすいところ:**
+
+- **差し込みは \`{{{run_input.in}}}\`、式は \`run.input.in\`。** 書き方が違う。
+- **差し込みを三重の波かっこで囲まないと、ただの文字列としてモデルに渡る。**
+  \`system\` に「元質問は run_input.in」と書いても値は入らない（診断が名指しする）。
+- 差し込みは \`prompt.template.value\` だけでなく **\`system\` / \`prefix\` / \`suffix\` でも効く**
+  （\`{{{\` を書いた文だけ差し込む。書いていない文はそのまま通る）。
+- JavaScript の中では \`<node>.out.x\` のようなドットの式は**そのままでは使えない**。
+  計算ノードの JS で他のノードの値がほしいときは、**線でつないで \`as\` で名前を付ける**。
+
+式で使える形: \`+ - * / %\`、\`== != < <= > >=\`、\`and or not\`。
+使える関数: \`len() has() regex() count() min() max() json_parse() json_stringify()\`。
+ノード名も項目名も**日本語でよい**。
+
+## 32. 計算ノード（calc）
+
+~~~
+{"id":"判定","type":"calc","lang":"js",
+ "code":"return {ok:String(本文).length>=100, len:String(本文).length};"}
+~~~
+
+**変数名の決まり方（線ごとに、上から順に最初に使えるもの）**
+
+1. その線の \`as\`
+2. その線の \`pick\`
+3. つなぎ元のノードID
+4. どれも使えなければ \`in1\` / \`in2\` …（\`position\` の順）
+
+「使える」とは「JavaScript の名前として通り、予約語でない」こと。
+\`in\` \`class\` \`return\` などは予約語なので \`in1\` … になる。日本語の名前は使える。
+
+- \`inputs\` … 入ってきた順（\`position\` 順）の配列。\`lang\` が \`expr\` でも \`js\` でも使える。
+- \`iteration\` … その場の周回。
+- \`expr\` のときは \`<node>.out.<項目>\` も書ける。**\`js\` のときは書けない**（上の表のとおり）。
+- Map の1件の中では \`value\` と \`index\` も増える。
+
+**JavaScript は別スレッドで動き、3秒で打ち切る。**
+打ち切ったときは \`CODE_TIMEOUT\` のエラーになり、**ノードの \`onError\` が効く**。
+Retry も Resume もふつうのエラーと同じ。使用量は増えない（モデルを呼んでいないため）。
+\`return\` を書き忘れると \`CODE_NO_RETURN\` としてその旨を言う。
+
+Python / C / Visual Basic は**書けても動かない**（ブラウザに実行系が無い）。
+
+## 33. schema（出力の形）で使えるキーワード
+
+Runtime が**実際に見ているのはこれだけ**。
+
+| キーワード | 対応 |
+|---|---|
+| \`type\`（\`object\` \`array\` \`string\` \`number\` \`integer\` \`boolean\`） | ○ |
+| \`properties\` | ○ |
+| \`required\` | ○ |
+| \`items\` | ○ |
+| \`enum\` | ○ |
+| \`minimum\` / \`maximum\` | ○（数のとき） |
+| \`minLength\` / \`maxLength\` | ○（文字のとき・**文字数**で数える） |
+| \`pattern\` | ○（正規表現） |
+| \`minItems\` / \`maxItems\` | ○（配列のとき） |
+| \`oneOf\` / \`anyOf\` / \`allOf\` / \`not\` | **未対応**（書いても見ない） |
+| \`additionalProperties\` | **未対応**（余分なキーは通る） |
+| \`$ref\` / \`definitions\` | **未対応** |
+| \`default\` / \`title\` / \`description\` | 見ない（\`description\` は画面の表示にだけ使う） |
+
+**生成時に強制するのと、返ってきてから確かめるのは別の話。**
+
+| adapter | 生成時の強制 | 返ってきてからの確認 |
+|---|---|---|
+| \`webllm\`（内蔵LLM） | **する**（文法として渡す） | する |
+| \`wllama\`（CPU） | しない | する |
+| \`openai_local\` | \`response_format\` を送る（サーバ次第） | する |
+| \`mock\` | しない | する |
+
+**返ってきてからの確認はどの adapter でも必ず走る。**
+合わなければ \`SCHEMA_VALIDATION_ERROR\`（\`onBadOutput\` が効く）。
+
+内蔵LLMは **\`properties\` に書いた順**に出す。だから \`thinking\` を先頭に置くと「考えてから答える」になる。
+\`thinking\` はふつうの項目なので、**そのぶんトークンを食う**し、
+次のノードへ答えだけ渡したいときは線の \`pick:"answer"\` で選ぶ。
+
+**「選択肢ごとの正しさ（％）」の 0〜100 は、モデルが書いた数字**。
+統計的な確率として校正されたものではない。並べて比べる目安として使う。
+
+## 34. 途中で切れたとき（onTruncate）
+
+\`maxTokens\` に届いて切れたとき（\`schema\` を付けているときに効く）。
+
+| 値 | 動き |
+|---|---|
+| \`"error"\`（既定） | そこで止める |
+| \`"use"\` | 切れた所までを使う。JSON は閉じ直す |
+| \`"retry"\` | **\`maxTokens\` を倍にしてやり直す（最大2回）** |
+
+\`retry\` は \`128 → 256 → 512\` のように倍にしていく。
+**モデルの呼び出しは最大3回**（最初＋2回）。
+やり直す前の分も**使用量に数える**（\`totals.truncateRetries\` にも回数が残る）。
+Provider や文脈の上限を超える値にはしない（上限を超えると Provider 側のエラーになる）。
+
+**\`"use"\` の閉じ直しは、開いたままの括弧と引用符を閉じるだけ。**
+中身を足したり、途中の単語を直したりはしない。
+
+~~~
+{"item":"あいう        → {"item":"あいう"}      （文字列の途中 → 閉じる）
+{"a":1,"b":           → {"a":1}                （値が無いキーは落とす）
+{"xs":[1,2            → {"xs":[1,2]}           （配列を閉じる）
+~~~
+
+閉じ直しても JSON にならないときは、その旨を付けて失敗する。
+閉じ直せても \`schema\` に合わなければ、その理由で失敗する（黙って通さない）。
+
+## 35. 形に合わなかったとき（onBadOutput）
+
+| 値 | 動き |
+|---|---|
+| \`"error"\`（既定） | そこで止める |
+| \`"retry"\` | **もう一度聞く（最大2回）** |
+
+- **同じプロンプトで聞き直す。** 直し方の指示は足さない（勝手に文面を変えない）。
+- \`temperature\` などの設定も同じ。
+- 失敗した分も**使用量に数える**（\`totals.badOutputRetries\` に回数）。
+
+## 36. 途中で切れたのと、止まってしまったのの区別
+
+Runtime が区別できるのは **Provider が「\`maxTokens\` で切れた」と言ったときだけ**。
+空白や改行を出し続けて \`maxTokens\` に届いた場合も、Provider からは同じ「切れた」として返るので、
+**Runtime はこの2つを区別していない**。
+
+実機で「空白ばかりを \`maxTokens\` まで出す」ことが起きたときは、
+\`onTruncate:"retry"\` は**上限を倍にするだけ**なので逆効果になりやすい。
+そのときは \`maxTokens\` を下げる／\`schema\` を小さくする／
+その判定の \`onError\` を \`value\` や \`skip\` にして先へ進める、という組み方をする。
+
+## 37. 文脈の長さ（contextSize）
+
+画面の選択肢は **モデルの既定 / 1024 / 2048 / 4096**。
+
+- \`webllm\` では \`overrides.context_window_size\`、\`wllama\` では \`contextSize\` に入る。
+- 数えるのは **system ＋ 前に付ける文 ＋ 本文 ＋ 後ろに付ける文 ＋ これから書く分**。
+  schema を文法として渡す分は Provider 側の扱い。
+- **超えたときの動きは Provider 任せ**。Runtime は入力を切り詰めたり削ったりしない。
+  Provider がエラーを返せばふつうのノードのエラーになる（\`onError\` が効く）。
+- 「**この端末向けに省メモリにする**」ボタンは、その場で**文脈の長さを短い方に入れ直す**だけ。
+  モデルを替えたり、他の設定を触ったりはしない。
+
+## 38. ストリーミング（途中の文字）
+
+- 途中の文字は画面の「ストリーミング」欄に出て、その実行の \`partialOutput\` に貯まる。
+- **途中の文字は線に流れない。** 線に流れるのは**終わったノードの出力だけ**。
+- 途中で止めた（緊急停止・兄弟の失敗）ときは \`cancelled\` になり、**部分出力は捨てる**
+  （次へ渡さない。記録には \`partialOutput\` として残る）。
+- 使用量は Provider が最後に返したものだけを数える。
+
+## 39. Provider と Runtime の役割
+
+| Provider | Runtime |
+|---|---|
+| 推論する | どのノードをどの順で動かすか決める |
+| 中断（AbortSignal）を受ける | \`start\` の判定・配り分け・ループ・Map |
+| 使用量を返す | 失敗の波及（fail_fast）・\`onError\` |
+| モデルの読み込み・解放 | Checkpoint と Resume |
+| 形の強制（できる adapter だけ） | 返ってきた値の確認・記録 |
+
+Runtime は adapter の種類で挙動を変えない（\`mock\` でも \`webllm\` でも同じ順で動く）。
+
+## 40. mock（推論しないテスト用）
+
+\`node.mock\` を書くと mock adapter になる。**使用量では \`apiCalls\` を1と数える**（実際に呼んだのと同じ形で試すため）。
+
+| 書き方 | 返るもの |
+|---|---|
+| \`{"text":"…"}\` | その文（\`text\`）。何も書かないと \`(mock)\` |
+| \`{"tag":"A"}\` | \`"A" + 周回\`（\`A1\` \`A2\` …）。\`text\` |
+| \`{"fixed":{…}}\` | その値をそのまま（\`json\`） |
+| \`{"raw":"…"}\` | **本番と同じ道**で JSON を読み、\`schema\` も確認する |
+| \`{"rawByIteration":["…","…"]}\` | 周回ごとに別の \`raw\`（足りなければ最後のを繰り返す） |
+| \`{"scoreByIteration":[5,7,9]}\` | \`{"text":"<id> v<周回>","score":その値}\` |
+| \`{"cut":{"needs":96,"full":"…","at":12}}\` | \`maxTokens\` が \`needs\` 未満なら**切れた**ことにする |
+| \`{"stream":["あ","い"],"delayMs":10}\` | 1文字ずつ流す（中断の試験用） |
+| \`{"echoInput":true}\` | \`{"received":<入口 in の値>}\` |
+| \`{"echoPrompt":true}\` | **組み上がった本文をそのまま返す**（まとめ方の確認用） |
+| \`{"fail":"oom"}\` | \`RESOURCE_EXHAUSTED\`（retryable） |
+| \`{"fail":"model_load"}\` | \`MODEL_LOAD_FAILED\`（retryable） |
+| \`{"fail":"generic"}\` | \`PROVIDER_ERROR\`（retryable でない） |
+
+## 41. tool ノード
+
+\`type:"tool"\` は **LLM ノードとまったく同じ道**を通る（Provider を呼び、\`schema\` を確認し、
+使用量を数える）。**いまのところ道具を呼ぶ仕組みは入っていない**ので、
+使えるのは LLM ノードと同じことだけ。将来のために型として空けてある。
+**いま新しく組むなら \`type:"llm"\` を使う。**
+
+## 42. まとめる（reduce）
+
+~~~
+{"id":"best","type":"reduce","op":"best","path":"score","skipMissing":false,
+ "inputs":{"in":{"type":"any","cardinality":"many"}}}
+~~~
+
+- 入ってきたものが**配列1つ**ならその中身、**線が何本も**ならその並びをまとめる（同じ扱い）。
+- \`path\` … 各要素のどこを見るか（\`score\` / \`a.b\`）。空なら値そのもの。
+- \`skipMissing:true\` にすると \`path\` が無い要素を飛ばす（既定は \`false\` ＝ エラー）。
+
+| op | 返るもの |
+|---|---|
+| \`sum\` \`average\` \`min\` \`max\` | 数 |
+| \`count\` | 個数（空でもエラーにならない） |
+| \`all\` \`any\` | \`true\` / \`false\` |
+| \`first\` \`last\` \`best\` \`worst\` | **その要素をまるごと** |
+
+\`best\` / \`worst\` は \`path\` の値が最大／最小の要素を返す。
+空のときは \`count\` 以外 \`REDUCE_EMPTY\` で失敗する（\`onError\` が効く）。
+
+## 43. 多数決（quorum）
+
+~~~
+{"id":"vote","type":"quorum","lang":"expr","condition":"value.score >= 80",
+ "required":2,"total":3,"onBadItem":"error",
+ "inputs":{"in":{"type":"any","cardinality":"many"}},
+ "start":{"mode":"all"}}
+~~~
+
+返る形:
+
+~~~
+{"pass":true,"decided":true,"agree":2,"against":1,
+ "arrived":3,"terminal":0,"pending":0,"total":3,"required":2,
+ "results":[{"index":0,"pass":true,"error":null,"value":…}, …]}
+~~~
+
+| 名前 | 意味 |
+|---|---|
+| \`arrived\` | いま届いている票の数 |
+| \`terminal\` | **もう来ない**票の数（入力元が \`skip\` / \`cancelled\` で終わっている） |
+| \`pending\` | まだ来るかもしれない票（\`total - arrived - terminal\`） |
+| \`agree\` / \`against\` | 条件を満たした／満たさなかった票 |
+| \`pass\` | \`agree >= required\` |
+| \`decided\` | \`pass\`、または \`agree + pending < required\`（**もう結果は変わらない**） |
+
+- \`required\` を書かなければ **過半数**（\`requiredRatio\` があれば \`ceil(ratio × total)\`）。
+- \`total\` を書かなければ**入ってくる線の数**。
+- 条件の中では \`value\`（1票ぶんの値）、\`index\`（何番目か）、中身が JSON ならキー名。
+- \`onBadItem:"false"\` にすると、条件が読めない票を**反対票**として数える（既定はエラー）。
+- **早く決めたいとき**は \`start\` を \`{"mode":"any"}\` にする。届くたびに数え直し、
+  \`decided:true\` になった時点でもう変わらない。その先を \`cond\` で \`decided == true\` で分ける。
+
+## 44. 点検（assert）
+
+~~~
+{"id":"chk","type":"assert","lang":"expr","onFail":"continue",
+ "asserts":[
+   {"name":"点数","expr":"評価.out.score >= 8","severity":"fail"},
+   {"name":"空でない","expr":"len(回答.out.answer) > 0"},
+   {"name":"3周","expr":"iteration == 3","severity":"warn"}]}
+~~~
+
+- \`severity\` … \`fail\`（既定）/ \`warn\` / \`info\`
+- \`onFail\` … \`"continue"\`（既定・Run は続く）/ \`"error"\`（このノードをエラーにする）
+- 返る形 \`{"total":3,"passed":2,"failed":1,"warned":0,"info":0,"tests":[…]}\`
+- **点検の合否は Run の成否とは別**。\`run.assertions\` にまとまり、実行の記録にも入る。
+- 式が読めなかった点検は \`pass:false\` ＋ \`error\` つきになる（そこで止まらない）。
+
+**用途を混ぜないこと。** assert は「機械で確実に分かること」を見るもの。
+「回答の良し悪し」を見たいなら LLM ノード（Judge）＋ reduce / quorum を使う。
+
+## 45. モジュール
+
+~~~
+"modules":{"書き直し":{"version":"2","note":"…","spec":{ …ふつうのHarnessSpec… }}},
+"nodes":[{"id":"w1","type":"module","module":"書き直し"}]
+~~~
+
+- **入口 = 中の \`input\` ノードの id、出口 = \`output\` ノードの id。**
+  1つずつなら線の \`port\` は \`"in"\` / \`"out"\` のままでよい。2つ以上なら id を書く。
+- **実行の直前に中身へ置き換わる（展開）。** だから Runtime はモジュールを知らないままでよく、
+  使用量・エラー・記録・Checkpoint / Resume は**ふつうのノードとまったく同じ**。
+- 中のノードは \`w1__書く\`、中のループIDも \`w1__lp\` になる（ログ・表・記録にそのまま出る）。
+  展開すると中の \`input\` / \`output\` は \`pass\` ノードになる。
+- **同じモジュールを何か所からでも呼べる。** 呼び出しごとに別の場になるので混ざらない。
+- **再帰（自分を呼ぶモジュール）は使えない**。実行前の検証で落ちる。
+- \`version\` は記録用。モジュールはハーネスの JSON の中に入っているので、
+  **外の何かで勝手に中身が変わることはない**。
+- **\`run_input\` はいちばん外側の入力を指す。** モジュールの中でも外側の入力になるので、
+  モジュールへ値を渡すときは \`run_input\` ではなく**線でつなぐ**（\`{{{in}}}\` で受ける）。
+
+## 46. 1件ずつ（map）
+
+~~~
+{"id":"各件","type":"map","map":{"id":"各件"},"order":"input","onItemError":"null"}
+~~~
+
+- 入ってくる値は**配列**。配列でないと \`MAP_NOT_ARRAY\`（ノードの \`onError\` が効く）。
+- 線はループと同じ形（\`mapRole:"body"\` / 戻り線 \`map:{"id":…}\` / \`mapRole:"done"\`）。
+- **全件が終わってから**、入力と同じ順番の配列にして \`done\` 側へ流す。
+- 1件の中では \`value\`（その件）と \`index\`（何件目か・0から）。
+- \`order\` は \`"input"\` のみ（**終わった順は未対応**）。
+- \`onItemError\` … **1件だけ**の扱い。\`error\`（既定）/ \`skip\` / \`null\` / \`value\`（\`onItemErrorValue\`）。
+  **\`skip\` にすると結果の配列から詰められる**（穴は残らない）。穴を残したいなら \`null\`。
+- ノードごとの \`onError\` が**先**に効き、それで直らなかったときに \`onItemError\` へ来る。
+- 本体は1ノードでなくてよい（モジュール・ループ・並列＋Join・さらに map も入る）。
+- 途中で止めて再開しても、**終わった件は二度実行しない**。
+- **速くはならない**（Runtime は1件ずつ処理する）。まとめて書けることと、
+  件ごとに隔離されることが利点。
+
+## 47. そのまま通す（pass）
+
+~~~
+{"id":"中継","type":"pass"}
+~~~
+
+入ってきた値を**変えずに**次へ渡す。線が複数入るときは \`merge\` でまとまる。
+名前を付けて追いやすくしたいとき、線をまとめたいときに使う。
+モジュールを展開したときの出入口にもこれが使われる。
+
+## 48. 使用量（Usage）
+
+| 名前 | 意味 |
+|---|---|
+| \`apiCalls\` | Provider を呼んだ回数（**失敗した呼び出しも数える**。mock も数える） |
+| \`inputTokens\` / \`outputTokens\` | Provider が**返した**トークン数 |
+| \`usage未報告\` | 呼んだのにトークン数を返さなかった回数。**推測で埋めない** |
+| \`cost\` | \`0\`（ローカルなので実際に0）／\`costSource\` は \`unavailable\` |
+| \`iterTotal\` | **ループの周回の合計**（Map の件数は入らない） |
+| \`エラー\` | \`run.errors\` の件数 |
+| \`代わりの値で続行\` | \`onError:"value"\` / \`"null"\` で先へ進んだ回数 |
+| \`止めたノード\` | \`onError:"skip"\` で止めた回数 |
+
+- **\`cost:0\` と「測れていない」は別。** ローカルは本当に0円なので \`0\`、
+  そのうえで \`costSource:"unavailable"\` として「料金の出どころは無い」と正直に書いてある。
+- ノード別の表には status / 回数 / in tok / out tok / 文字数 / ms が出る。
+- \`iterTotal\` は複数のループがあれば**全部の合計**。Map の件数は \`totals.mapItems\` の方。
+
+## 49. Work Item と安全装置
+
+**1 Work Item ＝ 1つの実行の1相**（\`execute\` か \`route\`）。
+ノード1つが動いて次へ配るまでで**2 Work Item**になる。
+
+安全装置は **20000 Work Item**。そこまで回ったら Run を \`paused\` にして止める
+（勝手に諦めない。**Resume で続けられる**）。無限ループを書いたときはここで止まる。
+
+## 50. 緊急停止
+
+止まらないループのときに出る「■ 緊急停止」を押すと:
+
+- Provider に中断を伝える（AbortSignal）
+- 動いている実行は \`cancelled\`（**部分出力は捨てる**。記録には残る）
+- 待ち行列に残っていた実行も \`cancelled\`
+- **終わったノードはそのまま**（使用量も記録も残る）
+- Run は \`cancelled\`。Checkpoint に保存されるので**あとから Resume できる**
+
+## 51. 実行の記録（機械が読む全部入り）
+
+「実行の記録をコピー / 保存」で出る JSON（\`harness-trace/1\`）。**外部のLLMに渡して調べてもらう用**。
+
+| 中身 | 何が入っているか |
+|---|---|
+| \`harness\` | 名前・版・ノード数・線の数・\`specCanon\`・モジュールの名前と版 |
+| \`run\` | status・totals・iterationTotal・input・result・開始と書き出しの時刻 |
+| \`errors\` | ノード・種類・stage・\`handledAs\`（どう扱ったか）・場・周回・時刻 |
+| \`assertions\` | 点検の結果（Run の成否とは別） |
+| \`log\` | **画面のログに出た行ぜんぶ**（時刻つき。多すぎたら古い順に落とし \`logDropped\` に数） |
+| \`notRun\` | **動かなかったノードと、何を待っていたか** |
+| \`nodes[].runs[]\` | execId・場・周回・status・開始/終了時刻・ms・使用量・文字数・**used（どの線から受け取ったか）**・値 |
+| \`executions[].attempts[]\` | 試行ごとの時刻・ms・エラー・**request（モデルへ送った messages・model・maxTokens・schema）**・partialOutput |
+| \`deliveries[]\` | 届いた順・どの線・どの活性・どの場の何周目・値 |
+| \`maps[]\` | Map の件ごとの status / 値 / 出力 / エラー |
+| \`workQueue\` / \`loopInstances\` / \`branchGroups\` | 止まった時点の待ち行列と場と枝 |
+
+「まとめてコピー」には Spec・ログ・端末の対応状況と**値を800字で切った記録**が入る。
+全文がほしいときは「実行の記録をコピー」。
+
+## 52. ログのボタンの違い
+
+| ボタン | 何が出るか |
+|---|---|
+| ログをコピー / ログを保存 | 画面のログの文字だけ |
+| まとめてコピー / まとめて保存 | 端末・状態・入力・ログ・Spec(HSL/JSON)・記録（値800字） |
+| 実行の記録をコピー / 保存 | 上の表の全部入り JSON（値は切らない） |
+| **詳しく** | 次の実行から、**モデルへ送った文**と**値の全文**をログにも出す |
+| クリア | 画面のログの表示を消すだけ（記録や Checkpoint は消えない） |
+| 前回の続きを開く / 捨てる | 保存してある前回の Run を開く／消す |
+
+**「詳しく」と「実行の記録」には、プロンプトと入出力の全文が入る。**
+入力に秘密の情報を入れていたら、そのまま外へ出ることになるので渡す前に確かめること。
+
+## 53. 診断（機械で分かることだけ）
+
+「診断する」で出るのは、**LLM の意見ではなく配線から確実に分かること**。いま見ているのは:
+
+- 入力ノード／出力ノードが無い・入力が複数ある
+- 入力から辿り着けない／出力へ辿り着けない（行き止まり）
+- LLM: プロンプトが空・\`maxTokens\` 未設定・provider にモデルが無い
+- **\`{{{ }}}\` で囲んでいない \`run_input.〜\` / \`inputs.〜\` / \`vars.〜\`**（値が入らない書き方）
+- 内蔵LLM＋\`schema\` の注意
+- Join: \`items\` が \`many\` でない・\`op\` が無い
+- 条件式が知らないノードを見ている・\`schema\` が無いノードの \`.out.項目\` を見ている
+- ループ: 入る線が無い・繰り返す先が無い・抜けたあとの線が無い・止まらない設定
+
+検証（実行前に必ず走る）でエラーになるのは、id 重複・\`position\` の欠け／重複・
+\`many\` でない入口への複数入力・\`routing.mode\` の不正・\`failurePolicy\` の未実装値・
+知らない出口名・\`pick\` が読めない・schema の必須項目・モジュールが無い／再帰・
+Map の戻り線が無い、など。
+
+**知らないキーは、検証でも取り込みでも「無視」される。** 消しも警告もしない
+（Runtime が読まないだけ）。だから綴りを間違えると**黙って効かない**。
+
+## 54. HSL と JSON の行き来
+
+- HSL は1行1文の共有用テキスト。値はすべて JSON リテラル（\`"…"\` \`{…}\` \`[…]\`）。
+- \`node <id>: <種類>\` の下に字下げして設定を書く。知らない設定名は \`set <キー> <値>\` で通る。
+- \`module "名前" = {…}\` でモジュールも1行で往復する。
+- \`layout\` / \`bend\` / \`meta\` も書き出される。
+- **完全には戻らない構成がある**ので、書き出しのときに「HSLだけでは戻らない（何箇所）」と出る。
+  そのときは JSON で共有する。
+- **JSON → HSL → JSON で、Runtime が読むものは全部残る。**
+  図の位置・大きさ・線の曲げも残る。コメントは残らない（HSL の \`#\` 行は読み飛ばす）。
+
+## 55. 版（version）
+
+- \`metadata.version\` … **そのハーネスの版**。中身は自由な文字列。Runtime は見ない（記録に残すだけ）。
+- 画面の上の \`v0.27.0\` … **道具そのものの版**。
+- 古い Spec を新しい Runtime で読んだときの**自動の作り変え（migration）は無い**。
+  足りない \`position\` と \`routing\` に既定値を入れるだけ（取り込みの下見に「既定値で埋めた」と出る）。
+
+## 56. 共有リンク
+
+Spec を圧縮して URL の \`#s=…\` に入れる。**サーバには何も置かない**。
+
+- 大きなハーネスほど URL が長くなる。長すぎると端末やアプリ側で切れることがある。
+- \`#\` から後ろはサーバに送られないが、**閲覧履歴やコピー先には残る**。
+- **入力の中身は入らない**（Spec だけ）。ただし \`default\` や \`vars\` に書いた文は入る。
+  秘密にしたいものは書かないこと。
+
+## 57. よく事故る組み合わせ
+
+**\`start:any\` ＋ \`many\`**
+届くたびに動き直すので、**同じノードが何度も走る**。Join や LLM だと呼び出し回数が増える。
+「全部そろってから1回」でよければ \`all\` のままにする。
+
+**\`start:custom\` ＋ ループ**
+\`from\` に書くのは**送り元のノードID**。ループノードの id を入れ忘れると、2周目以降に発火しない。
+
+**\`skip\` の先が \`start:all\`**
+\`skip\` されると**その線には何も届かない**ので、先のノードは待ち続けて DEADLOCK になる。
+先のノードを \`{"mode":"any"}\` にするか、\`skip\` ではなく \`null\` を使う。
+
+**\`parallel\` ＋ \`fail_fast\`**
+1本が失敗すると**まだ動いていない兄弟が全部 cancelled** になる。
+1本くらい落ちても続けたいなら、その枝のノードに \`onError:"value"\` か \`"skip"\` を付ける。
+
+**\`onError\` ＋ \`fail_fast\`**
+\`value\` / \`null\` / \`skip\` で回復したノードは**枝の失敗として扱われない**（兄弟は止まらない）。実測済み。
+
+**\`ports\` を定義したのに線の \`port\` を書かない**
+黙って**1つ目の出口**として扱われる。2つ目がほしいなら必ず \`port\` を書く。
+
+**\`ports\` の \`pick\` ＋ 線の \`pick\`**
+**両方かかる**（出す側 → 受け取る側）。二重に絞って空になっていないか確かめる。
+
+**\`pick\` ＋ \`transform\`**
+\`pick\` が先。\`json_parse\` は \`text\` にしか使えないので、\`pick\` で JSON を取り出したあとに
+\`json_parse\` を付けると \`TYPE_MISMATCH\` になる。
+
+**ループの外から入る値 ＋ \`start:all\`**
+外の値は毎周新しく届かないので、周回の値と外の値の両方を待って止まる。→ \`any\` にする。
+
+**Output が複数**
+\`run.result\` は**最後に動いた Output** になる。まとめたいなら手前で Join か reduce。
+
+**Join ＋ \`skip\`**
+穴は詰まる（\`[A,C]\`）。位置を保ちたいなら \`null\`。
+
+**文脈が足りない**
+超えたときの動きは Provider 任せ。長い入力を渡すなら \`contextSize\` を上げるか、手前で短くする。
+
+**\`onTruncate:"retry"\` で空回り**
+空白を出し続けて切れている場合、倍にしても空白が増えるだけ。\`maxTokens\` を下げる方が効く。
+
+**小さいモデルに細かい \`schema\`**
+\`minLength\` などは守られにくい。**形（項目があること）だけ schema で縛り、
+長さや良し悪しは計算ノードで見てループでやり直す**方が通る。
+
+**\`thinking\` を多くのノードで使う**
+そのぶんトークンを食う。最後の判断のところだけに使う。
+
+**\`quorum\` ＋ \`start:any\`**
+届くたびに数え直すので、\`decided\` を見ずに \`pass\` だけ見ると**途中の値で先へ進んでしまう**。
+\`cond\` で \`decided == true\` を先に見ること。
+
+**モジュールの中のループ**
+ループIDもモジュール名で付け替わる（\`w1__lp\`）。外から \`lp\` を名指しする式は書けない。
+
+**Retry ＋ fail_fast の枝**
+枝の中の1つを Retry すると、**止められた兄弟もまとめて戻して動かし直す**。
+1つだけやり直したいつもりでも、兄弟がもう一度走る（使用量が増える）。
+
+## 58. 画面にある道具（JSONだけでは見えないもの）
+
+JSON を書くだけでは存在が分からないが、画面にあるもの。ここに書いておく。
+
+**いちばん上（入出力）**
+- 入力ノード・出力ノードを増やすと、**入力欄と出力欄も自動で増える**。入力は**ノードIDをキー**にして渡る。
+- 入力の例は毎回いくつかの中から選ばれる。「別の例にする」で入れ替わる。
+- 前回の Run が残っていると「**前回の続きを開く**」と「**捨てる**」が出る（→ 28章）。
+
+**モデル（この端末の中で動くLLM）**
+- **端末にあるか調べる** … 端末に落ちているモデルを見つける。
+- **状態のしるし** … 端末にある／このサイトから取れる／未取得／起動済み。
+- **推定の必要メモリ**をモデルごとに出す（約376MB、約945MB…）。
+  端末に対して大きいものには「**この端末には大きいかも**」と出す。
+- **ダウンロード / 動作確認 / 削除** をモデルごとにできる。
+  動作確認では**起動にかかった秒数・生成の秒数・トークン数・tok/s** まで出す。
+- **自分で置いたモデルを足す** … 自分の置き場のモデルを一覧に足せる。
+- **f16非対応の端末向け（q4f32）も出す** … shader-f16 が無い端末向けの重みも一覧に出す。
+- **このサイトから配るモデル** … HuggingFace へ行かずに、同じ置き場から取れるものがある。
+- **CPUで動かす（GGUF）** … 候補ごとに必要メモリが出て、「**ためす（落として1文）**」で試運転できる。
+- **消えないようにする** … ブラウザに「消さないで」と申請する。
+  **使用容量 / 上限容量 / 長期保存の申請状態**も出る。保存されるのは**モデルの重み**。
+  ハーネスや Checkpoint は別の場所（localStorage）に入る。
+- **同時に端末に載せるモデルは1つ**。別のモデルのノードへ進むと、前のモデルを片付けてから読み込む
+  （小さい端末が落ちないようにするため）。CPU（wllama）は別枠なので、GPU 側とは別に扱う。
+
+**接続の確認（上級者向け）**
+- Provider（mock / OpenAI互換ローカル / 内蔵LLM）を切り替えて、**接続とモデルの読み込みだけ**を試せる。
+- **端末チェック**（WebGPU・shader-f16 があるか）、**モデル一覧を読む**、**保存状況**（IndexedDB）を単独で確認できる。
+- **この設定を Spec の providers.local にする** … いま試した設定をそのままハーネスの \`providers\` に入れる。
+
+**ハーネス編集**
+- **プリセット集** … 内蔵LLM直列／ローカル直列／ローカル並列+Join／JSON契約+文字数分岐／
+  ローカル改稿ループ／mock改稿ループ／mock並列／mock Loop×並列／mock分岐／mock template／
+  mock fail_fast／mockループノード。ワンタップで開ける。
+- **＋ ノード** … 種類を選んで足す。**整列**で自動で並べ直す。**＋ / − / ⤢** で拡大・縮小・全体表示。
+- ノードの**右下のつまみ**で大きさを変えられる（図の見た目だけ。Runtime は見ない）。
+- **実行前の警告** … 「ループに入る線が無い」「ループの繰り返す先が無い」など、
+  配線から確実に分かるものはその場で赤く出る。直せるものはボタンが付く。
+- **エディタ / JSON** の切り替え。JSON に貼ったものは**その場で図になる**。
+
+**自己テスト（開発・診断用）**
+- ページのいちばん下に、Runtime と Provider の**自己テストの結果**が出る（\`75/75 PASS\` など）。
+- これは**道具そのものが壊れていないか**を見るもの。ハーネスの良し悪しとは関係ない。
+- 本番の Checkpoint を汚さないよう、**メモリ上だけの保存先**で動く。
+- Provider の契約（HTTPのやりとり）は、**実際の通信をせずに**差し替えた通信で確かめている。
+
+**使い方（このシート）**
+- 3つのタブ。
+- それぞれ「**全部コピー**」と「**文で保存**」ができる。
+  外部のLLMに渡すときは、このタブごと渡せばよい。
+
+## 59. 自己テストで確かめている Runtime の約束
+
+下は**自動テストで毎回確かめている**こと。ハーネスを書くときの前提にしてよい。
+
+- **別の活性（分岐）の値を混ぜない**。並列の枝どうしで値が入れ替わらない。
+- **別の周回・別の件の値を混ぜない**。ループの周、Map の件ごとに隔離される。
+- **Resume で、終わった Provider 呼び出しをやり直さない**（二重に推論・課金しない）。
+  Provider を呼び終わって配る前で止まった実行も、配るところから続く。
+- **Map の終わった件は、続きから再開しても二度実行しない**。
+- **進めなくなったら DEADLOCK として落ちる**（黙って終わらない）。何を待っていたかを名指しする。
+- **途中の文字（streaming）は線に流さない**。終わったノードの出力だけが流れる。
+- **Runtime は Spec を書き換えない**（実行しても JSON は元のまま）。
+- **fail_fast では兄弟が \`cancelled\` になる**（\`failed\` とは区別される）。
+- **使用量は失敗した呼び出しも数え、Provider が返さないトークン数は推測で埋めない**。
+- **入口の順番は \`position\` で決まる**（届いた順ではない）。
+- **型が合わない線は \`TYPE_MISMATCH\` で落ちる**（黙って変換しない）。
+
+
+## 60. そのまま貼って動く例
+
+${DEEP_EXAMPLE_TEXT}
+`;
 function helpHTML(t){
   // ~~~ で囲んだところは JSON のかたまりなので、字下げを潰さずそのまま出す
   const parts=[];let buf=[],code=null;
@@ -7183,23 +8569,28 @@ function helpMd(t){
   }).join("");
 }
 let helpTab="read";
+const HELP_TABS={
+  read:{t:"読みもの",text:()=>HELP_TEXT,label:"使い方を全部コピー",file:"harness-studio-使い方.txt"},
+  json:{t:"JSONで書く",text:()=>HELP_JSON,label:"JSONの書き方を全部コピー",file:"harness-studio-JSONの書き方.txt"},
+  deep:{t:"詳しい動き",text:()=>HELP_DEEP,label:"詳しい動きを全部コピー",file:"harness-studio-詳しい動き.txt"}};
 function openHelp(tab){
   if(tab)helpTab=tab;
-  const isJ=helpTab==="json";
-  const T=isJ?HELP_JSON:HELP_TEXT;
-  const label=isJ?"JSONの書き方を全部コピー":"使い方を全部コピー";
+  const cur=HELP_TABS[helpTab]||HELP_TABS.read;
+  const T=cur.text();
   openSheet(head("使い方")
-    +`<div class="row"><button id="hlTabR"${isJ?"":' class="primary"'}>読みもの</button>`
-    +`<button id="hlTabJ"${isJ?' class="primary"':""}>JSONで書く</button></div>`
-    +`<div class="row"><button class="primary" id="hlCopy">${label}</button><button id="hlSave">文で保存</button></div>`
+    +`<div class="row">`+Object.entries(HELP_TABS).map(([k,v])=>
+      `<button id="hlTab_${k}"${k===helpTab?' class="primary"':""}>${esc(v.t)}</button>`).join("")+`</div>`
+    +`<div class="mini">${helpTab==="read"?"初めての人向け。画面の操作とノードの意味。"
+      :helpTab==="json"?"JSONのキーと型の一覧。書き方を調べるとき。"
+      :"Runtimeが実際にどう動くか。組み合わせたときに何が起きるかを確かめるとき。全部の例は検証に通してある。"}</div>`
+    +`<div class="row"><button class="primary" id="hlCopy">${cur.label}</button><button id="hlSave">文で保存</button></div>`
     +`<div class="help">${helpHTML(T)}</div>`
-    +`<div class="row"><button class="primary" id="hlCopy2">${label}</button></div>`);
+    +`<div class="row"><button class="primary" id="hlCopy2">${cur.label}</button></div>`);
   bindClose();
-  $("#hlTabR").onclick=()=>openHelp("read");
-  $("#hlTabJ").onclick=()=>openHelp("json");
-  const doCopy=()=>copyOut(T,isJ?"JSONの書き方":"使い方");
+  Object.keys(HELP_TABS).forEach(k=>{const b=$("#hlTab_"+k);if(b)b.onclick=()=>openHelp(k);});
+  const doCopy=()=>copyOut(T,cur.t);
   $("#hlCopy").onclick=doCopy;$("#hlCopy2").onclick=doCopy;
-  $("#hlSave").onclick=()=>saveOut(T,isJ?"harness-studio-JSONの書き方.txt":"harness-studio-使い方.txt");
+  $("#hlSave").onclick=()=>saveOut(T,cur.file);
 }
 $("#helpBtn").onclick=openHelp;
 
@@ -8329,6 +9720,47 @@ export async function CreateMLCEngine(model,opt){
     &&q.agree===1&&q.against===1&&q.total===3&&q.required===2
     &&q.pass===false&&q.decided===true
     &&JSON.stringify(q.terminalFrom)==='["C"]');}
+ // 74 取り出し（pick）の項目名も日本語でよい（schema・式・ノード名と揃える）
+ {const mk=pick=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"A",type:"llm",mock:{fixed:{"支持できる":85,"items":["い","ろ","は"],score:7}},
+     schema:{type:"object",required:["支持できる","score"],
+       properties:{"支持できる":{type:"integer"},score:{type:"integer"},items:{type:"array",items:{type:"string"}}}}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+     {from:{node:"A",port:"out"},to:{node:"out",port:"in"},pick}]});
+  const sp3={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"A",type:"llm",mock:{fixed:{"支持できる":85}},ports:[{id:"p1",label:"支持できる",pick:"支持できる"}],
+     schema:{type:"object",required:["支持できる"],properties:{"支持できる":{type:"integer"}}}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+     {from:{node:"A",port:"p1"},to:{node:"out",port:"in"}}]};
+  const r1=await fullRun(mk("score"),{}),r2=await fullRun(mk("支持できる"),{});
+  const r3=await fullRun(sp3,{}),r4=await fullRun(mk("items.1"),{});
+  ok("74 取り出し（pick）の項目名も日本語でよい（線でも出口でも）",
+    r1.status==="success"&&r1.result.value===7
+    &&r2.status==="success"&&r2.result.value===85&&validate(mk("支持できる")).length===0
+    &&r3.status==="success"&&r3.result.value===85&&validate(sp3).length===0
+    &&r4.status==="success"&&r4.result.value==="ろ");}
+ // 75 使い方の「詳しい動き」: 載せている完全な例が全部 検証を通り、実際に動く
+ {const bad=[],ran=[];
+  for(const ex of DEEP_EXAMPLES){
+    let sp=JSON.parse(JSON.stringify(ex.spec));
+    try{sp=expandModules(sp);}catch(e){bad.push(ex.name+": 展開できない "+errText(e));continue;}
+    normalizeSpec(sp);
+    const v=validate(sp);
+    if(v.length){bad.push(ex.name+": "+v[0]);continue;}
+    const r=await fullRun(sp,{in:"お題"});
+    ran.push({name:ex.name,status:r.status,err:(r.errors||[])[0]&&(r.errors[0].kind)});
+  }
+  const 止まった=ran.filter(x=>x.status!=="success"&&x.status!=="paused");
+  ok("75 使い方の「詳しい動き」: 載せた完全な例が全部 検証を通り、mock で最後まで動く",
+    DEEP_EXAMPLES.length>=16&&bad.length===0&&止まった.length===0
+    &&HELP_DEEP.indexOf(DEEP_EXAMPLE_TEXT)>0
+    &&/## 1\. 値が流れる仕組み/.test(HELP_DEEP)&&/## 57\. よく事故る組み合わせ/.test(HELP_DEEP));
+  if(bad.length)out.push(`<span class="fail">↳</span>  ${esc(bad.slice(0,4).join(" / "))}`);
+  if(止まった.length)out.push(`<span class="fail">↳</span>  ${esc(止まった.slice(0,4).map(x=>x.name+"="+x.status+"/"+x.err).join(" / "))}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
