@@ -388,13 +388,15 @@ function specToHSL(spec){
     for(const[k,v]of Object.entries(n))if(!NODE_SKIP.has(k))L.push(`  set ${k} ${jstr(v)}`);
   }
   if((spec.nodes||[]).length)L.push("");
-  const ESKIP=new Set(["from","to","if","else","loop","position","transform","priority","validation"]);
+  const ESKIP=new Set(["from","to","if","else","loop","position","transform","priority","validation","pick"]);
   for(const e of spec.edges||[]){
     const port=(e.to.port&&e.to.port!=="in")?"."+e.to.port:"";
     let t=`${hslName(e.from.node)} -> ${hslName(e.to.node)}${port}`;
     if(e.if)t+=` if ${jstr(e.if)}`;
     if(e.else)t+=` else`;
     if(e.loop){t+=` loop ${e.loop.id}`;if(e.loop.max!=null)t+=` max ${e.loop.max}`;if(e.loop.until)t+=` until ${jstr(e.loop.until)}`;}
+    if(e.from.port&&e.from.port!=="out")t+=` from_port ${jstr(e.from.port)}`;
+    if(e.pick)t+=` pick ${jstr(e.pick)}`;
     if(e.position!=null)t+=` position ${e.position}`;
     if(e.transform)t+=` transform ${e.transform}`;
     if(e.priority!=null)t+=` priority ${e.priority}`;
@@ -491,6 +493,8 @@ function hslToSpec(text){
         else if(kk==="loop"){e.loop={id:hslValue(rest[++i],ln)};
           while(rest[i+1]==="max"||rest[i+1]==="until"){const kk2=rest[++i];const vv=hslValue(rest[++i],ln);
             if(kk2==="max")e.loop.max=vv;else e.loop.until=vv;}}
+        else if(kk==="from_port")e.from.port=hslValue(rest[++i],ln);
+        else if(kk==="pick")e.pick=hslValue(rest[++i],ln);
         else if(kk==="position")e.position=hslValue(rest[++i],ln);
         else if(kk==="transform")e.transform=hslValue(rest[++i],ln);
         else if(kk==="priority")e.priority=hslValue(rest[++i],ln);
@@ -1559,6 +1563,11 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(!nodeIds.has(e.from.node))errs.push("from node不明: "+e.from.node);
     if(!nodeIds.has(e.to.node))errs.push("to node不明: "+e.to.node);
     if(e.loopRole&&!["body","done"].includes(e.loopRole))errs.push("出口の役割が不正（body か done）: "+e.from.node+" → "+e.to.node);
+    {const fn=(spec.nodes||[]).find(n=>n.id===e.from.node);
+     const fp=e.from.port||"out";
+     if(fn&&fp!=="out"&&!outPortsOf(fn).some(x=>x.id===fp))
+       errs.push(`出口 "${fp}" が ${e.from.node} に無い（ノード編集で出口を作る）`);
+     if(e.pick){try{parsePick(e.pick);}catch(_){errs.push("取り出し方が読めない: "+e.pick+" @ "+e.from.node+" → "+e.to.node);}}}
     if(e.loopRole&&typeOf[e.from.node]!=="loop")errs.push("出口の役割はループノードの線だけに付けられる: "+e.from.node);
     if(e.loop&&typeOf[e.to.node]==="loop"){
       // ループノードへの戻り線。何回まわるか・いつ抜けるかはノード側が持つので、線には何も書かない
@@ -1622,6 +1631,15 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     if(n.labels!=null&&!Array.isArray(n.labels))errs.push("labels は配列にする: "+n.id);
     if(n.op==="json_object"&&!(n.keys&&n.keys.length)&&!(n.labels&&n.labels.length))
       errs.push("json_object には keys か labels（項目の名前）が要る: "+n.id);});
+  spec.nodes.forEach(n=>{
+    if(!n.ports)return;
+    if(!Array.isArray(n.ports)){errs.push("ports は配列にする: "+n.id);return;}
+    const seen=new Set();
+    n.ports.forEach((q,i)=>{
+      if(!q||!q.id)errs.push(`出口に id が無い: ${n.id} の ${i+1}番目`);
+      else if(seen.has(q.id))errs.push(`出口の id が重複: ${n.id}.${q.id}`);
+      else seen.add(q.id);
+      if(q&&q.pick){try{parsePick(q.pick);}catch(_){errs.push(`出口の取り出し方が読めない: ${n.id}.${q.id} = ${q.pick}`);}}});});
   spec.nodes.forEach(n=>{
     if(n.type!=="loop")return;
     const cfg=n.loop||{};
@@ -1710,6 +1728,7 @@ const MERGE_ACT=nodeId=>"merge#"+nodeId;
 function applyEdgeAndValidate(rv,edge,toNode,toPort){
   if(rv===undefined)return undefined;
   let v=rv;
+  if(edge.pick)v=pickValue(v,edge.pick);      // 受け取る側で「どの項目を使うか」を決めているとき
   if(edge.transform==="json_stringify"){if(v.type!=="json"&&v.type!=="text")throw{code:"TYPE_MISMATCH",message:"json_stringify対象がjson/textでない"};v={type:"text",value:typeof v.value==="string"?v.value:JSON.stringify(v.value)};}
   else if(edge.transform==="json_parse"){if(v.type!=="text")throw{code:"TYPE_MISMATCH",message:"json_parse対象がtextでない"};v={type:"json",value:JSON.parse(v.value)};}
   else if(edge.transform==="list_to_text"){
@@ -1755,10 +1774,14 @@ function execInputsReady(run,spec,ex){const node=spec.nodes.find(n=>n.id===ex.no
   return true;}
 
 /* ---- exec/delivery生成 ---- */
-function makeDelivery(run,spec,edge,rv,fromExecId,ctx){run.deliveries.push({deliveryId:"d"+(++run.delivSeq),
+function makeDelivery(run,spec,edge,rv,fromExecId,ctx){
+  const fromNode=(spec.nodes||[]).find(n=>n.id===edge.from.node);
+  const sent=portRV(fromNode,rv,edge.from.port);      // 出口を増やしていれば、その出口の分だけ渡る
+  run.deliveries.push({deliveryId:"d"+(++run.delivSeq),
   edgeId:edgeIdOf(spec,edge),
-  fromExecId:fromExecId||null,fromNodeId:edge.from.node,toNodeId:edge.to.node,toPort:edge.to.port||"in",
-  position:edge.position!=null?edge.position:0,runtimeValue:rv,
+  fromExecId:fromExecId||null,fromNodeId:edge.from.node,fromPort:edge.from.port||"out",
+  toNodeId:edge.to.node,toPort:edge.to.port||"in",
+  position:edge.position!=null?edge.position:0,runtimeValue:sent,
   activationId:NN(ctx.activationId),loopInstanceId:NN(ctx.loopInstanceId),iteration:NN(ctx.iteration)});}
 function makeExec(run,nodeId,ctx){const execId=`${nodeId}@${ctx.loopInstanceId||"root"}:${ctx.iteration||1}#${++run.execSeq}`;
   const ex={execId,nodeId,status:"ready",activationId:NN(ctx.activationId),loopInstanceId:NN(ctx.loopInstanceId),iteration:NN(ctx.iteration)};
@@ -1825,6 +1848,55 @@ function runJoin(node,inputs){const items=(inputs.items||[]).map(rv=>rv?rv.value
   if(node.op==="template")return{type:"text",value:wrap(mustacheRender(node.template&&node.template.value||"",{items,labels:node.labels||[]}))};
   throw{code:"JOIN_OP_ERROR",message:"知らないまとめ方: "+node.op};}
 
+/* ---- 出口を増やす / どの値を取り出すか（pick） ----
+   pick の書き方（どちらも省略可）:
+     "score"        … 返ってきた JSON の score
+     "items.0"      … items の1つ目（0から数える）
+     "items.1..3"   … items の2つ目から4つ目までのリスト
+     "items.1.."    … items の2つ目から最後までのリスト
+     "0" / "1.."    … 返ってきた値そのものがリストのとき
+   1つのノードから複数の出口を出したいときは node.ports に並べる。
+   ports が無いノードは出口1つ（"out"）＝値をまるごと渡す。 */
+const rvOf=v=>typeof v==="string"?{type:"text",value:v}:{type:"json",value:v};
+function parsePick(pick){
+  const t=String(pick==null?"":pick).trim();if(!t)return null;
+  const parts=t.split(".");let key=null;
+  if(/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(parts[0])){key=parts[0];parts.shift();}
+  const rest=parts.join(".");
+  if(rest==="")return{key,from:null,to:null,range:false};
+  const m=/^(\d+)(?:\.\.(\d*))?$/.exec(rest);
+  if(!m)throw{code:"PICK_ERROR",retryable:false,message:`出口の取り出し方が読めない: ${pick}`};
+  return{key,from:+m[1],range:m[2]!==undefined,to:(m[2]===undefined||m[2]==="")?null:+m[2]};
+}
+function pickValue(rv,pick){
+  const q=parsePick(pick);if(!q||rv===undefined||rv===null)return rv;
+  let v=rv.value;
+  if(q.key!=null){
+    if(v==null||typeof v!=="object"||Array.isArray(v))
+      throw{code:"PICK_ERROR",retryable:false,message:`${q.key} を取り出せない（返ってきたのは ${showVal(v)}）。返すノードの出力の形に ${q.key} を入れる`};
+    if(!(q.key in v))
+      throw{code:"PICK_ERROR",retryable:false,message:`${q.key} がその中に無い（あるのは: ${Object.keys(v).join(", ")||"なし"}）`};
+    v=v[q.key];
+  }
+  if(q.from!=null){
+    const arr=Array.isArray(v)?v:(v&&Array.isArray(v.items)?v.items:null);
+    if(!arr)throw{code:"PICK_ERROR",retryable:false,message:`リストではないので ${q.from+1} 個目を取り出せない（来たのは ${showVal(v)}）`};
+    if(q.range)v=arr.slice(q.from,q.to==null?undefined:q.to+1);
+    else{
+      if(q.from>=arr.length)throw{code:"PICK_ERROR",retryable:false,message:`リストに ${q.from+1} 個目が無い（${arr.length}個しかない）`};
+      v=arr[q.from];}
+  }
+  return rvOf(v);
+}
+const outPortsOf=n=>((n&&n.ports&&n.ports.length)?n.ports:[{id:"out",pick:""}]);
+function portRV(node,rv,port){
+  if(!port||port==="out")return (node&&node.ports&&node.ports.length)
+    ? pickValue(rv,node.ports[0].pick)      // 出口を増やしたのに port 未指定の線は1つ目の出口として扱う
+    : rv;
+  const pd=outPortsOf(node).find(x=>x.id===port);
+  if(!pd)throw{code:"REFERENCE_ERROR",retryable:false,message:`${node?node.id:"?"} に出口 "${port}" が無い`};
+  return pickValue(rv,pd.pick);
+}
 /* エラーを必ず読める文にする（[object Object] を絶対に出さない） */
 function errText(e){
   if(e==null)return "（理由不明）";
@@ -2296,9 +2368,13 @@ function setSize(id,v){const m=Ed.spec.metadata=Ed.spec.metadata||{};
   if(m.sizes){delete m.sizes[id];if(!Object.keys(m.sizes).length)delete m.sizes;}}
 /* 入口(●)と出口(○)をノードのどこに置くか。
    ループノードだけは上下（左右）が逆＝戻ってくる線が上から入るので、見た目も逆にする。 */
-function portPos(n,which,sz){
+function portPos(n,which,sz,portId){
   const far=(which==="out")!==(n&&n.type==="loop");
-  return Ed.dir==="tb"?{x:sz.w/2,y:far?sz.h:0}:{x:far?sz.w:0,y:sz.h/2};}
+  if(which!=="out")return Ed.dir==="tb"?{x:sz.w/2,y:far?sz.h:0}:{x:far?sz.w:0,y:sz.h/2};
+  const ps=outPortsOf(n);
+  let i=ps.findIndex(x=>x.id===(portId||"out"));if(i<0)i=0;
+  const f=(i+1)/(ps.length+1);
+  return Ed.dir==="tb"?{x:Math.round(sz.w*f),y:far?sz.h:0}:{x:far?sz.w:0,y:Math.round(sz.h*f)};}
 const Ed={spec:null,view:{x:16,y:16,k:1},sel:null,arm:null,run:null,dir:"tb"};
 const NODE_KINDS=[
   {type:"input",label:"入力",desc:"実行時の入力を流す"},
@@ -2363,21 +2439,98 @@ const SCHEMA_PRESETS=[
              ask:`必ず JSON だけで答える。余計な文は書かない。例: {"ok": true}`},
   {v:"text_item",t:"見出し付きの1件（題名と本文）",     schema:{type:"object",required:["title","body"],properties:{title:{type:"string"},body:{type:"string"}}},
              ask:`必ず JSON だけで答える。余計な文は書かない。例: {"title": "題名", "body": "本文"}`},
+  {v:"fields",t:"項目を決める（出力1・出力2…）",       schema:undefined, ask:null},
   {v:"custom",t:"自分で書く（JSON schema）",          schema:undefined, ask:null},
 ];
 const SHAPE_NOTE={
+  fields:"出力1・出力2… と項目を足していける。キー名は自由。数値は範囲や整数だけの指定ができる。<br>受け取る側のノードでは「どの項目を使うか」を選べる。",
   list:"項目数はモデルが決める（毎回変わってよい）。次のノードには配列で届く。線の「値の変換」で <b>箇条書きの文</b> にもできる。",
   score:"数で返るので、線の <b>if</b> に <code>この.out.score &gt;= 8</code> のような条件が書ける。",
   yesno:"true / false で返る。線の if に <code>この.out.ok == true</code> と書ける。",
   text_item:"題名と本文に分かれて返る。",
   custom:"JSON Schema をそのまま書く（type / required / properties / enum / minimum など）。",
 };
+/* 出力の項目（キー名と種類）。schema と行き来できる形だけを扱い、
+   表せない schema は「自分で書く」に任せる（勝手に書き換えない）。 */
+const OUT_TYPES=[
+  {v:"text",t:"文章"},
+  {v:"number",t:"数値（小数・マイナスOK）"},
+  {v:"integer",t:"整数"},
+  {v:"boolean",t:"はい / いいえ"},
+  {v:"list",t:"文のリスト（個数は自由）"},
+  {v:"list_number",t:"数値のリスト"}];
+const OUT_TYPE_LABEL=Object.fromEntries(OUT_TYPES.map(x=>[x.v,x.t]));
+function outputsFromSchema(sc){
+  if(!sc||sc.type!=="object"||!sc.properties||typeof sc.properties!=="object")return null;
+  const out=[];
+  for(const[k,d]of Object.entries(sc.properties)){
+    if(!d||typeof d!=="object")return null;
+    let t=null;
+    if(d.type==="string")t="text";
+    else if(d.type==="number")t="number";
+    else if(d.type==="integer")t="integer";
+    else if(d.type==="boolean")t="boolean";
+    else if(d.type==="array"&&d.items&&d.items.type==="string")t="list";
+    else if(d.type==="array"&&d.items&&(d.items.type==="number"||d.items.type==="integer"))t="list_number";
+    if(!t)return null;
+    const known=new Set(["type","items","minimum","maximum","description"]);
+    if(Object.keys(d).some(x=>!known.has(x)))return null;      // enum など、ここでは表せない
+    const o={key:k,type:t};
+    if(d.minimum!=null)o.min=d.minimum;
+    if(d.maximum!=null)o.max=d.maximum;
+    if(d.description)o.desc=d.description;
+    out.push(o);
+  }
+  const req=Array.isArray(sc.required)?sc.required:[];
+  if(req.length!==out.length||!out.every(o=>req.includes(o.key)))return null;   // 一部だけ必須は表せない
+  if(Object.keys(sc).some(k=>!["type","required","properties"].includes(k)))return null;
+  return out.length?out:null;
+}
+function schemaFromOutputs(outs){
+  const props={},req=[];
+  for(const o of outs){
+    const k=String(o.key==null?"":o.key).trim();if(!k)continue;
+    let d;
+    if(o.type==="number"||o.type==="integer"){d={type:o.type};
+      if(o.min!=null&&o.min!=="")d.minimum=Number(o.min);
+      if(o.max!=null&&o.max!=="")d.maximum=Number(o.max);}
+    else if(o.type==="boolean")d={type:"boolean"};
+    else if(o.type==="list")d={type:"array",items:{type:"string"}};
+    else if(o.type==="list_number")d={type:"array",items:{type:"number"}};
+    else d={type:"string"};
+    if(o.desc)d.description=String(o.desc);
+    props[k]=d;req.push(k);
+  }
+  return{type:"object",required:req,properties:props};
+}
+/* 「こう返して」の文。値は必ず本物の値にする（"…" と書くとモデルがそれをそのまま返す） */
+function askForOutputs(outs){
+  const o={};
+  for(const x of outs){
+    const k=String(x.key==null?"":x.key).trim();if(!k)continue;
+    o[k]=x.type==="number"?(x.min!=null?Number(x.min)+0.5:1.5)
+      :x.type==="integer"?(x.min!=null?Number(x.min):7)
+      :x.type==="boolean"?true
+      :x.type==="list"?["ひとつめ","ふたつめ"]
+      :x.type==="list_number"?[1,2]
+      :"ここに文";
+  }
+  return `必ず JSON だけで答える。余計な文は書かない。例: ${JSON.stringify(o)}`;
+}
 const schemaPresetOf=sc=>{
   if(!sc)return "";
   const j=JSON.stringify(sc);
   const hit=SCHEMA_PRESETS.find(x=>x.schema&&JSON.stringify(x.schema)===j);
-  return hit?hit.v:"custom";
+  if(hit)return hit.v;
+  return outputsFromSchema(sc)?"fields":"custom";
 };
+/* 「こう返して」の文（自動で入れたものだけ触る。人が書いた文は消さない） */
+function setAsk(n,ask){
+  n.prompt=n.prompt||{};
+  const auto=!n.prompt.suffix||/必ず JSON だけで答える/.test(n.prompt.suffix);
+  if(ask&&auto)n.prompt.suffix=ask;
+  else if(!ask&&auto&&n.prompt.suffix){delete n.prompt.suffix;if(!Object.keys(n.prompt).length)delete n.prompt;}
+}
 /* 条件式が読んでいる項目から schema を作って付ける（中身は Spec に書かれるので見える） */
 function addSchemaFor(id){
   const n=nodeById(id);if(!n)return;
@@ -2451,7 +2604,7 @@ function showErrs(){
   return errs;
 }
 /* --- 描画 --- */
-function portXY(id,which){const p=posOf(id),q=portPos(nodeById(id),which,sizeOf(id));
+function portXY(id,which,portId){const p=posOf(id),q=portPos(nodeById(id),which,sizeOf(id),portId);
   return{x:p.x+q.x,y:p.y+q.y};}
 function edgePath(a,b){
   if(Ed.dir==="tb"){const dy=Math.max(34,Math.abs(b.y-a.y)*0.45);
@@ -2472,11 +2625,17 @@ function edRender(){
     d.dataset.id=n.id;d.style.left=p.x+"px";d.style.top=p.y+"px";
     const m2=nodeModelText(n);d.title=nodeFullText(n);
     d.style.width=sz.w+"px";if(sz.set)d.style.height=sz.h+"px";
-    const pst=w=>{const q=portPos(n,w,sz);return `left:${q.x}px;top:${q.y}px`;};
+    const pst=(w,pid)=>{const q=portPos(n,w,sz,pid);return `left:${q.x}px;top:${q.y}px`;};
+    const ops=outPortsOf(n);
+    const outHTML=n.type==="output"?"":ops.map(q=>{
+      const lab=(ops.length>1)?(q.label||q.pick||q.id):"";
+      const qq=portPos(n,"out",sz,q.id);
+      return `<div class="port pout" style="${pst("out",q.id)}" data-node="${esc(n.id)}" data-side="out" data-port="${esc(q.id)}"></div>`
+        +(lab?`<div class="plab" style="left:${qq.x+10}px;top:${qq.y-6}px">${esc(lab)}</div>`:"");}).join("");
     d.innerHTML=`<div class="ndh">${esc(n.id)}</div><div class="ndb">${esc(nodeSub(n))}</div>`
       +(m2?`<div class="ndm">${esc(m2)}</div>`:"")+`<div class="ndp" data-prev="${esc(n.id)}"></div>`
       +(n.type==="input"?"":`<div class="port pin" style="${pst("in")}" data-node="${esc(n.id)}" data-side="in"></div>`)
-      +(n.type==="output"?"":`<div class="port pout" style="${pst("out")}" data-node="${esc(n.id)}" data-side="out"></div>`)
+      +outHTML
       +`<div class="ndrz" data-rz="${esc(n.id)}"></div>`;
     nodesEl.appendChild(d);
   }
@@ -2488,8 +2647,11 @@ function edRender(){
     if(q)delete Ed.meas[id];
     else{const hh=Math.round(el.offsetHeight);if(hh>0)Ed.meas[id]=hh;}
     const sz=sizeOf(id);
-    el.querySelectorAll(".port").forEach(pt=>{const t=portPos(nd,pt.dataset.side,sz);
+    el.querySelectorAll(".port").forEach(pt=>{const t=portPos(nd,pt.dataset.side,sz,pt.dataset.port);
       pt.style.left=t.x+"px";pt.style.top=t.y+"px";});
+    const labs=el.querySelectorAll(".plab"),ops2=outPortsOf(nd).filter(q=>(q.label||q.pick||q.id));
+    labs.forEach((lb,i)=>{const q=ops2[i];if(!q)return;const t=portPos(nd,"out",sz,q.id);
+      lb.style.left=(t.x+10)+"px";lb.style.top=(t.y-6)+"px";});
   }
   drawEdges();
   svg.setAttribute("width",maxX);svg.setAttribute("height",maxY);
@@ -2573,7 +2735,8 @@ function setHint(t,cancel){$("#hint").innerHTML=t?esc(t)+(cancel?' <button id="h
   const c=$("#hcancel");if(c)c.onclick=()=>{Ed.arm=null;paintArm();setHint("");};}
 function paintArm(){document.querySelectorAll(".port").forEach(p=>{p.classList.remove("arm","tgt");});
   if(!Ed.arm)return;
-  document.querySelectorAll('.port[data-side="out"]').forEach(p=>{if(p.dataset.node===Ed.arm.node)p.classList.add("arm");});
+  document.querySelectorAll('.port[data-side="out"]').forEach(p=>{
+    if(p.dataset.node===Ed.arm.node&&(p.dataset.port||"out")===(Ed.arm.port||"out"))p.classList.add("arm");});
   document.querySelectorAll('.port[data-side="in"]').forEach(p=>{if(p.dataset.node!==Ed.arm.node)p.classList.add("tgt");});}
 $("#cv").addEventListener("pointerdown",ev=>{
   pts.set(ev.pointerId,{x:ev.clientX,y:ev.clientY});
@@ -2584,7 +2747,7 @@ $("#cv").addEventListener("pointerdown",ev=>{
   const rz=ev.target.closest(".ndrz");
   const node=ev.target.closest(".nd");
   const eIdx=ev.target.getAttribute&&ev.target.getAttribute("data-edge");
-  if(port)press={kind:"port",node:port.dataset.node,side:port.dataset.side};
+  if(port)press={kind:"port",node:port.dataset.node,side:port.dataset.side,port:port.dataset.port};
   else if(rz)press={kind:"resize",id:rz.dataset.rz,px:ev.clientX,py:ev.clientY,start:sizeOf(rz.dataset.rz)};
   else if(node)press={kind:"node",id:node.dataset.id,start:posOf(node.dataset.id),px:ev.clientX,py:ev.clientY};
   else if(eIdx!=null){const e=(Ed.spec.edges||[])[+eIdx];
@@ -2620,14 +2783,14 @@ $("#cv").addEventListener("pointermove",ev=>{
     const el=document.querySelector('.nd[data-id="'+CSS.escape(press.id)+'"]');
     if(el){el.style.width=w+"px";el.style.height=h+"px";
       const n=nodeById(press.id);
-      el.querySelectorAll(".port").forEach(q=>{const t=portPos(n,q.dataset.side,{w,h});
+      el.querySelectorAll(".port").forEach(q=>{const t=portPos(n,q.dataset.side,{w,h},q.dataset.port);
         q.style.left=t.x+"px";q.style.top=t.y+"px";});}
     drawEdgesOnly();
   }else if(press.kind==="edge"&&press.start){
     if(!moved&&Math.hypot(ev.clientX-press.px,ev.clientY-press.py)<8)return;
     moved=true;
     const e=(Ed.spec.edges||[])[press.i];if(!e)return;
-    const a=portXY(e.from.node,"out"),b=portXY(e.to.node,"in");
+    const a=portXY(e.from.node,"out",e.from.port),b=portXY(e.to.node,"in");
     const w=toWorld(ev.clientX,ev.clientY);
     // 中点が指の位置に来るように制御点を置く（Q曲線の中点は (a+2c+b)/4）
     setBend(e,{x:Math.round(2*w.x-(a.x+b.x)/2),y:Math.round(2*w.y-(a.y+b.y)/2)});
@@ -2644,9 +2807,9 @@ const bendOf=e=>(((Ed.spec.metadata||{}).bends)||{})[edgeKey(e)];
 function setBend(e,v){const m=Ed.spec.metadata=Ed.spec.metadata||{};
   if(v){(m.bends=m.bends||{})[edgeKey(e)]=v;return;}
   if(m.bends){delete m.bends[edgeKey(e)];if(!Object.keys(m.bends).length)delete m.bends;}}
-const edgeKey=e=>`${e.from.node}>${e.to.node}${(e.to.port&&e.to.port!=="in")?"."+e.to.port:""}${e.position!=null?"#"+e.position:""}`;
+const edgeKey=e=>`${e.from.node}${(e.from.port&&e.from.port!=="out")?":"+e.from.port:""}>${e.to.node}${(e.to.port&&e.to.port!=="in")?"."+e.to.port:""}${e.position!=null?"#"+e.position:""}`;
 function edgeGeom(e){
-  const a=portXY(e.from.node,"out"),b=portXY(e.to.node,"in");
+  const a=portXY(e.from.node,"out",e.from.port),b=portXY(e.to.node,"in");
   const bd=bendOf(e);
   if(bd)return{d:`M ${a.x} ${a.y} Q ${bd.x} ${bd.y} ${b.x} ${b.y}`,mx:(a.x+2*bd.x+b.x)/4,my:(a.y+2*bd.y+b.y)/4,bent:true};
   return{d:edgePath(a,b),mx:(a.x+b.x)/2,my:(a.y+b.y)/2,bent:false};
@@ -2677,9 +2840,10 @@ $("#cv").addEventListener("pointerup",ev=>{
   if((pr.kind==="node"||pr.kind==="edge")&&moved){syncFromCanvas();setHint(pr.kind==="edge"?"線の形を変えた（辺をタップ →「線の形を戻す」で戻せる）":"");return;}
   if(moved)return;
   if(pr.kind==="port"){
-    if(pr.side==="out"){Ed.arm={node:pr.node};paintArm();
-      setHint("つなぎ先の ● をタップ（"+pr.node+" から）",true);}
-    else if(Ed.arm){const from=Ed.arm.node,to=pr.node;Ed.arm=null;paintArm();setHint("");connect(from,to);}
+    if(pr.side==="out"){Ed.arm={node:pr.node,port:pr.port||"out"};paintArm();
+      const ps=outPortsOf(nodeById(pr.node));const pd=ps.find(x=>x.id===(pr.port||"out"));
+      setHint("つなぎ先の ● をタップ（"+pr.node+(ps.length>1?" の "+((pd&&(pd.label||pd.pick))||pr.port):"")+" から）",true);}
+    else if(Ed.arm){const from=Ed.arm.node,fp=Ed.arm.port,to=pr.node;Ed.arm=null;paintArm();setHint("");connect(from,to,fp);}
     else setHint("先に つなぎ元の ○（右側）をタップ");
     return;
   }
@@ -2734,13 +2898,14 @@ function canReach(a,b){
       if(!seen.has(e.to.node)){seen.add(e.to.node);q.push(e.to.node);}}}
   return false;
 }
-function connect(from,to){
+function connect(from,to,fromPort){
   if(from===to)return setHint("同じノードには繋げない");
   const tn=nodeById(to);const port=(tn&&tn.type==="join")?"items":"in";
+  const fp=fromPort||"out";
   const es=Ed.spec.edges=Ed.spec.edges||[];
-  if(es.some(e=>e.from.node===from&&e.to.node===to&&(e.to.port||"in")===port))return setHint("同じ辺がもうある");
+  if(es.some(e=>e.from.node===from&&(e.from.port||"out")===fp&&e.to.node===to&&(e.to.port||"in")===port))return setHint("同じ辺がもうある");
   const already=edgesInto(to,port).length;
-  const edge={from:{node:from,port:"out"},to:{node:to,port}};
+  const edge={from:{node:from,port:fp},to:{node:to,port}};
   if(port==="items"){edge.position=already;}
   const src=nodeById(from);
   es.push(edge);
@@ -2811,6 +2976,83 @@ const MERGE_OPTS=[
   {v:"markdown",t:"見出しを付ける（## 名前）"},
   {v:"csv",t:"カンマつなぎ（CSV）"},
   {v:"json_array",t:"JSONの配列にする"}];
+/* 出力の項目（出力1・出力2…）。キー名・種類・範囲をここで決める。schema はここから作る。 */
+function outFieldRows(n){
+  const outs=outputsFromSchema(n.schema)||[];
+  let h=`<div class="fld"><span>出力の項目</span><div>`;
+  outs.forEach((o,i)=>{
+    h+=`<div class="ordrow"><b>${i+1}</b>`
+      +`<input type="text" data-of="key" data-i="${i}" value="${esc(o.key)}" placeholder="キー名" style="flex:1;min-width:70px">`
+      +`<select data-of="type" data-i="${i}">`+OUT_TYPES.map(t=>`<option value="${t.v}"${t.v===o.type?" selected":""}>${esc(t.t)}</option>`).join("")+`</select>`
+      +`<button data-ofdel="${i}">削除</button></div>`;
+    if(o.type==="number"||o.type==="integer")
+      h+=`<div class="ordrow"><b></b><span class="mini">範囲</span>`
+        +`<input type="number" data-of="min" data-i="${i}" value="${o.min==null?"":esc(o.min)}" placeholder="最小（空なら制限なし）" style="flex:1">`
+        +`<span class="mini">〜</span>`
+        +`<input type="number" data-of="max" data-i="${i}" value="${o.max==null?"":esc(o.max)}" placeholder="最大" style="flex:1"></div>`;
+  });
+  h+=`</div></div><div class="mini"><button id="ofAdd">＋ 出力を足す</button>`
+    +`（キー名は英数字にする。条件式から <code>${esc(n.id)}.out.キー名</code> で読める）</div>`;
+  return h;
+}
+/* リストを出すとき、まとめて渡すか・出口を分けるか。分けると図に出口が増える。 */
+function splitFields(n){
+  const ps=(n.ports||[]);
+  const keys=schemaKeys(n);
+  const listKeys=(outputsFromSchema(n.schema)||[]).filter(o=>o.type==="list"||o.type==="list_number").map(o=>o.key);
+  let h=fld("リストの渡し方",sel("__split",ps.length?"split":"whole",[
+    {v:"whole",t:"まとめて1つの出口から渡す（既定）"},
+    {v:"split",t:"出口を分けて、リストの一部だけを渡す"}]));
+  if(!ps.length){
+    h+=`<div class="mini">${listKeys.length?`リストの項目: ${esc(listKeys.join(" / "))}`:"リストを出す設定なら、ここで出口を分けられる"}。分けると図のノードに出口が増え、線ごとにちがう値が流れる。</div>`;
+    return h;
+  }
+  h+=`<div class="fld"><span>出口（上から順に図に並ぶ）</span><div>`;
+  ps.forEach((q,i)=>{
+    const pr=parsePickSafe(q.pick);
+    h+=`<div class="ordrow"><b>${i+1}</b>`
+      +`<input type="text" data-pf="label" data-i="${i}" value="${esc(q.label||"")}" placeholder="名前（図に出る）" style="flex:1;min-width:60px">`
+      +`<button data-pfdel="${i}">削除</button></div>`
+      +`<div class="ordrow"><b></b>`
+      +`<select data-pf="key" data-i="${i}"><option value=""${pr.key?"":" selected"}>値ぜんぶ</option>`
+        +keys.map(k=>`<option value="${esc(k)}"${pr.key===k?" selected":""}>${esc(k)}</option>`).join("")+`</select>`
+      +`<select data-pf="take" data-i="${i}">`+PICK_TAKES.map(t=>`<option value="${t.v}"${t.v===pr.take?" selected":""}>${esc(t.t)}</option>`).join("")+`</select></div>`;
+  });
+  h+=`</div></div><div class="mini"><button id="pfAdd">＋ 出口を足す</button>`
+    +` いまの取り出し方: <code>${esc(ps.map(q=>(q.label||q.id)+"="+(q.pick||"ぜんぶ")).join(" / "))}</code></div>`;
+  return h;
+}
+/* リストの何番目を取るか（pick の後半） */
+const PICK_TAKES=[
+  {v:"all",t:"ぜんぶ（リストのまま）"},
+  {v:"0",t:"1つ目だけ"},{v:"1",t:"2つ目だけ"},{v:"2",t:"3つ目だけ"},{v:"3",t:"4つ目だけ"},{v:"4",t:"5つ目だけ"},
+  {v:"1..",t:"2つ目から最後まで"},{v:"2..",t:"3つ目から最後まで"},
+  {v:"0..1",t:"1〜2つ目"},{v:"0..2",t:"1〜3つ目"}];
+function parsePickSafe(pick){
+  let q=null;try{q=parsePick(pick);}catch(_){}
+  if(!q)return{key:"",take:"all"};
+  const take=q.from==null?"all":(q.range?(q.to==null?q.from+"..":q.from+".."+q.to):String(q.from));
+  return{key:q.key||"",take};
+}
+const buildPick=(key,take)=>(key||"")+(take==="all"?"":((key?".":"")+take));
+/* 入ってきた値の「どの項目を使うか」を、受け取る側で選ぶ */
+function inputPickFields(n){
+  const es=(Ed.spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop);
+  if(!es.length)return "";
+  const rows=[];
+  for(const e of es){
+    const src=nodeById(e.from.node);const keys=schemaKeys(src);
+    if(!keys.length)continue;
+    const i=(Ed.spec.edges||[]).indexOf(e);
+    rows.push(`<div class="ordrow"><span class="nm">${esc(e.from.node)}</span>`
+      +`<select data-ip="${i}"><option value=""${e.pick?"":" selected"}>来た値ぜんぶ</option>`
+      +keys.map(k=>`<option value="${esc(k)}"${e.pick===k?" selected":""}>${esc(k)} だけ</option>`).join("")
+      +`</select></div>`);
+  }
+  if(!rows.length)return "";
+  return `<div class="fld"><span>入ってきた値のどれを使うか</span><div>${rows.join("")}</div></div>`
+    +`<div class="mini">項目を宣言しているノードから来た線だけ選べる（宣言が無いと文章で届く）。</div>`;
+}
 /* 入口に2本以上入っているときの順番。上が先（まとめる順・position の順）。
    線をつないだ順に自動で振ってあるので、ここは入れ替えるだけ。 */
 function inputOrderFields(n){
@@ -2987,6 +3229,7 @@ function openNodeSheet(id){
     const pk=schemaPresetOf(n.schema);
     h+=fld("出力の形（内蔵LLMなら文法で強制する）",sel("__shape",pk,SCHEMA_PRESETS.map(x=>({v:x.v,t:x.t}))));
     if(SHAPE_NOTE[pk])h+=`<div class="mini">${SHAPE_NOTE[pk]}</div>`;
+    if(pk==="fields")h+=outFieldRows(n);
     if(pk==="custom"||pk==="")
       h+=fld(pk==="custom"?"JSON schema（自分で書く）":"JSON schema（空で無効）",
         `<textarea data-json="schema" placeholder='{"type":"object","required":["score"]}'>${esc(n.schema?JSON.stringify(n.schema):"")}</textarea>`);
@@ -3012,6 +3255,8 @@ function openNodeSheet(id){
     if(JOIN_TEXT_OPS.includes(n.op))
       h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prefix",n.prefix))}${fld("必ず後ろに付ける文",txt("suffix",n.suffix))}</div>`;
   }
+  if(n.type!=="output")h+=splitFields(n);
+  h+=inputPickFields(n);
   h+=inputOrderFields(n);
   if(n.type==="loop"){
     const o2=outEdges(n.id);
@@ -3171,15 +3416,78 @@ function openNodeSheet(id){
     const pr=SCHEMA_PRESETS.find(x=>x.v===shp.value);
     if(!pr)return;
     if(pr.v==="custom"){if(!n.schema)n.schema={type:"object",required:[],properties:{}};}
-    else if(pr.schema===null)delete n.schema;
+    else if(pr.v==="fields"){if(!outputsFromSchema(n.schema))n.schema=schemaFromOutputs([{key:"out1",type:"text"}]);}
+    else if(pr.schema==null)delete n.schema;
     else n.schema=JSON.parse(JSON.stringify(pr.schema));
-    // 返し方の指示も一緒に入れ替える（前に自動で入れたものだけ触る）
-    n.prompt=n.prompt||{};
-    const auto=!n.prompt.suffix||/必ず JSON だけで答える/.test(n.prompt.suffix);
-    if(pr.ask&&auto)n.prompt.suffix=pr.ask;
-    else if(!pr.ask&&auto&&n.prompt.suffix){delete n.prompt.suffix;if(!Object.keys(n.prompt).length)delete n.prompt;}
+    setAsk(n,pr.v==="fields"?askForOutputs(outputsFromSchema(n.schema)||[]):pr.ask);
     syncFromCanvas();openNodeSheet(n.id);
   };
+  // 出力の項目（キー名・種類・範囲）
+  const writeOuts=outs=>{
+    n.schema=schemaFromOutputs(outs);
+    if(!Object.keys(n.schema.properties).length)delete n.schema;
+    setAsk(n,n.schema?askForOutputs(outs):null);
+  };
+  $("#sheetBody").querySelectorAll("[data-of]").forEach(el=>{
+    const upd=()=>{
+      const outs=outputsFromSchema(n.schema)||[];const i=+el.dataset.i;if(!outs[i])return;
+      const f=el.dataset.of;
+      if(f==="key")outs[i].key=el.value;
+      else if(f==="type"){outs[i].type=el.value;
+        if(outs[i].type!=="number"&&outs[i].type!=="integer"){delete outs[i].min;delete outs[i].max;}}
+      else if(el.value==="")delete outs[i][f];
+      else outs[i][f]=Number(el.value);
+      writeOuts(outs);syncFromCanvas();
+      if(f==="type")openNodeSheet(n.id);       // 範囲の欄を出し入れする
+    };
+    if(el.tagName==="SELECT")el.onchange=upd;else el.oninput=upd;});
+  $("#sheetBody").querySelectorAll("[data-ofdel]").forEach(b=>{b.onclick=()=>{
+    const outs=outputsFromSchema(n.schema)||[];outs.splice(+b.dataset.ofdel,1);
+    writeOuts(outs);syncFromCanvas();openNodeSheet(n.id);};});
+  {const ad=$("#ofAdd");if(ad)ad.onclick=()=>{
+    const outs=outputsFromSchema(n.schema)||[];
+    let i=outs.length+1;while(outs.some(o=>o.key==="out"+i))i++;
+    outs.push({key:"out"+i,type:"text"});
+    writeOuts(outs);syncFromCanvas();openNodeSheet(n.id);};}
+  // 出口を分ける / まとめる
+  {const sp=$("#sheetBody").querySelector('select[data-f="__split"]');
+   if(sp)sp.onchange=()=>{
+     if(sp.value==="split"){
+       if(!n.ports||!n.ports.length){
+         const lk=(outputsFromSchema(n.schema)||[]).find(o=>o.type==="list"||o.type==="list_number");
+         const k=lk?lk.key:"";
+         n.ports=[{id:"p1",label:"1つ目",pick:buildPick(k,"0")},{id:"p2",label:"2つ目から",pick:buildPick(k,"1..")}];
+         (Ed.spec.edges||[]).forEach(e=>{if(e.from.node===n.id&&(e.from.port||"out")==="out")e.from.port="p1";});
+       }
+     }else{delete n.ports;(Ed.spec.edges||[]).forEach(e=>{if(e.from.node===n.id)e.from.port="out";});}
+     syncFromCanvas();openNodeSheet(n.id);};}
+  $("#sheetBody").querySelectorAll("[data-pf]").forEach(el=>{
+    const upd=()=>{
+      const i=+el.dataset.i;const q=(n.ports||[])[i];if(!q)return;
+      if(el.dataset.pf==="label"){if(el.value)q.label=el.value;else delete q.label;syncFromCanvas();return;}
+      const g=f=>{const x=$("#sheetBody").querySelector(`[data-pf="${f}"][data-i="${i}"]`);return x?x.value:"";};
+      const pk=buildPick(g("key"),g("take"));
+      if(pk)q.pick=pk;else delete q.pick;
+      syncFromCanvas();openNodeSheet(n.id);};
+    if(el.tagName==="SELECT")el.onchange=upd;else el.oninput=upd;});
+  $("#sheetBody").querySelectorAll("[data-pfdel]").forEach(b=>{b.onclick=()=>{
+    const i=+b.dataset.pfdel;const ps=n.ports||[];const gone=ps[i];if(!gone)return;
+    ps.splice(i,1);
+    const to=ps.length?ps[0].id:"out";
+    (Ed.spec.edges||[]).forEach(e=>{if(e.from.node===n.id&&(e.from.port||"out")===gone.id)e.from.port=to;});
+    if(!ps.length)delete n.ports;
+    syncFromCanvas();openNodeSheet(n.id);};});
+  {const ad=$("#pfAdd");if(ad)ad.onclick=()=>{
+    n.ports=n.ports||[];
+    let i=n.ports.length+1;while(n.ports.some(q=>q.id==="p"+i))i++;
+    const lk=(outputsFromSchema(n.schema)||[]).find(o=>o.type==="list"||o.type==="list_number");
+    n.ports.push({id:"p"+i,label:i+"つ目",pick:buildPick(lk?lk.key:"",String(i-1))});
+    syncFromCanvas();openNodeSheet(n.id);};}
+  // 入ってきた値のどれを使うか
+  $("#sheetBody").querySelectorAll("[data-ip]").forEach(sl=>{sl.onchange=()=>{
+    const e=(Ed.spec.edges||[])[+sl.dataset.ip];if(!e)return;
+    if(sl.value)e.pick=sl.value;else delete e.pick;
+    syncFromCanvas();};});
   const sc=$("#sheetBody").querySelector('[data-json="schema"]');
   if(sc)sc.oninput=()=>{
     const v=sc.value.trim();
@@ -4106,6 +4414,10 @@ loadSiteModels().then(scanModels);        // 何が端末にあるかを最初�
 webgpuDiagnostics().then(d=>{lastDiag=d;}).catch(()=>{});   // 端末の対応状況（調査用メモに載せる）
 checkVersion();                                             // 古い版を握っていないか
 setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
+/* 調査用の覗き口。画面から見えない中身（いまの実行・いまのSpec）を読むだけ。
+   不具合調べと自動テストで使う（ここから書き換えはできない） */
+window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
+  nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;}};
 
 /* ---- 自己テスト ---- */
 const enc=s=>new TextEncoder().encode(s);
@@ -4608,6 +4920,52 @@ export async function CreateMLCEngine(model,opt){
   ok("50 ループの本体がノードの塊（並列＋合流）でも、周ごとに混ざらず3周まわる",
     validate(sp).length===0&&r.status==="success"&&r.iterationTotal===3
     &&ds.join("|")==="B1,C1|B2,C2|B3,C3"&&r.result.value==="B3,C3");}
+ // 51 出口を分ける: 1つのノードから、項目ごと・リストの位置ごとに別の線へ流す
+ {const sc=schemaFromOutputs([{key:"score",type:"integer",min:0,max:10},{key:"items",type:"list"}]);
+  const back=outputsFromSchema(sc);
+  const sp={metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"A",type:"llm",mock:{fixed:{score:7,items:["い","ろ","は"]}},schema:sc,
+     ports:[{id:"p1",label:"点",pick:"score"},{id:"p2",label:"1つ目",pick:"items.0"},{id:"p3",label:"2つ目から",pick:"items.1.."}],
+     routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"B",type:"llm",mock:{echoInput:true}},{id:"C",type:"llm",mock:{echoInput:true}},{id:"D",type:"llm",mock:{echoInput:true}},
+    {id:"jn",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+     {from:{node:"A",port:"p1"},to:{node:"B",port:"in"}},
+     {from:{node:"A",port:"p2"},to:{node:"C",port:"in"}},
+     {from:{node:"A",port:"p3"},to:{node:"D",port:"in"}},
+     {from:{node:"B",port:"out"},to:{node:"jn",port:"items"},position:0},
+     {from:{node:"C",port:"out"},to:{node:"jn",port:"items"},position:1},
+     {from:{node:"D",port:"out"},to:{node:"jn",port:"items"},position:2},
+     {from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}]};
+  const r=await fullRun(sp,{});
+  const got=r.result&&r.result.value;
+  ok("51 出口を分ける: 項目ごと・リストの位置ごとに別の線へ流す（数値の範囲も往復する）",
+    validate(sp).length===0
+    &&JSON.stringify(back)===JSON.stringify([{key:"score",type:"integer",min:0,max:10},{key:"items",type:"list"}])
+    &&r.status==="success"&&Array.isArray(got)
+    &&JSON.stringify(got[0].received)===JSON.stringify({type:"json",value:7})
+    &&JSON.stringify(got[1].received)===JSON.stringify({type:"text",value:"い"})
+    &&JSON.stringify(got[2].received)===JSON.stringify({type:"json",value:["ろ","は"]}));}
+ // 52 受け取る側で項目を選ぶ／無い項目は読める文で落とす／知らない出口は配線で落とす
+ {const mk=(pick,ports)=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    {id:"A",type:"llm",mock:{fixed:{score:3,note:"めも"}},
+     schema:schemaFromOutputs([{key:"score",type:"integer"},{key:"note",type:"text"}])},
+    Object.assign({id:"B",type:"llm",mock:{echoInput:true}},ports||{}),
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+     Object.assign({from:{node:"A",port:"out"},to:{node:"B",port:"in"}},pick?{pick}:{}),
+     {from:{node:"B",port:"out"},to:{node:"out",port:"in"}}]});
+  const r1=await fullRun(mk("note"),{});
+  const r2=await fullRun(mk("nothere"),{});
+  const bad=JSON.parse(JSON.stringify(mk()));bad.edges[1].from.port="p9";
+  const vb=validate(bad);
+  ok("52 受け取る側で項目を選べる／無い項目は何が無いかを言う／知らない出口は実行前に落ちる",
+    r1.status==="success"&&r1.result.value.received.value==="めも"
+    &&r2.status==="failed"&&/nothere がその中に無い（あるのは: score, note）/.test(errText((r2.errors||[])[0]))
+    &&vb.some(x=>/出口 "p9" が A に無い/.test(x)));}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
