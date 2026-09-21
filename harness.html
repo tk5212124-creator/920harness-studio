@@ -5,7 +5,7 @@
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
 .wrap{max-width:1080px;margin:0 auto;padding:20px 16px 80px}h1{font-size:19px;margin:0 0 2px;padding-right:46px}.tag{font-size:12px;color:var(--sub);margin-bottom:18px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.grid>.card{min-width:0}@media(max-width:760px){.grid{grid-template-columns:1fr}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}.card h2{font-size:13px;margin:0 0 10px;color:var(--sub);font-weight:600}
 textarea{width:100%;min-height:270px;border:1px solid var(--line);border-radius:8px;padding:10px;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.55;color:var(--ink);background:var(--code-bg);resize:vertical}
 input[type=text]{font:inherit;font-size:13px;border:1px solid var(--line);border-radius:7px;padding:6px 8px;background:#fff;color:var(--ink);min-width:0}
@@ -28,6 +28,7 @@ code{background:var(--code-bg);padding:1px 4px;border-radius:4px;font-size:12px}
 .stream{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;min-height:120px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word}
 .stream .sh{color:var(--accent);font-weight:600}
 table{width:100%;border-collapse:collapse;font-size:12px;font-family:ui-monospace,monospace}
+.tblwrap{overflow-x:auto;max-width:100%;min-width:0}
 th,td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}th{color:var(--sub);font-weight:600}
 td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-cancelled{color:var(--warn)}
 .canvas{position:relative;overflow:hidden;background:var(--code-bg);border:1px solid var(--line);border-radius:10px;height:56vh;min-height:320px;touch-action:none;user-select:none;-webkit-user-select:none}
@@ -197,7 +198,9 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="card"><h2>実行ログ</h2><div class="log" id="log"></div>
 <div class="row"><button id="logCopy">ログをコピー</button><button id="logSave">ログを保存</button>
 <button id="repCopy" class="primary">まとめてコピー（Spec＋ログ＋端末）</button><button id="repSave">まとめて保存</button></div>
-<div class="mini" id="logMsg">うまくいかないときは「まとめてコピー」を押して、その文をそのまま外部のLLMや相談先に貼れる（Spec・実行ログ・失敗の理由・端末の対応状況が1つに入る）。</div>
+<div class="row"><label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--sub)"><input type="checkbox" id="logVerbose"> 詳しく（送った文・値の全文もログに出す）</label>
+<button id="trcCopy">実行の記録をコピー（機械が読む全部入り）</button><button id="trcSave">実行の記録を保存</button></div>
+<div class="mini" id="logMsg">うまくいかないときは「まとめてコピー」を押して、その文をそのまま外部のLLMや相談先に貼れる（Spec・実行ログ・失敗の理由・端末の対応状況・実行の記録が1つに入る）。</div>
 <div class="mini">Provider は「推論する / Usageを返す / cancelに応答する / 失敗理由を返す」だけ。失敗の波及（fail_fast）は Runtime だけが判断する。</div></div>
 
 <div class="card"><h2>ストリーミング（途中tokenはdata-flowに載せない）</h2><div class="stream" id="stream"></div>
@@ -205,7 +208,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 
 <div class="card"><h2>使用量</h2>
 <div class="tot" id="totals"></div>
-<table id="nodeTable"><thead><tr><th>node</th><th>status</th><th class="n">回数</th><th class="n">in tok</th><th class="n">out tok</th><th class="n">文字数</th></tr></thead><tbody></tbody></table>
+<div class="tblwrap"><table id="nodeTable"><thead><tr><th>node</th><th>status</th><th class="n">回数</th><th class="n">in tok</th><th class="n">out tok</th><th class="n">文字数</th><th class="n">ms</th></tr></thead><tbody></tbody></table></div>
 <div class="mini">ローカル推論は料金0なので <code>cost=null / costSource=unavailable</code>。usage未報告のAPI呼び出しはトークン数を捏造せず <code>unreported</code> として数える。</div></div>
 </div>
 
@@ -628,6 +631,11 @@ const HSL_GUIDE=`# HSL v1 の書き方（これだけ知っていれば書ける
     mock {"text":"…"}                     （adapter が mock のとき）
     set onTruncate "retry"                （maxTokens で切れたとき。error=止める（既定）/ use=切れた分を使う / retry=倍にしてやり直す）
     set onBadOutput "retry"               （答えが schema に合わないとき。error=止める（既定）/ retry=もう一度聞く）
+    set onError "skip"                    （このノードでエラーが起きたとき。error=止める（既定）
+                                           / value=決めた値を出して先へ進む（onErrorValue が要る）
+                                           / null=null を出して先へ進む
+                                           / skip=このノードだけ止めて、待っている他のノードを進める）
+    set onErrorValue {"score":0}          （onError=value のときに出す値）
     set start {"mode":"any"}              （入口が2本以上あるノード。all=全部そろったら（既定）/ any=どれか来たら
                                            / custom は {"mode":"custom","op":"or","groups":[{"op":"and","from":["in","点検"]}]}）
     set label "直したい文章を貼る"        （input。実行画面の入力欄に出す文言）
@@ -1607,6 +1615,14 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
   const badPol=node.onBadOutput||"error";
   const msgs={messages:buildMessages(node,inputs,ex,run)};
   let gen=generation,tries=0,badTries=0,res=null;
+  /* 実際にモデルへ送った文を残す（「なぜこの答えになったのか」はここを見ないと分からない）。
+     checkpoint が膨らまないように1通 4000字で切る。 */
+  attempt.request={provider:node.provider||(node.mock?"mock":null),adapter:adapter.id,model,
+    maxTokens:(gen&&gen.maxTokens)!=null?gen.maxTokens:null,temperature:(gen&&gen.temperature)!=null?gen.temperature:null,
+    schema:schema?JSON.stringify(schema):null,
+    messages:(msgs.messages||[]).map(m=>({role:m.role,content:capStr(m.content,4000)}))};
+  if(LOGOPT.verbose)log&&log("dim",`  ${node.id} → ${adapter.id}/${model} へ送る文:\n`
+    +attempt.request.messages.map(m=>`    [${m.role}] ${m.content}`).join("\n"));
   for(;;){
     try{
       res=await adapter.invoke({
@@ -1744,6 +1760,8 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     }
     if(n.onTruncate&&!["error","use","retry"].includes(n.onTruncate))errs.push("途中で切れたときの扱いが不正: "+n.id);
     if(n.onBadOutput&&!["error","retry"].includes(n.onBadOutput))errs.push("形に合わなかったときの扱いが不正: "+n.id);
+    if(n.onError&&!ERROR_POLICIES.includes(n.onError))errs.push("エラーのときの扱いが不正（error / value / null / skip）: "+n.id);
+    if(n.onError==="value"&&n.onErrorValue===undefined)errs.push("エラーのとき出す値（onErrorValue）が書かれていない: "+n.id);
     if(n.schema&&typeof n.schema!=="object")errs.push("schemaはobject必須: "+n.id);
     if(n.schema&&n.schema.type==="object"&&n.schema.properties&&!Object.keys(n.schema.properties).length)
       errs.push(`出力の項目が空: ${n.id}（項目を足すか、出力の形を「縛らない」にする）`);
@@ -1902,13 +1920,13 @@ function edgeIdOf(spec,edge){const i=(spec.edges||[]).indexOf(edge);return i>=0?
 function makeRun(spec,input){return{runId:"run_"+Date.now(),status:"running",resumable:true,
   nodeRuns:{},deliveries:[],executions:{},workQueue:[],branchGroups:{},cancelRequested:false,
   loopInstances:{},loopSeq:0,execSeq:0,actSeq:0,delivSeq:0,routeSeq:0,
-  totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0},iterationTotal:0,
+  totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0,recoveredErrors:0,stoppedNodes:0},iterationTotal:0,
   startedAt:new Date().toISOString(),errors:[],result:null,input:input||{},vars:spec.vars||{},
   harnessVersion:(spec.metadata&&spec.metadata.version)||"0",specCanon:canonSpec(spec),specSnapshot:spec};}
 function metaOf(rv,usage){const m={len:null,tokens:(usage&&usage.outputTokens!=null)?usage.outputTokens:null,bytes:null};
   if(rv&&rv.type==="text")m.len=[...String(rv.value)].length;else if(rv&&rv.type==="json")m.len=[...JSON.stringify(rv.value)].length;return m;}
 function emptyView(){return{out:ABSENT,type:null,raw:null,valid:false,status:"pending",meta:{len:null,tokens:null,bytes:null},usage:{inputTokens:null,outputTokens:null,cost:null},prev:ABSENT};}
-function nodeView(run,id){const hist=run.nodeRuns[id]||[];const succ=hist.filter(h=>h.status==="success");const last=succ[succ.length-1];
+function nodeView(run,id){const hist=run.nodeRuns[id]||[];const succ=hist.filter(h=>h.status==="success"||h.status==="recovered");const last=succ[succ.length-1];
   const lastAny=hist[hist.length-1];
   if(!last){if(lastAny&&lastAny.status==="error"){const v=emptyView();v.status="error";return v;}
     if(lastAny&&lastAny.status==="cancelled"){const v=emptyView();v.status="cancelled";return v;}return emptyView();}
@@ -1980,7 +1998,27 @@ function applyEdgeAndValidate(rv,edge,toNode,toPort){
   if(want&&want!==v.type&&!bypass&&want!=="any"){throw{code:"TYPE_MISMATCH",message:`型不一致: ${v.type} → ${want} (transform/bypass未指定)`};}
   return v;
 }
+/* ログの詳しさ。UI の「詳しく」で切り替える。
+   ふつう: 何が動いて何秒かかって何が入ってきたか。
+   詳しく: それに加えて、モデルへ送った文そのものと、切り詰めていない値。 */
+const LOGOPT={verbose:false};
+const capStr=(t,n)=>{t=String(t==null?"":t);const a=[...t];return a.length<=n?t:a.slice(0,n).join("")+`…（全${a.length}字）`;};
+const shortVal=v=>LOGOPT.verbose?JSON.stringify(v):capStr(JSON.stringify(v),200);
+/* いまの実行がどの枝・どのループの何周目か。並列やループを追うのに要る。 */
+function ctxTag(ex){
+  const a=[];
+  if(ex.activationId)a.push(String(ex.activationId));
+  if(ex.loopInstanceId)a.push(String(ex.loopInstanceId)+(ex.iteration?`:${ex.iteration}周目`:""));
+  return a.length?`[${a.join(" ")}]`:"";
+}
+/* この実行が実際に受け取った線（どのノードのどの値を、どの順番で使ったか） */
+function usedTag(ex){
+  const u=ex._used||[];
+  if(!u.length)return "（入力なし）";
+  return u.map(x=>`${x.from}${x.pick?"."+x.pick:""}${x.port!=="in"?"→"+x.port:""}#${x.position}`).join(", ");
+}
 function resolveInputsForExec(run,spec,ex){const node=spec.nodes.find(n=>n.id===ex.nodeId);
+  const used=ex._used=[];
   const conf=isConfluenceNode(spec,ex.nodeId);
   const inE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&!e.loop);const byPort={};for(const e of inE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
   const loopInE=(spec.edges||[]).filter(e=>e.to.node===ex.nodeId&&e.loop);for(const e of loopInE)(byPort[e.to.port||"in"]=byPort[e.to.port||"in"]||[]).push(e);
@@ -1990,8 +2028,12 @@ function resolveInputsForExec(run,spec,ex){const node=spec.nodes.find(n=>n.id===
     if(card==="many"){
       const perEdge={};for(const d of ds){perEdge[d.edgeId]=d;}
       const picked=Object.values(perEdge).sort((a,b)=>a.position-b.position);
-      inputs[port]=picked.map(d=>{const e=(spec.edges||[])[parseInt(String(d.edgeId).slice(1))];return applyEdgeAndValidate(d.runtimeValue,e||{},node,port);});}
-    else{const first=ds[0];if(first){const e=(spec.edges||[])[parseInt(String(first.edgeId).slice(1))];inputs[port]=applyEdgeAndValidate(first.runtimeValue,e||{},node,port);}else inputs[port]=undefined;}}
+      inputs[port]=picked.map(d=>{const e=(spec.edges||[])[parseInt(String(d.edgeId).slice(1))];
+        used.push({port,from:d.fromNodeId,edgeId:d.edgeId,position:d.position,arrival:d.arrival==null?null:d.arrival,pick:(e&&e.pick)||(e&&e.from&&e.from.port!=="out"?e.from.port:null)||null});
+        return applyEdgeAndValidate(d.runtimeValue,e||{},node,port);});}
+    else{const first=ds[0];if(first){const e=(spec.edges||[])[parseInt(String(first.edgeId).slice(1))];
+        used.push({port,from:first.fromNodeId,edgeId:first.edgeId,position:first.position,arrival:first.arrival==null?null:first.arrival,pick:(e&&e.pick)||(e&&e.from&&e.from.port!=="out"?e.from.port:null)||null});
+        inputs[port]=applyEdgeAndValidate(first.runtimeValue,e||{},node,port);}else inputs[port]=undefined;}}
   return inputs;}
 /* 計算ノードで使える名前。入ってきた線ごとに1つ（名前は線に書いてある as、無ければ項目名かノード名）。
    JavaScript の予約語（in / class / return など）はそのまま名前にできないので in1, in2… にする。 */
@@ -2229,13 +2271,66 @@ function failRun(run,nodeId,err,store,recordNodeFailure){run.status="failed";run
   if(recordNodeFailure&&nodeId)(run.nodeRuns[nodeId]=run.nodeRuns[nodeId]||[]).push({out:null,raw:null,usage:null,meta:{len:null,tokens:null,bytes:null},status:"error",errorKind:err.code||"ERROR"});
   if(store)store.save(run);}
 
+/* ---- エラーが起きたとき、そのノードが何を返すか（node.onError） ----
+   error = そこで止める（既定）
+   value = 決めた値（node.onErrorValue）を出して先へ進む
+   null  = null を出して先へ進む
+   skip  = そのノードだけ止める。他の待っているノードはそのまま進む
+   どれを選んでも「エラーが起きた」ことはログにも run.errors にも必ず残す（黙って握りつぶさない）。 */
+const ERROR_POLICIES=["error","value","null","skip"];
+const errorPolicyOf=n=>((n&&n.onError)||"error");
+const ERROR_POLICY_TEXT={value:"決めた値を出して先へ進む",null:"null を出して先へ進む",skip:"このノードだけ止めて先へ進む"};
+function errRec(run,ex,err,handledAs){
+  if(ex.attempts&&ex.attempts.length){const at=ex.attempts[ex.attempts.length-1];
+    at.status="failed";at.error={code:err.code||"ERROR",stage:err.stage};at.endedAt=Date.now();}
+  countUsage(run,err&&err.usage);                      // 失敗した呼び出しも回数とトークンに数える
+  run.errors.push({node:ex.nodeId,execId:ex.execId,kind:err.code||"ERROR",stage:err.stage,
+    retryable:!!err.retryable,message:errText(err),handledAs:handledAs||"error",
+    loopInstanceId:ex.loopInstanceId||null,iteration:ex.iteration||null,at:new Date().toISOString()});
+}
+function applyNodeErrorPolicy(run,spec,ex,node,err,store,log,at){
+  const pol=errorPolicyOf(node);
+  if(pol==="error"||!ERROR_POLICIES.includes(pol))return null;
+  errRec(run,ex,err,pol);
+  log&&log("err",`\u2717 ${ex.nodeId}: ${err.code||"ERROR"}${err.stage?"("+err.stage+")":""} ${err.message||""}`);
+  log&&log("err",`  \u2192 このノードの設定（onError=${pol}）: ${ERROR_POLICY_TEXT[pol]}`);
+  const usage=(err&&err.usage)||null;
+  const meta={len:null,tokens:(usage&&usage.outputTokens)||null,bytes:null};
+  if(pol==="skip"){
+    run.totals.stoppedNodes=(run.totals.stoppedNodes||0)+1;
+    ex.status="stopped";ex.errorKind=err.code||"ERROR";
+    (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,
+      iteration:ex.iteration,out:null,raw:null,usage,meta,status:"stopped",errorKind:err.code||"ERROR",
+      stage:err.stage,handledAs:"skip",used:(ex._used||[]).slice()});
+    const gid=findBranchGroupId(run,ex);
+    if(gid&&run.branchGroups[gid]&&run.branchGroups[gid].branches[ex.execId])
+      run.branchGroups[gid].branches[ex.execId].status="stopped";
+    run.workQueue=run.workQueue.filter(w=>w.execId!==ex.execId);
+    const waiting=(spec.edges||[]).filter(e=>e.from.node===ex.nodeId).map(e=>e.to.node);
+    if(waiting.length)log&&log("dim",`  ${ex.nodeId} の先（${[...new Set(waiting)].join(", ")}）には何も流れない`);
+    if(store)store.save(run);
+    return{kind:"stopped"};
+  }
+  const rv=(pol==="null")?rvOf(null):rvOf(node.onErrorValue===undefined?null:node.onErrorValue);
+  run.totals.recoveredErrors=(run.totals.recoveredErrors||0)+1;
+  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,
+    iteration:ex.iteration,out:rv,raw:JSON.stringify(rv.value),usage,meta:metaOf(rv,null),
+    status:"recovered",errorKind:err.code||"ERROR",stage:err.stage,handledAs:pol,used:(ex._used||[]).slice()});
+  ex._rv=rv;ex.recoveredFrom=err.code||"ERROR";
+  if(node.type==="output")run.result=rv;
+  log&&log("data",`\u25cb ${ex.nodeId}（エラーの代わりの値） \u2192 ${JSON.stringify(rv.value).slice(0,200)}`);
+  run.workQueue[at]={execId:ex.execId,phase:"route"};
+  if(store)store.save(run);
+  return{kind:"executed"};
+}
 function handleExecutionFailure(run,spec,ex,err,store,log){
   ex.status="failed";ex.errorKind=err.code||"ERROR";
   if(ex.attempts&&ex.attempts.length){const at=ex.attempts[ex.attempts.length-1];at.status="failed";at.error={code:err.code||"ERROR",stage:err.stage};at.endedAt=Date.now();}
   countUsage(run,err&&err.usage);      // 失敗した呼び出しも回数とトークンに数える
-  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:null,raw:null,usage:(err&&err.usage)||null,meta:{len:null,tokens:(err&&err.usage&&err.usage.outputTokens)||null,bytes:null},status:"error",errorKind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable});
-  run.errors.push({node:ex.nodeId,execId:ex.execId,kind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable,message:errText(err)});
-  log&&log("err",`✗ ${ex.nodeId}: ${err.code||"ERROR"}${err.stage?"("+err.stage+")":""} ${err.message||""}`);
+  (run.nodeRuns[ex.nodeId]=run.nodeRuns[ex.nodeId]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:null,raw:null,usage:(err&&err.usage)||null,meta:{len:null,tokens:(err&&err.usage&&err.usage.outputTokens)||null,bytes:null},status:"error",errorKind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable,used:(ex._used||[]).slice()});
+  run.errors.push({node:ex.nodeId,execId:ex.execId,kind:err.code||"ERROR",stage:err.stage,retryable:!!err.retryable,message:errText(err),handledAs:"error",loopInstanceId:ex.loopInstanceId||null,iteration:ex.iteration||null,at:new Date().toISOString()});
+  log&&log("err",`✗ ${ex.nodeId} ${ctxTag(ex)}: ${err.code||"ERROR"}${err.stage?"("+err.stage+")":""} ${err.message||""}`);
+  log&&log("dim",`  受け取っていた線: ${usedTag(ex)}`);
   const gid=findBranchGroupId(run,ex);
   if(gid){const g=run.branchGroups[gid];g.failures.push({execId:ex.execId,nodeId:ex.nodeId,kind:err.code||"ERROR"});
     if(!g.primaryFailure)g.primaryFailure={execId:ex.execId,nodeId:ex.nodeId,code:err.code||"ERROR"};
@@ -2329,8 +2424,13 @@ async function processOneWorkItem(spec,run,store,log,ctl){
   const loopEntries={};for(const e of spec.edges||[])if(e.loop&&!isLoopNode(byId[e.to.node]))loopEntries[e.to.node]={loopId:e.loop.id,edge:e};
   const at=pickNextWork(spec,run);
   if(at<0){
-    // どれも入力が揃っていない＝これ以上進めない
-    failRun(run,run.executions[run.workQueue[0].execId].nodeId,{code:"DEADLOCK",message:"barrier未成立で全待機"},store,false);
+    // どれも入力が揃っていない＝これ以上進めない。何を待っているのかを必ず言う
+    const why=whyNotRun(spec,run).filter(w=>w.delivered.length||w.missing.length);
+    if(log){log("err","■ 進めなくなった（どのノードも入力が揃っていない）。待っているもの:");
+      why.forEach(w=>log("err",`   ${w.node}: ${w.why}`));
+      log("dim",`   止まった時点の待ち行列: ${run.workQueue.map(w=>w.execId+"/"+w.phase).join(", ")||"（空）"}`);}
+    failRun(run,run.executions[run.workQueue[0].execId].nodeId,
+      {code:"DEADLOCK",message:"barrier未成立で全待機"+(why.length?"（"+why.map(w=>w.node+": "+w.why).join(" / ")+"）":"")},store,false);
     return{kind:"failed"};}
   const wi=run.workQueue[at];const ex=run.executions[wi.execId];
   if(!ex){run.workQueue.splice(at,1);return{kind:"skip"};}
@@ -2377,11 +2477,17 @@ async function processOneWorkItem(spec,run,store,log,ctl){
         rv=res.output;usage=res.usage;
         log&&log("node",`▸ ${node.id} iter=${ex.iteration||1} → ${JSON.stringify(rv.value).slice(0,200)}`);}
     }catch(err){
+      const handled=applyNodeErrorPolicy(run,spec,ex,node,err,store,log,at);
+      if(handled)return handled;
       handleExecutionFailure(run,spec,ex,err,store,log);return{kind:"failed"};}
     const useUsage=(node.type==="llm"||node.type==="tool")?usage:null;
-    (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rv,raw:JSON.stringify(rv.value),usage,meta:metaOf(rv,useUsage),status:"success"});
+    (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rv,raw:JSON.stringify(rv.value),usage,meta:metaOf(rv,useUsage),status:"success",used:(ex._used||[]).slice(),ms:null});
     countUsage(run,usage);ex._rv=rv;
-    {const at=ex.attempts[ex.attempts.length-1];at.status="completed";at.endedAt=Date.now();}
+    {const at=ex.attempts[ex.attempts.length-1];at.status="completed";at.endedAt=Date.now();
+     const ms=at.endedAt-at.startedAt;const hist=run.nodeRuns[node.id];hist[hist.length-1].ms=ms;
+     const tk=(usage&&(usage.inputTokens||usage.outputTokens))?` in=${usage.inputTokens||0} out=${usage.outputTokens||0}`:"";
+     log&&log("dim",`  ${node.id} ${ctxTag(ex)} ${ms}ms${tk} ← ${usedTag(ex)}`);
+     if(LOGOPT.verbose)log&&log("dim",`    値ぜんぶ: ${JSON.stringify(rv.value)}`);}
     run.workQueue[at]={execId:ex.execId,phase:"route"};if(store)store.save(run);return{kind:"executed"};
   }
   let outcome;
@@ -2495,6 +2601,82 @@ async function routeExec(spec,run,ex,byId,loopEntries,log){
   if(outEdges.length>1)log&&log("route",`↳ fan-out(${act},${run.branchGroups[act].failurePolicy}): ${outEdges.map(e=>e.to.node).join(", ")}`);
   return{kind:"completed"};}
 
+/* ---- 実行の記録（デバッグ用） ----
+   ログは人が読む読み物。こちらは「あとから機械でも人でも追える」ための全部入り。
+   ここに無い情報は Studio 側にも無い、という状態にしておく。 */
+
+/* 動かなかったノードについて「何を待っていたのか」を文にする。
+   止まったハーネスは、これが無いと理由が分からない。 */
+function whyNotRun(spec,run){
+  const out=[];
+  const modeText={all:"全部そろったら",any:"どれか来たら",custom:"自分で組んだ条件"};
+  for(const n of spec.nodes||[]){
+    const hist=run.nodeRuns[n.id]||[];
+    if(hist.some(h=>h.status==="success"||h.status==="recovered"))continue;
+    const last=hist[hist.length-1]||null;
+    const inE=(spec.edges||[]).filter(e=>e.to.node===n.id);
+    const srcs=[...new Set(inE.map(e=>e.from.node))];
+    const got=[...new Set(run.deliveries.filter(d=>d.toNodeId===n.id).map(d=>d.fromNodeId))];
+    const miss=srcs.filter(x=>!got.includes(x));
+    const exs=Object.values(run.executions).filter(e=>e.nodeId===n.id);
+    const mode=startModeOf(n);
+    let why;
+    if(last&&last.status==="stopped")why=`このノード自身がエラーで止まった（onError=skip・${last.errorKind}）。先へは何も流していない`;
+    else if(last&&last.status==="error")why=`このノード自身が失敗した（${last.errorKind}）`;
+    else if(last&&last.status==="cancelled")why=`取り消された（${last.cancelReason||"理由不明"}）`;
+    else if(!srcs.length&&(n.type||"llm")!=="input")why="入ってくる線が1本も無いので、始まりようがない";
+    else if(!srcs.length)why="まだ動かされていない（入力ノード）";
+    else if(!got.length)why=`何も届いていない。来るはずの元: ${srcs.join(", ")}`;
+    else if(miss.length)why=`一部しか届いていない。届いた: ${got.join(", ")} / まだ来ない: ${miss.join(", ")}`
+      +`（このノードの動き出す条件は「${modeText[mode]||mode}」。「どれか来たら」にすれば動く）`;
+    else why=`入力は全部届いているのに動いていない。実行の状態: ${exs.map(e=>e.status).join(", ")||"実行そのものが作られていない"}`;
+    out.push({node:n.id,type:n.type||"llm",startMode:mode,waitingFor:srcs,delivered:got,missing:miss,
+      status:last?last.status:"未実行",why});
+  }
+  return out;
+}
+/* 値を JSON にする。cap を渡すとそこで切る（「まとめてコピー」用）。 */
+function traceVal(v,cap){const t=v===undefined?null:v;let sT;try{sT=JSON.stringify(t);}catch(_){sT=String(t);}
+  return cap&&sT&&[...sT].length>cap?capStr(sT,cap):sT;}
+function traceReport(spec,run,opt){
+  opt=opt||{};const cap=opt.cap||0;
+  const nodes=(spec.nodes||[]).map(n=>{
+    const hist=run.nodeRuns[n.id]||[];
+    return{id:n.id,type:n.type||"llm",provider:n.provider||(n.mock?"mock":null),model:n.model||null,
+      startMode:startModeOf(n),onError:n.onError||"error",onTruncate:n.onTruncate||"error",onBadOutput:n.onBadOutput||"error",
+      runs:hist.map(h=>({execId:h.execId||null,loopInstanceId:h.loopInstanceId||null,iteration:h.iteration||null,
+        status:h.status,ms:h.ms==null?null:h.ms,errorKind:h.errorKind||null,stage:h.stage||null,handledAs:h.handledAs||null,
+        usage:h.usage||null,chars:(h.meta&&h.meta.len)!=null?h.meta.len:null,
+        used:h.used||[],value:h.out?traceVal(h.out.value,cap):null}))};
+  });
+  const executions=Object.values(run.executions).map(e=>({execId:e.execId,node:e.nodeId,status:e.status,
+    activationId:e.activationId||null,loopInstanceId:e.loopInstanceId||null,iteration:e.iteration||null,
+    branchGroupId:e.branchGroupId||null,errorKind:e.errorKind||null,cancelReason:e.cancelReason||null,
+    attempts:(e.attempts||[]).map(a=>({attempt:a.attempt,status:a.status,ms:(a.endedAt&&a.startedAt)?a.endedAt-a.startedAt:null,
+      error:a.error||null,request:a.request||null,
+      partialOutput:a.partialOutput?traceVal(a.partialOutput,cap||2000):null}))}));
+  const deliveries=run.deliveries.map(d=>({id:d.deliveryId,arrival:d.arrival,edgeId:d.edgeId,
+    from:d.fromNodeId,fromPort:d.fromPort,to:d.toNodeId,toPort:d.toPort,position:d.position,
+    activationId:d.activationId,loopInstanceId:d.loopInstanceId,iteration:d.iteration,
+    value:traceVal(d.runtimeValue&&d.runtimeValue.value,cap)}));
+  return{
+    format:"harness-trace/1",
+    harness:{name:(spec.metadata&&spec.metadata.name)||null,version:(spec.metadata&&spec.metadata.version)||null,
+      nodeCount:(spec.nodes||[]).length,edgeCount:(spec.edges||[]).length,specCanon:run.specCanon||null},
+    run:{runId:run.runId,status:run.status,resumable:!!run.resumable,cancelRequested:!!run.cancelRequested,
+      startedAt:run.startedAt,reportedAt:new Date().toISOString(),
+      totals:run.totals,iterationTotal:run.iterationTotal,
+      input:traceVal(run.input,cap),result:run.result?traceVal(run.result.value,cap):null},
+    errors:run.errors||[],
+    notRun:whyNotRun(spec,run),
+    nodes,executions,deliveries,
+    workQueue:(run.workQueue||[]).map(w=>({execId:w.execId,phase:w.phase})),
+    loopInstances:run.loopInstances||{},
+    branchGroups:Object.values(run.branchGroups||{}).map(g=>({activationId:g.activationId,failurePolicy:g.failurePolicy,
+      status:g.status,branches:Object.values(g.branches||{}),failures:g.failures||[]}))};
+}
+const traceText=(spec,run,opt)=>JSON.stringify(traceReport(spec,run,opt),null,1);
+
 /* ---- runUntilIdle ---- */
 const RUN_GUARD=20000;      // 安全装置。ここまで回ったら止めて Resume に任せる（勝手に諦めない）
 async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
@@ -2513,13 +2695,15 @@ async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
     const anyWork=run.workQueue.length>0;const anyReady=Object.values(run.executions).some(e=>e.status==="ready");
     if(!anyWork&&!anyReady){
       const outputNodes=spec.nodes.filter(n=>n.type==="output");
-      const anyOutputDone=outputNodes.length===0||outputNodes.some(n=>(run.nodeRuns[n.id]||[]).some(h=>h.status==="success"));
+      const anyOutputDone=outputNodes.length===0||outputNodes.some(n=>(run.nodeRuns[n.id]||[]).some(h=>h.status==="success"||h.status==="recovered"));
       if(anyOutputDone){run.status="success";run.resumable=false;if(store)store.save(run);}
       else{
-        const waited=[...new Set(run.deliveries.map(d=>d.toNodeId))].filter(id=>!((run.nodeRuns[id]||[]).length));
+        const why=whyNotRun(spec,run).filter(w=>w.delivered.length||w.status!=="未実行");
+        if(log&&why.length){log("err","■ Outputに届かなかった。動かなかったノードと理由:");
+          why.forEach(w=>log("err",`   ${w.node}（${w.status}）: ${w.why}`));}
         failRun(run,outputNodes[0]&&outputNodes[0].id,{code:"UNSATISFIED_INPUT",
-          message:"Outputに到達せず終了"+(waited.length
-            ?`（入力は届いたのに動かなかった: ${waited.join(", ")}。そのノードの「動き出す条件」を見る）`:"")},store,false);}
+          message:"Outputに到達せず終了"+(why.length
+            ?`（${why.map(w=>w.node+": "+w.why).join(" / ")}）`:"")},store,false);}
     }
   }
   return run;}
@@ -2546,7 +2730,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,whyNotRun,LOGOPT,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -3471,6 +3655,23 @@ function outFieldRows(n){
     +`条件式から <code>${esc(n.id)}.out.キー名</code> で読める）</div>`;
   return h;
 }
+/* エラーが起きたとき、このノードが何を返すか。どの種類のノードにも付けられる。 */
+function errorFields(n){
+  const pol=n.onError||"";
+  let h=fld("エラーが起きたとき",sel("__onError",pol,[
+    {v:"",t:"エラーにして止める（既定）"},
+    {v:"value",t:"決めた値を出して先へ進む"},
+    {v:"null",t:"null を出して先へ進む"},
+    {v:"skip",t:"このノードだけ止めて、待っている他のノードを進める"}]));
+  if(pol==="value")
+    h+=fld("そのとき出す値（JSONで書く。文章は \" \" で囲む）",
+      `<textarea data-json="onErrorValue" placeholder='"（失敗）" / {"score":0}'>${esc(n.onErrorValue===undefined?"":JSON.stringify(n.onErrorValue))}</textarea>`);
+  h+=`<div class="mini">どれを選んでも、エラーが起きたことはログに赤で出る（黙って無かったことにはしない）。`
+    +`<b>このノードだけ止める</b>にすると、このノードの先へは何も流れない。`
+    +`先のノードが「全部そろったら動く」ままだと、そこで待ち続けて Output に届かない。`
+    +`その先のノードの「動き出す条件」を<b>どれか来たら</b>にしておく。</div>`;
+  return h;
+}
 /* リストを出すとき、まとめて渡すか・出口を分けるか。分けると図に出口が増える。 */
 /* 出口は「出した値のどれを渡すか」だけを選ぶ。
    リストの何番目まではここでは選ばない（細かく取りたいときは pick を手で書ける）。 */
@@ -3855,6 +4056,7 @@ function openNodeSheet(id){
   }
   if(!["llm",undefined,"tool","output","cond","loop"].includes(n.type))h+=startFields(n);
   if(n.type!=="output"&&n.type!=="cond"&&n.type!=="loop")h+=splitFields(n);
+  h+=errorFields(n);
   if(n.type==="loop"&&n.ports&&n.ports.length)
     h+=`<div class="mini">この ループに出口の取り出し設定が残っている: `
       +`<code>${esc(n.ports.map(q=>(q.label||q.id)+"="+(q.pick||"ぜんぶ")).join(" / "))}</code>`
@@ -4175,6 +4377,19 @@ function openNodeSheet(id){
     else{try{n.schema=JSON.parse(v);sc.style.borderColor="";}catch(e){sc.style.borderColor="var(--err)";return;}}
     syncFromCanvas();
   };
+  {const oe=$("#sheetBody").querySelector('select[data-f="__onError"]');
+   if(oe)oe.onchange=()=>{
+     if(!oe.value){delete n.onError;delete n.onErrorValue;}
+     else{n.onError=oe.value;if(oe.value!=="value")delete n.onErrorValue;
+       else if(n.onErrorValue===undefined)n.onErrorValue=null;}
+     syncFromCanvas();openNodeSheet(n.id);};}
+  {const ev=$("#sheetBody").querySelector('[data-json="onErrorValue"]');
+   if(ev)ev.oninput=()=>{
+     const v=ev.value.trim();
+     if(!v){n.onErrorValue=null;ev.style.borderColor="";}
+     else{try{n.onErrorValue=JSON.parse(v);ev.style.borderColor="";}
+       catch(_){ev.style.borderColor="var(--err)";return;}}
+     syncFromCanvas();};}
   const opSel=$("#sheetBody").querySelector('select[data-f="op"]');
   if(opSel)opSel.addEventListener("change",()=>{
     if(!JOIN_TEXT_OPS.includes(n.op)){delete n.prefix;delete n.suffix;}
@@ -4399,12 +4614,15 @@ function previewImport(raw,fromWhere){
       +`<div class="row"><button id="imErrCopy">このエラーをAIに返す文面をコピー</button></div>`;
     $("#imErrCopy").onclick=async()=>{$("#imErrCopy").textContent=(await copyText(errorReplyText(e,raw)))?"コピーした":"コピーできない";};
     return;}
+  /* 適用したときと同じ形にしてから見せる。既定値で埋まるものを「エラー」と出さない。 */
+  const fixed=normalizeSpec(got.spec);
   const D=specDiff(Ed.spec,got.spec);
   const errs=validate(got.spec);
   const col={"+":"var(--ok)","-":"var(--err)","~":"var(--warn)"};
   box.innerHTML=`<div class="mini">${fromWhere?esc(fromWhere)+"の":""}${got.kind.toUpperCase()} として読めた（ノード${got.spec.nodes.length}・線${(got.spec.edges||[]).length}）。適用すると次が変わる:</div>`
     +(D.length?`<div class="diag">`+D.map(d=>`<div style="color:${col[d.k]}">${d.k} ${esc(d.what)} ${esc(d.text)}</div>`).join("")+`</div>`
       :`<div class="diag">いまの構成と同じ（変わらない）</div>`)
+    +(fixed?`<div class="mini">・足りていなかった「入力の順番」「出口の扱い」は既定値で埋めた（あとでノード編集から変えられる）</div>`:"")
     +(errs.length?`<div class="vErr">⚠ このまま適用すると検証エラー: ${esc(errs.slice(0,3).join(" / "))}</div>`:"")
     +`<div class="row"><button class="primary" id="imApply">適用する</button>${errs.length?`<button id="imErrCopy2">エラーをAIに返す文面をコピー</button>`:""}</div>`;
   imCandidate=got.spec;
@@ -4496,10 +4714,13 @@ function updateResume(){const cp=store.load();$("#resume").disabled=!(cp&&cp.sta
   $("#retry").disabled=!(cur&&Object.values(cur.executions||{}).some(e=>e.status==="failed"));}
 function renderTotals(){
   const t=cur?cur.totals:{cost:0,apiCalls:0,inputTokens:0,outputTokens:0,unreportedUsageCalls:0};
+  const nerr=cur?(cur.errors||[]).length:0;
   $("#totals").innerHTML=[
     `apiCalls <b>${t.apiCalls}</b>`,`in tokens <b>${t.inputTokens}</b>`,`out tokens <b>${t.outputTokens}</b>`,
     `usage未報告 <b>${t.unreportedUsageCalls||0}</b>`,`cost <b>${t.cost===0?"0":t.cost}</b> JPY`,`costSource <b>unavailable</b>`,
-    `iterTotal <b>${cur?cur.iterationTotal:0}</b>`].map(x=>"<span>"+x+"</span>").join("");
+    `iterTotal <b>${cur?cur.iterationTotal:0}</b>`,
+    `エラー <b>${nerr}</b>`,`代わりの値で続行 <b>${t.recoveredErrors||0}</b>`,`止めたノード <b>${t.stoppedNodes||0}</b>`,
+  ].map(x=>"<span>"+x+"</span>").join("");
   const tb=$("#nodeTable tbody");tb.innerHTML="";
   if(!cur)return;
   for(const [nid,hist] of Object.entries(cur.nodeRuns)){
@@ -4507,14 +4728,17 @@ function renderTotals(){
     const inTok=succ.reduce((a,h)=>a+((h.usage&&h.usage.inputTokens)||0),0);
     const outTok=succ.reduce((a,h)=>a+((h.usage&&h.usage.outputTokens)||0),0);
     const len=succ.length?succ[succ.length-1].meta.len:null;
+    const ms=hist.reduce((a,h)=>a+(h.ms||0),0);
     const tr=document.createElement("tr");
-    tr.innerHTML=`<td>${nid}</td><td class="s-${last.status}">${last.status}${last.cancelReason?"("+last.cancelReason+")":""}${last.errorKind?" "+last.errorKind:""}</td>`
-      +`<td class="n">${hist.length}</td><td class="n">${inTok||""}</td><td class="n">${outTok||""}</td><td class="n">${len==null?"":len}</td>`;
+    tr.innerHTML=`<td>${nid}</td><td class="s-${last.status}">${last.status}${last.cancelReason?"("+last.cancelReason+")":""}${last.errorKind?" "+last.errorKind:""}${last.handledAs&&last.handledAs!=="error"?"→"+last.handledAs:""}</td>`
+      +`<td class="n">${hist.length}</td><td class="n">${inTok||""}</td><td class="n">${outTok||""}</td><td class="n">${len==null?"":len}</td><td class="n">${ms?ms:""}</td>`;
     tb.appendChild(tr);
   }
 }
 function report(){setState(`${cur.status} | calls=${cur.totals.apiCalls} iterTotal=${cur.iterationTotal}`+(cur.result!==null?` | result=${JSON.stringify(cur.result).slice(0,160)}`:""));
-  if(cur.status==="success")log("ok","── success ──");
+  if(cur.status==="success")log("ok","── success ──"
+    +((cur.errors||[]).length?` ただしエラーが ${cur.errors.length} 件あった（ノードの設定で先へ進めた）: `
+      +cur.errors.map(e=>`${e.node}:${e.kind}→${e.handledAs||"error"}`).join(", "):""));
   if(cur.status==="failed")log("err","── failed ── "+JSON.stringify(cur.errors));
   if(cur.status==="cancelled")log("cp","── cancelled（部分出力は破棄）──");
   if(cur.status==="paused")log("cp","── paused（Resume可）──");
@@ -5035,6 +5259,11 @@ function reportText(){
   L.push("");
   L.push("## Spec（JSON）");
   L.push($("#spec").value.trim());
+  L.push("");
+  L.push("## 実行の記録（機械が読む用・値は800字で切ってある。全文は「実行の記録をコピー」）");
+  if(cur){let sp=Ed.spec;try{sp=JSON.parse($("#spec").value);}catch(_){}
+    try{L.push(traceText(sp,cur,{cap:800}));}catch(e){L.push("（作れない: "+errText(e)+"）");}}
+  else L.push("（まだ実行していない）");
   return L.join("\n")+"\n";
 }
 async function copyOut(text,label){
@@ -5061,6 +5290,17 @@ $("#logCopy").onclick=()=>copyOut(logText()||"（ログは空）","実行ログ"
 $("#logSave").onclick=()=>saveOut(logText()||"（ログは空）","harness-log-"+stamp()+".txt");
 $("#repCopy").onclick=()=>copyOut(reportText(),"調査用メモ");
 $("#repSave").onclick=()=>saveOut(reportText(),"harness-report-"+stamp()+".txt");
+function traceOut(){
+  if(!cur)return "（まだ実行していない。一度「実行」してから押す）";
+  let sp=Ed.spec;try{sp=JSON.parse($("#spec").value);}catch(_){}
+  try{return traceText(sp,cur,{});}catch(e){return "（記録を作れない: "+errText(e)+"）";}
+}
+$("#trcCopy").onclick=()=>copyOut(traceOut(),"実行の記録");
+$("#trcSave").onclick=()=>saveOut(traceOut(),"harness-trace-"+stamp()+".json");
+$("#logVerbose").onchange=()=>{LOGOPT.verbose=$("#logVerbose").checked;
+  $("#logMsg").textContent=LOGOPT.verbose
+    ?"次の実行から、モデルへ送った文と値の全文もログに出る（長くなる）"
+    :"ログはふつうの詳しさに戻した";};
 
 /* 実行できない理由を、押した場所のすぐそばに出す（「押しても動かない」を作らない） */
 function noteBlocked(){
@@ -5103,7 +5343,9 @@ setHint("ノードをタップすると中身を編集。○ → ● の順に�
 /* 調査用の覗き口。画面から見えない中身（いまの実行・いまのSpec）を読むだけ。
    不具合調べと自動テストで使う（ここから書き換えはできない） */
 window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
-  nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;}};
+  nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;},
+  // Runtime をそのまま呼べる口（自動テスト用。画面を触らずに走らせて中身を見る）
+  eng:{fullRun,validate,traceReport,traceText,whyNotRun,LOGOPT,specToHSL,hslToSpec,errText}};
 
 /* ---- 使い方（？ボタン） ---- */
 const HELP_TEXT=`# Harness Studio の使い方
@@ -6065,6 +6307,56 @@ export async function CreateMLCEngine(model,opt){
     &&(r.nodeRuns.out||[]).length===1&&!((r.nodeRuns.failed||[]).length)
     &&JSON.stringify(r.result.value)===JSON.stringify(["本を読む","料理を作る","音楽を聴く"])
     &&r.totals.apiCalls===9);}
+ // 63 エラーが起きたときの返し方をノードごとに決められる（どれを選んでも記録には残す）
+ {const chain=extra=>({metadata:{version:"1"},nodes:[
+    {id:"in",type:"input"},
+    Object.assign({id:"a",type:"llm",mock:{fail:"oom"}},extra||{}),
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"a",port:"in"}},{from:{node:"a",port:"out"},to:{node:"out",port:"in"}}]});
+  const r1=await fullRun(chain(null),{});                                   // 既定: 止める
+  const r2=await fullRun(chain({onError:"value",onErrorValue:{score:0}}),{});// 決めた値を出す
+  const r3=await fullRun(chain({onError:"null"}),{});                       // null を出す
+  const par={metadata:{version:"1"},nodes:[                                 // このノードだけ止める
+    {id:"in",type:"input",routing:{mode:"parallel",failurePolicy:"fail_fast"}},
+    {id:"a",type:"llm",mock:{fail:"oom"},onError:"skip"},
+    {id:"b",type:"llm",mock:{tag:"B"}},
+    {id:"out",type:"output",start:{mode:"any"},inputs:{in:{type:"any",cardinality:"many"}}}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"a",port:"in"}},
+     {from:{node:"in",port:"out"},to:{node:"b",port:"in"}},
+     {from:{node:"a",port:"out"},to:{node:"out",port:"in"},position:0},
+     {from:{node:"b",port:"out"},to:{node:"out",port:"in"},position:1}]};
+  const r4=await fullRun(par,{});
+  ok("63 エラーのとき: 止める／決めた値／null／このノードだけ止める を選べる（どれでもエラーは残る）",
+    r1.status==="failed"&&(r1.errors[0]||{}).handledAs==="error"
+    &&r2.status==="success"&&JSON.stringify(r2.result.value)==='{"score":0}'
+      &&r2.errors.length===1&&r2.errors[0].handledAs==="value"&&r2.totals.recoveredErrors===1
+      &&(r2.nodeRuns.a||[]).slice(-1)[0].status==="recovered"
+    &&r3.status==="success"&&r3.result.value===null&&(r3.errors[0]||{}).handledAs==="null"
+    &&r4.status==="success"&&r4.errors.length===1&&r4.errors[0].handledAs==="skip"
+      &&r4.totals.stoppedNodes===1&&(r4.nodeRuns.a||[]).slice(-1)[0].status==="stopped"
+      &&/B/.test(JSON.stringify(r4.result.value)));}
+ // 64 実行の記録: 動かなかった理由・掛かった時間・送った文・受け取った線が残る
+ {const sp={metadata:{name:"t",version:"1"},nodes:[
+    {id:"in",type:"input"},{id:"a",type:"llm",mock:{tag:"A"}},{id:"b",type:"llm",mock:{tag:"B"}},
+    {id:"jn",type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}},
+    {id:"out",type:"output"}],
+   edges:[{from:{node:"in",port:"out"},to:{node:"a",port:"in"}},
+     {from:{node:"a",port:"out"},to:{node:"jn",port:"items"},position:0},
+     {from:{node:"b",port:"out"},to:{node:"jn",port:"items"},position:1},
+     {from:{node:"jn",port:"out"},to:{node:"out",port:"in"}}]};
+  const r=await fullRun(sp,{});
+  const T=traceReport(sp,r,{});
+  const why=T.notRun.map(x=>x.node);
+  const ta=T.nodes.find(x=>x.id==="a");
+  const ea=T.executions.find(e=>e.node==="a");
+  ok("64 実行の記録: 動かなかった理由・掛かった時間・送った文・受け取った線が残る",
+    r.status==="failed"&&r.errors.some(e=>e.kind==="DEADLOCK"||e.kind==="UNSATISFIED_INPUT")
+    &&why.includes("jn")&&why.includes("b")&&why.includes("out")
+    &&/まだ来ない: b/.test((T.notRun.find(x=>x.node==="jn")||{}).why||"")
+    &&/線が1本も無い/.test((T.notRun.find(x=>x.node==="b")||{}).why||"")
+    &&ta.runs[0].ms!=null&&ta.runs[0].used.length===1&&ta.runs[0].used[0].from==="in"
+    &&((ea.attempts[0]||{}).request||{}).messages.length>=1
+    &&T.harness.nodeCount===5&&T.deliveries.length>=2&&T.format==="harness-trace/1");}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
