@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — providers とモジュールも画面から v0.31.1</title>
+<title>Harness Studio — 端末が落ちないようにする v0.32.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.31.1 · 画面とJSONを揃える</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.32.0 · 端末が落ちないようにする</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -796,7 +796,14 @@ function reviewSpec(spec){
   const fromIn=reach(ins.map(n=>n.id),fwd),toOut=reach(outs.map(n=>n.id),bwd);
   for(const n of nodes){
     if(ins.length&&!fromIn.has(n.id))add("error",`入力から辿り着けない（線が繋がっていない）`,n.id);
-    else if(outs.length&&!toOut.has(n.id))add("error",`ここから出力に辿り着けない（行き止まり）`,n.id);
+    else if(outs.length&&!toOut.has(n.id)){
+      // 点検（assert）は結果が run.assertions に残るので行き止まりでよい。
+      // 記憶（memory）で「出さない」ものも、他のノードから 記憶.out で読む形なのでよい。
+      if(n.type==="assert")
+        add("info","出力へはつながっていないが、点検の結果は実行の記録（assertions）に残るのでこれでよい",n.id);
+      else if(n.type==="memory"&&(n.emit==="never"))
+        add("info",`出力へはつながっていないが、「出さない」設定なのでこれでよい（他のノードから ${n.id}.out で読む）`,n.id);
+      else add("error",`ここから出力に辿り着けない（行き止まり）`,n.id);}
   }
   // ノード個別
   for(const n of nodes){
@@ -813,6 +820,37 @@ function reviewSpec(spec){
          const ref=m[0].replace(/^[^A-Za-z]+/,"");
          add("warn",`${where} に「${ref}」と書いてあるが、これはそのままの文字列としてモデルに渡っている（値は入らない）。`
            +`実際の値を入れるには {{{${ref}}}} と三重の波かっこで囲む`,n.id);}}
+      /* 三重の波かっこで囲んであっても、差し込める名前でなければ **黙って空文字** になる。
+         例: {{{in.question}}} … in は「入ってきた値を文字列にしたもの」なので中に項目は無い。
+         気づけないので名指しする（差し込める名前は in / inputs.<入口> / run_input.<入力ID> /
+         iteration / vars.<名前> の5つだけ）。 */
+      {const p=n.prompt||{};
+       const inPorts=new Set(["in"].concat(Object.keys(n.inputs||{}))
+         .concat((spec.edges||[]).filter(e=>e.to.node===n.id).map(e=>e.to.port||"in")));
+       const inputIds=new Set((spec.nodes||[]).filter(x=>x.type==="input").map(x=>x.id));
+       const varKeys=new Set(Object.keys(spec.vars||{}));
+       const re=/\{\{\{\s*([^}\s]+?)\s*\}\}\}/g;
+       for(const[where,txt]of[["system",p.system],["本文テンプレ",p.template&&p.template.value],
+           ["prefix",p.prefix],["suffix",p.suffix]]){
+         if(!txt)continue;
+         let m;re.lastIndex=0;
+         while((m=re.exec(String(txt)))){
+           const ref=m[1],seg=ref.split(".");
+           const head=seg[0];
+           let why=null;
+           if(head==="in"){if(seg.length>1)
+             why=`in は「入ってきた値を文字列にしたもの」なので中に項目は無い。`
+               +`項目を入れたいなら手前で線の pick で絞るか、calc で文にしてから渡す`;}
+           else if(head==="iteration"){if(seg.length>1)why="iteration は数なので中に項目は無い";}
+           else if(head==="inputs"){if(seg.length<2)why="inputs だけでは何も入らない（inputs.<入口の名前>）";
+             else if(!inPorts.has(seg[1]))why=`入口 "${seg[1]}" はこのノードに無い（あるのは ${[...inPorts].join(" / ")}）`;}
+           else if(head==="run_input"){if(seg.length<2)why="run_input だけでは何も入らない（run_input.<入力ノードのID>）";
+             else if(!inputIds.has(seg[1]))why=`入力ノード "${seg[1]}" は無い（あるのは ${[...inputIds].join(" / ")||"なし"}）`;}
+           else if(head==="vars"){if(seg.length<2)why="vars だけでは何も入らない（vars.<名前>）";
+             else if(!varKeys.has(seg[1]))why=`vars に "${seg[1]}" は無い（あるのは ${[...varKeys].join(" / ")||"なし"}）`;}
+           else why=`差し込める名前は in / inputs.<入口> / run_input.<入力ID> / iteration / vars.<名前> だけ`;
+           if(why)add("warn",`${where} の {{{${ref}}}} は**空文字になる**（${why}）`,n.id);
+         }}}
       if(!(n.generation&&n.generation.maxTokens!=null))add("info","maxTokens 未設定。ローカルLLMだと長く出力し続けることがある",n.id);
       if(n.provider){const def=(spec.providers||{})[n.provider];
         if(def&&def.adapter!=="mock"&&!def.model&&!n.model)add("error",`provider "${n.provider}" にモデルが無い`,n.id);
@@ -911,7 +949,7 @@ function reviewSpec(spec){
   {const KNOWN=new Set(["id","type","label","default","provider","model","prompt","generation","schema",
     "routing","ports","inputs","start","merge","mock","lang","code",
     "onError","onErrorValue","onTruncate","onBadOutput","onBadItem","onFail",
-    "onItemError","onItemErrorValue","onNone","onNoneValue",
+    "onItemError","onItemErrorValue","onNone","onNoneValue","onContextOverflow",
     "op","path","skipMissing","sep","labels","keys","prefix","suffix","template",
     "condition","required","requiredRatio","total","asserts","module","loop","map","order",
     "rules","emit","when","initial","unique","max","scope","out","cancel",
@@ -1660,6 +1698,58 @@ function buildMessages(node,inputs,ex,run){
 }
 /* モデルごとの起動オプション上書き。ノードでモデルを変えたら、providerの上書きは連れて行かない
    （例: gemma は sliding_window_size を -1 にしないと起動しない。SmolLM2 にそれを付ける意味は無い） */
+/* ---- 文脈の長さを超えていないか、送る前に確かめる ----
+   超えた文をそのまま Provider へ渡すと、端末では「エラー」ではなく
+   タブごと落ちる（WebGPU の確保に失敗する）ことがある。そうなると何が起きたか分からない。
+   そこで送る前に測って、確実に入らないときは名前の付いたエラーで止める。
+   **入力を勝手に切り詰めたり削ったりはしない。** 止めて、数字を出して、どうするかは書いた人が決める。 */
+const CTX_OVERFLOW_POLICIES=["error","send"];
+/* トークン数を「少なめに」見積もる。
+   確実に超えているときだけ言いたいので、1トークンあたりの文字数は多い側を使う
+   （日本語などは1文字が1トークン以上になりがち＝多くても1.5文字/トークン、
+     英数字は4文字/トークンくらい）。だから出た数は「少なくともこれだけ要る」。 */
+function estTokensMin(text){
+  const t=String(text==null?"":text);
+  let wide=0,narrow=0;
+  for(const ch of t){
+    const c=ch.codePointAt(0);
+    if(c>=0x1100&&c<=0xFFEF&&!(c>=0xFF61&&c<=0xFF9F))wide++;else narrow++;
+  }
+  return Math.ceil(wide/1.5+narrow/4);
+}
+/* このノードの文脈の窓。書いていなければ分からない（null）＝確かめない。 */
+function contextWindowOf(def,node){
+  const ov=(node&&node.overrides&&node.overrides.context_window_size)
+    ||(def&&def.overrides&&def.overrides.context_window_size);
+  const cs=(node&&node.contextSize)||(def&&def.contextSize);
+  const v=Number(ov||cs||0);
+  return v>0?v:null;
+}
+/* 送る前の確かめ。入らないと分かったら、測った数字を付けて止める。 */
+function checkContextFits(run,node,def,msgs,gen,log){
+  const win=contextWindowOf(def,node);
+  if(!win)return null;                                   // 窓が書かれていない＝確かめようがない
+  const chars=(msgs.messages||[]).reduce((a,m)=>a+[...String(m.content||"")].length,0);
+  const est=(msgs.messages||[]).reduce((a,m)=>a+estTokensMin(m.content),0);
+  const out=(gen&&gen.maxTokens)!=null?Number(gen.maxTokens):256;
+  const need=est+out;
+  const info={window:win,chars,estPromptTokens:est,maxTokens:out,estNeed:need};
+  if(need<=win)return info;
+  run.totals.contextOverflows=(run.totals.contextOverflows||0)+1;
+  const pol=(node.onContextOverflow||"error");
+  const how=`送る文 ${chars}字（少なく見ても約${est}トークン）＋ maxTokens ${out} = 約${need} > 窓 ${win}`;
+  if(pol==="send"){
+    log&&log("err",`⚠ ${node.id}: 文脈の窓を超えている（${how}）。`
+      +`onContextOverflow:"send" なのでそのまま送る（端末が落ちることがある）`);
+    return Object.assign(info,{over:true,sent:true});}
+  throw{code:"CONTEXT_OVERFLOW",retryable:false,usage:{apiCalls:0,inputTokens:0,outputTokens:0,cost:null},
+    contextInfo:info,
+    message:`${node.id}: 文脈の窓に入らないので送らなかった（${how}）。`
+      +`このまま送ると端末が落ちることがあるので止めた。`
+      +`直し方: 窓（contextSize / overrides.context_window_size）を大きくする／`
+      +`本文に入れる値を減らす（{{{in}}} で JSON をまるごと入れていないか。線の pick で必要な項目だけにする）／`
+      +`maxTokens を下げる。そのまま送りたいときは onContextOverflow:"send"`};
+}
 function effectiveOverrides(def,node){
   const base=(node.model&&def.model&&node.model!==def.model)?{}:(def.overrides||{});
   const o=Object.assign({},base,node.overrides||{});
@@ -1701,6 +1791,11 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
     +attempt.request.messages.map(m=>`    [${m.role}] ${m.content}`).join("\n"));
   for(;;){
     try{
+      // 送る前に「文脈の窓に入るか」を測る（入らないと分かったら送らない）
+      const fit=checkContextFits(run,node,def,msgs,gen,log);
+      if(fit){attempt.context=fit;
+        log&&log("dim",`  ${node.id} 送る文 ${fit.chars}字（少なく見て約${fit.estPromptTokens}トークン）`
+          +` ＋ maxTokens ${fit.maxTokens} / 窓 ${fit.window}`);}
       res=await adapter.invoke({
         input:msgs,model,generation:gen,schema,signal,handle,providerDef:def,node,inputs,ex,
         onToken:t=>{attempt.partialOutput=(attempt.partialOutput||"")+t;ctl&&ctl.onToken&&ctl.onToken(node.id,t);}
@@ -1848,6 +1943,8 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
       }
       if(n.onTruncate&&!["error","use","retry"].includes(n.onTruncate))errs.push("途中で切れたときの扱いが不正: "+n.id);
       if(n.onBadOutput&&!["error","retry"].includes(n.onBadOutput))errs.push("形に合わなかったときの扱いが不正: "+n.id);
+      if(n.onContextOverflow&&!CTX_OVERFLOW_POLICIES.includes(n.onContextOverflow))
+        errs.push(`文脈の窓を超えたときの扱いが不正（${CTX_OVERFLOW_POLICIES.join(" / ")}）: `+n.id);
     }
     // ここから下はどの種類にも効く（以前はモデルを呼ぶノード以外に届いていなかった）
     if(n.onError&&!ERROR_POLICIES.includes(n.onError))errs.push("エラーのときの扱いが不正（error / value / null / skip）: "+n.id);
@@ -3166,7 +3263,10 @@ async function processOneWorkItem(spec,run,store,log,ctl){
      const tk=(usage&&(usage.inputTokens||usage.outputTokens))?` in=${usage.inputTokens||0} out=${usage.outputTokens||0}`:"";
      log&&log("dim",`  ${node.id} ${ctxTag(ex)} 終了 ${clockOf(at.startedAt)} → ${clockOf(at.endedAt)}（${ms}ms）${tk} ← ${usedTag(ex)}`);
      if(LOGOPT.verbose)log&&log("dim",`    値ぜんぶ: ${JSON.stringify(rv.value)}`);}
-    run.workQueue[at]={execId:ex.execId,phase:"route"};if(store)store.save(run);return{kind:"executed"};
+    // モデルを呼んだ直後だけは必ず書く（ここを飛ばすと Resume で同じ推論をやり直す＝二重に課金する）
+    run.workQueue[at]={execId:ex.execId,phase:"route"};
+    if(store)store.save(run,{force:node.type==="llm"||node.type==="tool"});
+    return{kind:"executed"};
   }
   let outcome;
   try{outcome=await routeExec(spec,run,ex,byId,loopEntries,log);}catch(err){
@@ -3757,7 +3857,35 @@ if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntil
    UI
    ================================================================== */
 if(typeof document!=="undefined"){
-function localStore(){return{save(r){try{localStorage.setItem(CP_KEY,JSON.stringify(r,(k,v)=>v===ABSENT?"__A__":v));}catch(e){}},load(){try{const s=localStorage.getItem(CP_KEY);return s?JSON.parse(s,(k,v)=>v==="__A__"?ABSENT:v):null;}catch(e){return null;}},clear(){try{localStorage.removeItem(CP_KEY);}catch(e){}}};}
+/* ---- 前回の続き（Checkpoint）の保存 ----
+   localStorage は同期でディスクに書く。Run が伸びるほど1回の書き込みが大きくなるので、
+   Work Item ごとに毎回書くと「長さの2乗」で重くなる（端末が固まる・落ちる原因になる）。
+   そこで **まとめて書く**。ただし次の場合は必ずその場で書く:
+     - Run が終わった／止まった／中断された（status が running でない）
+     - モデルを呼び終わった直後（force）… ここを飛ばすと Resume で同じ推論をやり直してしまう
+   書けなかったとき（容量オーバーなど）は黙って捨てず、数えて画面に出す。 */
+const CP_THROTTLE_MS=500;
+const CP_STAT={writes:0,skipped:0,bytes:0,peak:0,failed:0,lastError:null};
+function localStore(){
+  let lastAt=0;
+  const write=r=>{
+    let s;
+    try{s=JSON.stringify(r,(k,v)=>v===ABSENT?"__A__":v);}
+    catch(e){CP_STAT.failed++;CP_STAT.lastError="JSONにできない: "+errText(e);return;}
+    try{localStorage.setItem(CP_KEY,s);
+      lastAt=Date.now();CP_STAT.writes++;CP_STAT.bytes+=s.length;
+      if(s.length>CP_STAT.peak)CP_STAT.peak=s.length;}
+    catch(e){CP_STAT.failed++;CP_STAT.lastError=errText(e);}
+  };
+  return{
+    save(r,opt){
+      const must=!!(opt&&opt.force)||!r||r.status!=="running";
+      if(must||Date.now()-lastAt>=CP_THROTTLE_MS)write(r);
+      else CP_STAT.skipped++;
+    },
+    load(){try{const s=localStorage.getItem(CP_KEY);return s?JSON.parse(s,(k,v)=>v==="__A__"?ABSENT:v):null;}catch(e){return null;}},
+    clear(){try{localStorage.removeItem(CP_KEY);}catch(e){}}};
+}
 const $=s=>document.querySelector(s);const logEl=$("#log");const store=localStore();
 function log(cls,msg){const sp=document.createElement("span");sp.className="l-"+({node:"node",ok:"ok",err:"err",loop:"loop",route:"route",dim:"dim",data:"data",cp:"cp",prov:"prov"}[cls]||"dim");sp.textContent=msg+"\n";logEl.appendChild(sp);logEl.scrollTop=logEl.scrollHeight;}
 const clearLog=()=>logEl.innerHTML="";
@@ -5409,6 +5537,14 @@ function openNodeSheet(id){
     h+=fld("答えが出力の形に合わなかったとき",sel("onBadOutput",n.onBadOutput||"",[
       {v:"",t:"エラーにして止める（既定）"},
       {v:"retry",t:"もう一度聞く（最大2回）"}]));
+    h+=fld("文脈の窓に入らないとき",sel("onContextOverflow",n.onContextOverflow||"error",
+      [{v:"error",t:"送らずに止める（既定・端末が落ちるのを防ぐ）"},
+       {v:"send",t:"そのまま送る（落ちることがある）"}]));
+    h+=`<div class="mini">送る前に文の長さを測って、窓（<b>文脈の長さ</b> / <code>overrides.context_window_size</code>）に`
+      +`入らないと分かったら<b>送らずに止める</b>。<b>勝手に切り詰めたりはしない。</b>`
+      +`窓を書いていないノードは測りようがないので素通りする。`
+      +`<br>トークン数は<b>少なめの見積り</b>（全角1.5文字・半角4文字で1トークン）なので、`
+      +`出たときは<b>確実に</b>超えている。ログには毎回「送る文○字／窓○」が出る。</div>`;
     h+=`<div class="mini">出力の形（schema）を付けているときだけ効く。文章のままなら切れてもそのまま届く。<br>`
       +`この道具は<b>毎回まっさらな会話</b>でモデルを呼ぶ（前のやり取りは持ち越さない）ので、`
       +`「会話を続ける／新しくする」という設定は無い。</div>`;
@@ -6991,7 +7127,20 @@ function renderTotals(){
     `usage未報告 <b>${t.unreportedUsageCalls||0}</b>`,`cost <b>${t.cost===0?"0":t.cost}</b> JPY`,`costSource <b>unavailable</b>`,
     `iterTotal <b>${cur?cur.iterationTotal:0}</b>`,
     `エラー <b>${nerr}</b>`,`代わりの値で続行 <b>${t.recoveredErrors||0}</b>`,`止めたノード <b>${t.stoppedNodes||0}</b>`,
-  ].map(x=>"<span>"+x+"</span>").join("");
+    // 前回の続き（Checkpoint）の書き込み。端末が固まる原因になるので見えるようにする
+    `続きの保存 <b>${CP_STAT.writes}</b>回（まとめた <b>${CP_STAT.skipped}</b>回）`,
+    `1回の最大 <b>${Math.round(CP_STAT.peak/1024)}</b>KB`,
+    `書いた合計 <b>${(CP_STAT.bytes/1048576).toFixed(2)}</b>MB`,
+    CP_STAT.failed?`<span style="color:var(--err)">保存できなかった <b>${CP_STAT.failed}</b>回（${esc(String(CP_STAT.lastError||"").slice(0,60))}）</span>`:"",
+    t.contextOverflows?`<span style="color:var(--err)">文脈の窓に入らず送らなかった <b>${t.contextOverflows}</b>回</span>`:"",
+  ].filter(Boolean).map(x=>"<span>"+x+"</span>").join("");
+  if(CP_STAT.peak>2*1024*1024&&!report._cpWarned){report._cpWarned=true;
+    log("err",`■ 前回の続き（Checkpoint）が ${Math.round(CP_STAT.peak/1048576*10)/10}MB になっている。`
+      +`端末の上限（だいたい5MB）に近づくと保存できなくなり、続きから再開できなくなる。`
+      +`ノードを分けるか、実行を短く区切る`);}
+  if(CP_STAT.failed&&!report._cpFailWarned){report._cpFailWarned=true;
+    log("err",`■ 前回の続き（Checkpoint）を保存できなかった（${CP_STAT.lastError}）。`
+      +`このまま進むと「前回の続き」から再開できない`);}
   const tb=$("#nodeTable tbody");tb.innerHTML="";
   if(!cur)return;
   for(const [nid,hist] of Object.entries(cur.nodeRuns)){
@@ -8467,6 +8616,7 @@ ${HELP_JSON_EXAMPLE}
 | \`inputs.<入口>.cardinality\` / \`.type\` | ノードをタップ →「入口ごとの受け取り方」 |
 | \`mock\` の中身 | ノードをタップ → Provider を mock にすると「mock の返し方」が出る |
 | \`generation.topP\` | ノードをタップ → topP |
+| \`onContextOverflow\` | ノードをタップ →「文脈の窓に入らないとき」 |
 | \`keys\`（json_object） | Join のノード →「キーと位置の対応」 |
 | \`order\`（map） | \`"input"\` だけなので読み取り専用（理由を画面に出している） |
 | \`from.port\` / \`to.port\` | 線をタップ →「出口の名前」「入口の名前」 |
@@ -9277,6 +9427,22 @@ m1#1/i0|m2#5/i1 … Map の中の Map
 
 - Resume の入口は画面のいちばん上。前回の Run があると「**前回の続きを開く**」と「**捨てる**」が出る。
   保存されているのは Run 1つぶん（\`status\` / 実行 / Delivery / 使用量 / ループと Map の場 / ログ）。
+
+**保存は「まとめて書く」。** \`localStorage\` は同期でディスクに書くので、Work Item ごとに毎回書くと
+Run が伸びるほど1回が大きくなり、**長さの2乗**で重くなる（端末が固まる・落ちる原因になる）。
+そこで 500ms にまとめる。ただし次は**必ずその場で**書く:
+
+- **モデルを呼び終わった直後**（ここを飛ばすと Resume で同じ推論をやり直す＝二重に課金する）
+- Run が終わった／止まった／中断された（\`status\` が \`running\` でなくなった）
+
+実測: 133 Work Item・21回推論のハーネスで **書き込み 133回 → 22回 / 28.7MB → 4.1MB（86%減）**。
+まとめても進み方は変わらず、Resume が推論をやり直さないことも自己テストで確かめている。
+
+**保存できなかったときは黙って捨てない。** 端末の上限（だいたい5MB）を超えると
+\`setItem\` が失敗する。回数を数えて使用量に赤字で出し、ログにも
+「このまま進むと前回の続きから再開できない」と出す。
+1回の保存が2MBを超えたら、その時点で注意を出す。
+使用量には毎回 **続きの保存の回数・1回の最大KB・書いた合計MB** が出る。
 - **Resume は「最初からもう1回」ではない。** Provider を呼び終わって配る前で止まった実行は、
   配るところから続く（**同じ推論をもう一度しない＝二重に課金しない**）。
   これは自己テストで確かめている（\`execute→route Resume Provider再実行なし\` / \`pause Resume source再実行なし\`）。
@@ -9567,8 +9733,30 @@ Runtime が区別できるのは **Provider が「\`maxTokens\` で切れた」�
 - \`webllm\` では \`overrides.context_window_size\`、\`wllama\` では \`contextSize\` に入る。
 - 数えるのは **system ＋ 前に付ける文 ＋ 本文 ＋ 後ろに付ける文 ＋ これから書く分**。
   schema を文法として渡す分は Provider 側の扱い。
-- **超えたときの動きは Provider 任せ**。Runtime は入力を切り詰めたり削ったりしない。
-  Provider がエラーを返せばふつうのノードのエラーになる（\`onError\` が効く）。
+- **Runtime は入力を切り詰めたり削ったりしない。** 代わりに、**送る前に長さを測って、
+  確実に入らないと分かったら送らずに止める**（\`CONTEXT_OVERFLOW\`）。
+  超えた文をそのまま渡すと、端末では「エラー」ではなく**タブごと落ちる**ことがあるため。
+
+~~~
+{"id":"A","type":"llm","onContextOverflow":"error"}   // 既定。送らずに止める
+{"id":"A","type":"llm","onContextOverflow":"send"}    // そのまま送る（落ちることがある）
+~~~
+
+| | 動き |
+|---|---|
+| \`"error"\`（既定） | 送らない。\`CONTEXT_OVERFLOW\`（\`retryable:false\`）。\`onError\` が効く |
+| \`"send"\` | ログに赤字で出してから、そのまま送る |
+
+- 窓が書かれていないノードは**測りようがないので素通り**する（\`contextSize\` も
+  \`overrides.context_window_size\` も無いとき）。
+- トークン数は**少なめの見積り**（全角1.5文字・半角4文字で1トークン）。
+  だから出たときは**確実に**超えているが、**出なかったから入るとは言えない**。
+  本当のトークン数はモデルの分かち方で決まるので、Runtime は数えられない（正直に見積りと書く）。
+- ログには毎回 \`送る文 ○字（少なく見て約○トークン）＋ maxTokens ○ / 窓 ○\` が出る。
+  実行の記録では \`executions[].attempts[].context\` に入る。
+- 数えた回数は使用量の \`contextOverflows\`。
+- **JSON をまるごと \`{{{in}}}\` で入れると一気に膨らむ。** 線の \`pick\` で必要な項目だけにするか、
+  手前の \`calc\` で削ってから渡す。\`overrides.context_window_size\` を大きくするのも手。
 - 「**この端末向けに省メモリにする**」ボタンは、その場で**文脈の長さを短い方に入れ直す**だけ。
   モデルを替えたり、他の設定を触ったりはしない。
 
@@ -12006,6 +12194,90 @@ export async function CreateMLCEngine(model,opt){
   ok("83 診断: Runtime が読まないキーを名指しする（載せている例・プリセットでは1件も出ない）",
     JSON.stringify(caught)==='["A"]'&&falses.length===0);
   if(falses.length)out.push(`<span class="fail">↳</span>  ${esc(falses.slice(0,4).join(" / "))}`);}
+ // 84 文脈の窓に入らない文は送らない（端末が落ちるのを防ぐ）
+ {const long="あ".repeat(1500);
+  const mk=(win,where,pol)=>{const n={id:"A",type:"llm",provider:"m",mock:{text:"ok"},
+      generation:{maxTokens:96},
+      prompt:{template:{syntax:"mustache",mode:"interpolation_only",value:"{{{in}}}"}}};
+    if(where==="node")n.overrides={context_window_size:win};
+    if(where==="nodeCtx")n.contextSize=win;
+    if(pol)n.onContextOverflow=pol;
+    const prov={m:{adapter:"mock"}};
+    if(where==="prov")prov.m.overrides={context_window_size:win};
+    if(where==="provCtx")prov.m.contextSize=win;
+    return{metadata:{version:"1"},providers:prov,
+      nodes:[{id:"in",type:"input"},n,{id:"out",type:"output"}],
+      edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+        {from:{node:"A",port:"out"},to:{node:"out",port:"in"}}]};};
+  const go=async(win,where,pol,input)=>fullRun(mk(win,where,pol),{in:input===undefined?long:input},memStore(),null);
+  const over=[];
+  for(const where of ["node","nodeCtx","prov","provCtx"]){
+    const r=await go(1024,where,null);
+    over.push(r.status==="failed"&&r.errors[0].kind==="CONTEXT_OVERFLOW"
+      &&r.totals.apiCalls===0&&r.totals.contextOverflows===1
+      &&/窓 1024/.test(r.errors[0].message));}
+  const rSend=await go(1024,"node","send");
+  const rFit=await go(8192,"node",null);
+  const rNoWin=await go(0,"node",null);
+  const rShort=await go(1024,"node",null,"みじかい");
+  // 見積りは「少なめ」側（全角1.5・半角4文字で1トークン）。半角だけなら 1500字でも入る
+  const rAscii=await go(1024,"node",null,"a".repeat(1500));
+  ok("84 文脈の窓に入らない文は送らない（4か所の窓・send で送る・入るときは素通り・見積りは少なめ側）",
+    over.every(Boolean)
+    &&rSend.status==="success"&&rSend.totals.apiCalls===1&&rSend.totals.contextOverflows===1
+    &&rFit.status==="success"&&(rFit.totals.contextOverflows||0)===0
+    &&rNoWin.status==="success"&&(rNoWin.totals.contextOverflows||0)===0
+    &&rShort.status==="success"&&(rShort.totals.contextOverflows||0)===0
+    &&rAscii.status==="success"&&(rAscii.totals.contextOverflows||0)===0
+    &&validate(mk(1024,"node","へん")).some(m=>/文脈の窓を超えたときの扱いが不正/.test(m)));}
+ // 85 前回の続きの保存は「まとめて書く」が、モデルを呼んだ直後は必ず書く
+ {const sp={metadata:{version:"1"},providers:{m:{adapter:"mock"}},
+    nodes:[{id:"in",type:"input"},{id:"lp",type:"loop",loop:{id:"lp",max:6}},
+      {id:"A",type:"llm",provider:"m",mock:{tag:"案"},inputs:{in:{type:"any",cardinality:"many"}},start:{mode:"any"}},
+      {id:"B",type:"pass"},
+      {id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"lp",port:"in"},position:0},
+      {from:{node:"lp",port:"out"},to:{node:"A",port:"in"},loopRole:"body",position:1},
+      {from:{node:"A",port:"out"},to:{node:"B",port:"in"}},
+      {from:{node:"B",port:"out"},to:{node:"lp",port:"in"},loop:{id:"lp"},position:1},
+      {from:{node:"lp",port:"out"},to:{node:"out",port:"in"},loopRole:"done"}]};
+  // localStore と同じ決まりの store をここで作る（本番の Checkpoint は汚さない）
+  const mkStore=throttle=>{let lastAt=0;const S={writes:0,skipped:0,forced:0};let last=null;
+    return{S,save(r,opt){
+      const must=!!(opt&&opt.force)||!r||r.status!=="running";
+      if(must)S.forced++;
+      if(!(must||Date.now()-lastAt>=throttle)){S.skipped++;return;}
+      lastAt=Date.now();S.writes++;
+      last=JSON.parse(JSON.stringify(r,(k,v)=>v===ABSENT?"__A__":v));},
+      load(){return last;},clear(){last=null;}};};
+  const runAll=async throttle=>{const store=mkStore(throttle);
+    const run=makeRun(sp,{in:"Q"});startRun(sp,run);let steps=0;
+    while(steps<5000){const r=await processOneWorkItem(sp,run,store,null,null);steps++;
+      if(r.kind==="idle"||!run.workQueue.length)break;}
+    return{store,run,steps};};
+  const a=await runAll(-1);              // 毎回書く
+  const b2=await runAll(500);            // まとめて書く
+  const fewer=b2.store.S.writes<a.store.S.writes&&b2.store.S.skipped>0;
+  // モデルを呼んだ回数ぶんは必ず書かれている（force）
+  const forcedEnough=b2.store.S.forced>=b2.run.totals.apiCalls;
+  // 途中で止めて再開しても、同じ推論をやり直さない
+  const store=mkStore(500);
+  const run=makeRun(sp,{in:"Q"});startRun(sp,run);
+  for(let i=0;i<500;i++){const r=await processOneWorkItem(sp,run,store,null,null);
+    if(r.kind==="idle"||!run.workQueue.length)break;
+    if(run.totals.apiCalls>=3)break;}
+  const mid=run.totals.apiCalls;
+  const cp=store.load();
+  const cpCalls=cp?cp.totals.apiCalls:-1;
+  const r2=cp?await resumeRun(sp,cp,mkStore(500),null,null):null;
+  ok("85 前回の続きの保存: まとめて書く（回数が減る）が、モデルを呼んだ直後は必ず書く＝Resume で推論をやり直さない",
+    fewer&&forcedEnough&&mid===3&&cpCalls===3
+    &&!!r2&&r2.status==="success"&&r2.totals.apiCalls===6
+    &&a.steps===b2.steps);                // まとめても進み方は変わらない
+  if(!(fewer&&forcedEnough&&mid===3&&cpCalls===3&&r2&&r2.status==="success"&&r2.totals.apiCalls===6))
+    out.push(`<span class="fail">↳</span>  毎回=${a.store.S.writes} まとめて=${b2.store.S.writes}`
+      +` skipped=${b2.store.S.skipped} forced=${b2.store.S.forced}/${b2.run.totals.apiCalls}`
+      +` mid=${mid} cp=${cpCalls} resume=${r2&&r2.totals.apiCalls}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
