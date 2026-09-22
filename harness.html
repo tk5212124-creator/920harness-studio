@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 端末が落ちないようにする v0.32.0</title>
+<title>Harness Studio — 何十回呼んでも落ちないようにする v0.33.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.32.0 · 端末が落ちないようにする</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.33.0 · 何十回呼んでも落ちない</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -1062,6 +1062,16 @@ const ModelManager={
     })();
     st.promise=p;return p;
   },
+  /* Provider が「リセットが要る（needs_reset）」と言ってきたら、載っている engine を捨てる。
+     捨てないまま次を呼ぶと、壊れた状態のまま呼び直すことになり、端末ごと落ちやすい。 */
+  async resetFor(def,adapter,onProgress){
+    const k=this.key(def);const st=this.states[k];
+    if(!st)return false;
+    if(st.handle&&adapter&&adapter.release){try{await adapter.release(st.handle);}catch(_){}}
+    delete this.states[k];
+    onProgress&&onProgress({progress:0,text:"engine を捨てた（次に呼ぶとき読み直す）"});
+    return true;
+  },
   /* 同じadapterの、別のモデルを片付ける（メモリを空ける） */
   async releaseOthers(adapter,keepKey,onProgress){
     for(const[k,st]of Object.entries(this.states)){
@@ -1457,6 +1467,10 @@ const WebLLMProvider={
   async invoke(req){
     const h=req.handle;const engine=h&&h.engine;
     if(!engine)throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"engine未ロード"};
+    /* この道具は毎回まっさらな会話で呼ぶ（前のやり取りは持ち越さない）。
+       だが engine の側に前回の KV キャッシュが残ったままだと、呼ぶほど端末のメモリを食う。
+       1回ごとに捨てる（messages は毎回ぜんぶ渡しているので、捨てても答えは変わらない）。 */
+    try{if(engine.resetChat)await engine.resetChat();}catch(_){}
     const opt={messages:req.input.messages,stream:true,stream_options:{include_usage:true},
       max_tokens:req.generation.maxTokens!=null?req.generation.maxTokens:256,
       temperature:req.generation.temperature!=null?req.generation.temperature:0.7};
@@ -1801,6 +1815,15 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
         onToken:t=>{attempt.partialOutput=(attempt.partialOutput||"")+t;ctl&&ctl.onToken&&ctl.onToken(node.id,t);}
       });
     }catch(err){
+      // Provider が「リセットが要る」と言ってきたら、その場で engine を捨てる。
+      // 捨てずに次を呼ぶと壊れた状態のまま呼び直すことになり、端末ごと落ちやすい。
+      if(err&&err.providerState==="needs_reset"&&adapter.ensureLoaded){
+        const dropped=await ModelManager.resetFor(Object.assign({},def,{adapter:adapter.id,model}),
+          adapter,ctl&&ctl.onProgress);
+        run.totals.providerResets=(run.totals.providerResets||0)+1;
+        log&&log("err",`■ ${node.id}: ${err.code} で Provider が「リセットが要る」と言ったので`
+          +`${dropped?"engine を捨てた":"（載っていなかった）"}。次に呼ぶときは読み直す`);
+      }
       if(err&&err.truncated&&pol==="retry"&&tries<2){
         countUsage(run,err.usage);                 // やり直す前の分も数える
         run.totals.truncateRetries=(run.totals.truncateRetries||0)+1;
@@ -7769,7 +7792,9 @@ window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
   // Runtime をそのまま呼べる口（自動テスト用。画面を触らずに走らせて中身を見る）
   eng:{fullRun,validate,traceReport,traceText,runSummary,whyNotRun,LOGOPT,specToHSL,hslToSpec,errText,
     expandModules,modulePorts,remapNodeIds,remapLoopIds,reviewSpec,
-    processOneWorkItem,resumeRun,startRun,makeRun,memStore}};
+    processOneWorkItem,resumeRun,startRun,makeRun,memStore,
+    // Provider を差し替えて画面ごと試せるようにする（自動テスト用。JSONは触らずに済む）
+    PROVIDERS,ModelManager,ABSENT,CP_STAT,estTokensMin,contextWindowOf}};
 
 /* ---- 使い方（？ボタン） ---- */
 const HELP_TEXT=`# Harness Studio の使い方
@@ -9875,6 +9900,50 @@ WebGPU が無い端末（古い iPhone Safari など）でも動く adapter。
 generation:{maxTokens:160, temperature:0.7}}\` が入る。
 このサイトが自分で配っているぶん（\`models_index.json\`）があれば、
 そちらの \`url\` を使う（HuggingFace に繋がらなくても落とせる・同一オリジンなので速い）。
+
+## 39.7 何回も呼ぶときに端末を落とさないための決まり
+
+1つの Run で**同じモデルを何十回も呼ぶ**（Map の1件ずつ・多数決・ループ）ハーネスは、
+呼ぶほど端末のメモリが減っていくと途中で**タブごと落ちる**（エラーにもならず、画面が再読み込みされる）。
+Runtime 側でやっていることは次の3つ。
+
+**① 1回ごとに会話を捨てる（webllm）**
+
+この道具は**毎回まっさらな会話**でモデルを呼ぶ（前のやり取りは持ち越さない）。
+なので engine 側に前回の KV キャッシュが残っている意味が無い。
+呼ぶ直前に \`engine.resetChat()\` を呼んで捨てる（\`messages\` は毎回ぜんぶ渡しているので答えは変わらない）。
+
+実測（23ノード・21回推論のハーネス）: **KV の山 19281 → 1867（90%減）**。
+（\`resetChat\` を持たない古い版では黙って飛ばす）
+
+**② Provider が「リセットが要る」と言ったら engine を捨てる**
+
+メモリ不足などで \`providerState:"needs_reset"\` が返ったら、
+\`ModelManager\` から**その engine を捨てて解放する**。次に呼ぶときは読み直す。
+捨てずに呼び直すと、壊れた状態のまま呼ぶことになって落ちやすい。
+
+- ログに \`■ <ノード>: <code> で Provider が「リセットが要る」と言ったので engine を捨てた\` と出る。
+- 回数は使用量の \`providerResets\`。
+- そのあとは**ふつうのノードのエラー**として扱うので、\`onError\` がそのまま効く
+  （\`value\` にしておけば、捨てて読み直したうえで先へ進める）。
+
+**③ 前回の続きの保存をまとめる**
+
+28章の通り。Work Item ごとに毎回書くと長さの2乗で重くなるので 500ms にまとめる
+（モデルを呼び終わった直後と、Run が終わった時は必ず書く）。
+
+**それでも足りないときに効くのは、ハーネス側の作り。**
+
+| やること | なぜ効くか |
+|---|---|
+| 本文に入れる値を減らす（線の \`pick\` / 手前の \`calc\`） | 1回ぶんの KV が小さくなる |
+| \`maxTokens\` を下げる | 出す分の置き場が小さくなる |
+| \`overrides.context_window_size\` を必要な分だけにする | 窓のぶんの置き場が決まる |
+| 小さいモデル・強い量子化にする | 重みが小さくなる |
+| Map の件数を減らす（手前で絞る） | 呼ぶ回数が減る |
+
+**wllama（CPU）には1回ごとのリセットが無い**（API に無いため）。
+そこは未確認として書いておく。落ちるときは上の表で減らす。
 
 ## 40. mock（推論しないテスト用）
 
@@ -12278,6 +12347,55 @@ export async function CreateMLCEngine(model,opt){
     out.push(`<span class="fail">↳</span>  毎回=${a.store.S.writes} まとめて=${b2.store.S.writes}`
       +` skipped=${b2.store.S.skipped} forced=${b2.store.S.forced}/${b2.run.totals.apiCalls}`
       +` mid=${mid} cp=${cpCalls} resume=${r2&&r2.totals.apiCalls}`);}
+ // 86 Provider が「リセットが要る」と言ったら engine を捨てて読み直す
+ {const S={loads:0,releases:0,calls:0,resetChats:0};
+  // ensureLoaded を持つテスト用 adapter（mock には ensureLoaded が無いので別に作る）
+  PROVIDERS.__t=Object.assign({},MockProvider,{
+    id:"__t",singleton:true,
+    async ensureLoaded(def,onProgress){S.loads++;return{engine:{
+      async resetChat(){S.resetChats++;},interruptGenerate(){}}};},
+    async release(h){S.releases++;},
+    async invoke(req){S.calls++;
+      if(req.node.mock&&req.node.mock.__oomOn===S.calls)
+        throw{code:"RESOURCE_EXHAUSTED",stage:"decode",retryable:true,providerState:"needs_reset",
+          usage:{apiCalls:1,inputTokens:1,outputTokens:0,cost:null},message:"Out of memory(test)"};
+      return{output:{type:"text",value:"ok"+S.calls},usage:{apiCalls:1,inputTokens:1,outputTokens:1,cost:null}};}});
+  const mk=oomOn=>({metadata:{version:"1"},providers:{t:{adapter:"__t",model:"m"}},
+    nodes:[{id:"in",type:"input"},
+      {id:"A",type:"llm",provider:"t",mock:{__oomOn:oomOn},onError:"value",onErrorValue:"代わり"},
+      {id:"B",type:"llm",provider:"t"},
+      {id:"out",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"A",port:"in"}},
+      {from:{node:"A",port:"out"},to:{node:"B",port:"in"}},
+      {from:{node:"B",port:"out"},to:{node:"out",port:"in"}}]});
+  // ふつうに2回呼ぶ（load は1回・捨てない）
+  ModelManager.reset();S.loads=0;S.releases=0;S.calls=0;S.resetChats=0;
+  const r1=await fullRun(mk(0),{in:"Q"},memStore(),null);
+  const normal=r1.status==="success"&&S.loads===1&&S.releases===0&&S.calls===2;
+  // 1回目で needs_reset → engine を捨てて、2回目は読み直す
+  ModelManager.reset();S.loads=0;S.releases=0;S.calls=0;S.resetChats=0;
+  const r2=await fullRun(mk(1),{in:"Q"},memStore(),null);
+  const reset=r2.status==="success"&&S.releases===1&&S.loads===2
+    &&(r2.totals.providerResets||0)===1
+    &&r2.errors[0].kind==="RESOURCE_EXHAUSTED";
+  // webllm は1回ごとに会話をリセットしてから呼ぶ（KV を積まない）
+  const eng={n:0,async resetChat(){this.n++;},interruptGenerate(){},
+    chat:{completions:{create:async()=>{const t='{"a":1}';
+      const cs=[...t].map(c=>({choices:[{delta:{content:c}}]}))
+        .concat([{choices:[{finish_reason:"stop"}],usage:{prompt_tokens:1,completion_tokens:1}}]);
+      let i=0;const it={};it[Symbol.asyncIterator]=()=>({next:async()=>
+        i<cs.length?{value:cs[i++],done:false}:{value:undefined,done:true}});return it;}}}};
+  await PROVIDERS.webllm.invoke({handle:{engine:eng},input:{messages:[{role:"user",content:"x"}]},
+    generation:{maxTokens:8},node:{id:"A"},inputs:{},ex:{}});
+  await PROVIDERS.webllm.invoke({handle:{engine:eng},input:{messages:[{role:"user",content:"x"}]},
+    generation:{maxTokens:8},node:{id:"A"},inputs:{},ex:{}});
+  const perCall=eng.n===2;
+  delete PROVIDERS.__t;ModelManager.reset();
+  ok("86 Provider が needs_reset と言ったら engine を捨てて読み直す／webllm は1回ごとに会話をリセットする",
+    normal&&reset&&perCall);
+  if(!(normal&&reset&&perCall))
+    out.push(`<span class="fail">↳</span>  normal=${normal} reset=${reset} perCall=${perCall}`
+      +` loads=${S.loads} releases=${S.releases} calls=${S.calls} resetChat=${eng.n}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};

@@ -1,0 +1,1125 @@
+{
+  "metadata": {
+    "name": "v13.1 Token-Anchored Iterative Association Search",
+    "version": "13.1",
+    "flow": "tb",
+    "layout": {
+      "in": {
+        "x": 280,
+        "y": 20
+      },
+      "契約": {
+        "x": 280,
+        "y": 100
+      },
+      "概念分解": {
+        "x": 280,
+        "y": 180
+      },
+      "準備": {
+        "x": 280,
+        "y": 260
+      },
+      "連想1": {
+        "x": 280,
+        "y": 345
+      },
+      "候補1": {
+        "x": 280,
+        "y": 430
+      },
+      "関連度1Map": {
+        "x": 280,
+        "y": 515
+      },
+      "関連度1__Judge": {
+        "x": 500,
+        "y": 500
+      },
+      "関連度1__結合": {
+        "x": 500,
+        "y": 570
+      },
+      "選別1": {
+        "x": 280,
+        "y": 600
+      },
+      "連想2": {
+        "x": 280,
+        "y": 685
+      },
+      "候補2": {
+        "x": 280,
+        "y": 770
+      },
+      "関連度2Map": {
+        "x": 280,
+        "y": 855
+      },
+      "関連度2__Judge": {
+        "x": 500,
+        "y": 840
+      },
+      "関連度2__結合": {
+        "x": 500,
+        "y": 910
+      },
+      "選別2": {
+        "x": 280,
+        "y": 940
+      },
+      "回答材料": {
+        "x": 280,
+        "y": 1025
+      },
+      "回答生成": {
+        "x": 280,
+        "y": 1110
+      },
+      "回答Judge": {
+        "x": 500,
+        "y": 1260
+      },
+      "最終": {
+        "x": 280,
+        "y": 1265
+      },
+      "点検": {
+        "x": 170,
+        "y": 1350
+      },
+      "out": {
+        "x": 390,
+        "y": 1350
+      },
+      "Judge材料": {
+        "x": 280,
+        "y": 1190
+      }
+    },
+    "sizes": {
+      "in": {
+        "w": 165,
+        "h": 64
+      },
+      "契約": {
+        "w": 165,
+        "h": 64
+      },
+      "概念分解": {
+        "w": 165,
+        "h": 64
+      },
+      "準備": {
+        "w": 165,
+        "h": 64
+      },
+      "連想1": {
+        "w": 165,
+        "h": 64
+      },
+      "候補1": {
+        "w": 165,
+        "h": 64
+      },
+      "関連度1Map": {
+        "w": 165,
+        "h": 64
+      },
+      "関連度1__Judge": {
+        "w": 165,
+        "h": 64
+      },
+      "関連度1__結合": {
+        "w": 165,
+        "h": 64
+      },
+      "選別1": {
+        "w": 165,
+        "h": 64
+      },
+      "連想2": {
+        "w": 165,
+        "h": 64
+      },
+      "候補2": {
+        "w": 165,
+        "h": 64
+      },
+      "関連度2Map": {
+        "w": 165,
+        "h": 64
+      },
+      "関連度2__Judge": {
+        "w": 165,
+        "h": 64
+      },
+      "関連度2__結合": {
+        "w": 165,
+        "h": 64
+      },
+      "選別2": {
+        "w": 165,
+        "h": 64
+      },
+      "回答材料": {
+        "w": 165,
+        "h": 64
+      },
+      "回答生成": {
+        "w": 165,
+        "h": 64
+      },
+      "回答Judge": {
+        "w": 165,
+        "h": 64
+      },
+      "最終": {
+        "w": 165,
+        "h": 64
+      },
+      "点検": {
+        "w": 165,
+        "h": 64
+      },
+      "out": {
+        "w": 165,
+        "h": 64
+      },
+      "Judge材料": {
+        "w": 165,
+        "h": 64
+      }
+    }
+  },
+  "providers": {
+    "local": {
+      "adapter": "webllm",
+      "model": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "overrides": {
+        "context_window_size": 1024
+      },
+      "generation": {
+        "maxTokens": 96,
+        "temperature": 0.45
+      }
+    }
+  },
+  "nodes": [
+    {
+      "id": "in",
+      "type": "input",
+      "label": "質問",
+      "default": "雨の日に家でできることを3つ挙げて。"
+    },
+    {
+      "id": "契約",
+      "type": "calc",
+      "lang": "js",
+      "code": "const q=String(inputs[0]??'');\nconst map={'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10};\nlet expectedCount=null;\nlet m=q.match(/([0-9０-９]+)\\s*(?:つ|個|件|例|項目)/);\nif(m){expectedCount=Number(m[1].replace(/[０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)));}\nif(expectedCount==null){m=q.match(/([一二三四五六七八九十])\\s*(?:つ|個|件|例|項目)/);if(m)expectedCount=map[m[1]]??null;}\nif(Number.isFinite(expectedCount))expectedCount=Math.max(1,Math.min(8,expectedCount));\nreturn {question:q,expectedCount};",
+      "routing": {
+        "mode": "parallel",
+        "failurePolicy": "fail_fast"
+      }
+    },
+    {
+      "id": "概念分解",
+      "type": "llm",
+      "provider": "local",
+      "model": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "contextSize": 1024,
+      "prompt": {
+        "system": "質問を意味のある概念語に分解する。個数表現、命令語、助詞だけの断片はconceptTokensに入れない。例「雨の日に家でできることを3つ挙げて。」→ [\"雨の日\",\"家\",\"できること\"]。短く、検索や連想の種になる語だけ残す。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "質問:\n{{{in.question}}}"
+        },
+        "suffix": "conceptTokensだけをJSONで返す。"
+      },
+      "generation": {
+        "maxTokens": 72,
+        "temperature": 0.15
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "conceptTokens"
+        ],
+        "properties": {
+          "conceptTokens": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "maxItems": 6
+          }
+        }
+      },
+      "onTruncate": "error",
+      "onBadOutput": "retry",
+      "onError": "value",
+      "onErrorValue": {
+        "conceptTokens": []
+      }
+    },
+    {
+      "id": "準備",
+      "type": "calc",
+      "lang": "js",
+      "inputs": {
+        "in": {
+          "type": "any",
+          "cardinality": "many"
+        }
+      },
+      "code": "let c=contract??{};let d=decomp??{};\ntry{if(typeof c==='string')c=JSON.parse(c);}catch(_){c={};}\ntry{if(typeof d==='string')d=JSON.parse(d);}catch(_){d={};}\nconst q=String(c.question??'').trim();\nconst countLike=/^[0-9０-９一二三四五六七八九十]+\\s*(?:つ|個|件|例|項目)?$/;\nconst commandLike=/^(?:挙げる|挙げて|答える|教える|教えて|説明|説明して|一覧|列挙)$/;\nlet tokens=Array.isArray(d.conceptTokens)?d.conceptTokens.map(x=>String(x).trim()).filter(Boolean):[];\ntokens=tokens.filter(x=>!countLike.test(x)&&!commandLike.test(x));\ntokens=[...new Set(tokens)];\nif(!tokens.length){\n  let s=q.replace(/[0-9０-９一二三四五六七八九十]+\\s*(?:つ|個|件|例|項目)/g,'').replace(/(?:を)?(?:挙げて|教えて|答えて|説明して)[。.!！?？]?$/,'').trim();\n  if(s)tokens=[s];\n}\nconst targetCount=Number.isFinite(c.expectedCount)?c.expectedCount:3;\nreturn {question:q,conceptTokens:tokens,constraints:{count:targetCount,explicitCount:Number.isFinite(c.expectedCount)},generation:0,frontier:tokens,accepted:[],seen:tokens};",
+      "routing": {
+        "mode": "parallel",
+        "failurePolicy": "fail_fast"
+      }
+    },
+    {
+      "id": "連想1",
+      "type": "llm",
+      "provider": "local",
+      "model": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "contextSize": 1024,
+      "prompt": {
+        "system": "連想探索を行う。入力JSONのfrontierにある語から、元のconceptTokensと結び付きうる具体的な関連語を作る。数字だけ、個数表現、命令語、質問文の丸写し、同じ語の言い換えだけは禁止。1語または短い句で6個前後。acceptedとseenに既にある語は避ける。最終回答そのものを作らず、思考材料になる語を広げる。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "探索状態:\n{{{in}}}\n\nこのfrontierから次の関連語を広げる。"
+        },
+        "suffix": "wordsだけをJSONで返す。"
+      },
+      "generation": {
+        "maxTokens": 96,
+        "temperature": 0.8,
+        "topP": 0.92
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "words"
+        ],
+        "properties": {
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "maxItems": 8
+          }
+        }
+      },
+      "onTruncate": "use",
+      "onBadOutput": "retry",
+      "onError": "value",
+      "onErrorValue": {
+        "words": []
+      }
+    },
+    {
+      "id": "連想2",
+      "type": "llm",
+      "provider": "local",
+      "model": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "contextSize": 1024,
+      "prompt": {
+        "system": "連想探索を行う。入力JSONのfrontierにある語から、元のconceptTokensと結び付きうる具体的な関連語を作る。数字だけ、個数表現、命令語、質問文の丸写し、同じ語の言い換えだけは禁止。1語または短い句で6個前後。acceptedとseenに既にある語は避ける。最終回答そのものを作らず、思考材料になる語を広げる。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "探索状態:\n{{{in}}}\n\nこのfrontierから次の関連語を広げる。"
+        },
+        "suffix": "wordsだけをJSONで返す。"
+      },
+      "generation": {
+        "maxTokens": 96,
+        "temperature": 0.8,
+        "topP": 0.92
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "words"
+        ],
+        "properties": {
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            "maxItems": 8
+          }
+        }
+      },
+      "onTruncate": "use",
+      "onBadOutput": "retry",
+      "onError": "value",
+      "onErrorValue": {
+        "words": []
+      }
+    },
+    {
+      "id": "候補1",
+      "type": "calc",
+      "lang": "js",
+      "inputs": {
+        "in": {
+          "type": "any",
+          "cardinality": "many"
+        }
+      },
+      "code": "let s=state??{};let a=assoc??{};\ntry{if(typeof s==='string')s=JSON.parse(s);}catch(_){s={};}\ntry{if(typeof a==='string')a=JSON.parse(a);}catch(_){a={};}\nconst clean=x=>String(x??'').replace(/^\\s*[-*]?\\s*\\d+[\\.．、\\)]\\s*/,'').trim();\nconst pureCount=/^[0-9０-９一二三四五六七八九十]+\\s*(?:つ|個|件|例|項目)?$/;\nconst seen=new Set((Array.isArray(s.seen)?s.seen:[]).map(x=>clean(x).toLowerCase()));\nlet words=(Array.isArray(a.words)?a.words:[]).map(clean).filter(x=>x&&!pureCount.test(x));\nwords=[...new Map(words.map(x=>[x.toLowerCase(),x])).values()];\nlet fresh=words.filter(x=>!seen.has(x.toLowerCase()));\nif(!fresh.length)fresh=words;\nconst base={question:String(s.question??''),conceptTokens:Array.isArray(s.conceptTokens)?s.conceptTokens:[],constraints:s.constraints??{count:3},generation:Number(s.generation??0)+1,accepted:Array.isArray(s.accepted)?s.accepted:[],seen:Array.isArray(s.seen)?s.seen:[],frontier:Array.isArray(s.frontier)?s.frontier:[]};\nreturn fresh.slice(0,8).map(candidate=>({...base,candidate}));"
+    },
+    {
+      "id": "候補2",
+      "type": "calc",
+      "lang": "js",
+      "inputs": {
+        "in": {
+          "type": "any",
+          "cardinality": "many"
+        }
+      },
+      "code": "let s=state??{};let a=assoc??{};\ntry{if(typeof s==='string')s=JSON.parse(s);}catch(_){s={};}\ntry{if(typeof a==='string')a=JSON.parse(a);}catch(_){a={};}\nconst clean=x=>String(x??'').replace(/^\\s*[-*]?\\s*\\d+[\\.．、\\)]\\s*/,'').trim();\nconst pureCount=/^[0-9０-９一二三四五六七八九十]+\\s*(?:つ|個|件|例|項目)?$/;\nconst seen=new Set((Array.isArray(s.seen)?s.seen:[]).map(x=>clean(x).toLowerCase()));\nlet words=(Array.isArray(a.words)?a.words:[]).map(clean).filter(x=>x&&!pureCount.test(x));\nwords=[...new Map(words.map(x=>[x.toLowerCase(),x])).values()];\nlet fresh=words.filter(x=>!seen.has(x.toLowerCase()));\nif(!fresh.length)fresh=words;\nconst base={question:String(s.question??''),conceptTokens:Array.isArray(s.conceptTokens)?s.conceptTokens:[],constraints:s.constraints??{count:3},generation:Number(s.generation??0)+1,accepted:Array.isArray(s.accepted)?s.accepted:[],seen:Array.isArray(s.seen)?s.seen:[],frontier:Array.isArray(s.frontier)?s.frontier:[]};\nreturn fresh.slice(0,8).map(candidate=>({...base,candidate}));"
+    },
+    {
+      "id": "関連度1Map",
+      "type": "map",
+      "map": {
+        "id": "関連度1Map"
+      },
+      "order": "input",
+      "onItemError": "value",
+      "onItemErrorValue": {
+        "candidate": "",
+        "overall": 0,
+        "tokenScores": [],
+        "answerUsefulness": 0
+      },
+      "routing": {
+        "mode": "parallel",
+        "failurePolicy": "fail_fast"
+      }
+    },
+    {
+      "id": "関連度1__Judge",
+      "type": "llm",
+      "provider": "local",
+      "model": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "contextSize": 1024,
+      "prompt": {
+        "system": "候補語1個を評価する。conceptTokensは元質問の意味アンカー。tokenScoresはconceptTokensと同じ順番で、各トークンとの関連度を0〜100で付ける。answerUsefulnessは、この候補語が元質問の答えを考える材料としてどれだけ役立つか0〜100。数字だけ・個数表現・メタ語・質問の言い換えはanswerUsefulnessを20以下。無理に高得点を付けない。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "{{{in}}}"
+        },
+        "suffix": "tokenScoresとanswerUsefulnessだけをJSONで返す。"
+      },
+      "generation": {
+        "maxTokens": 64,
+        "temperature": 0
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "tokenScores",
+          "answerUsefulness"
+        ],
+        "properties": {
+          "tokenScores": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "maxItems": 6
+          },
+          "answerUsefulness": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        }
+      },
+      "onTruncate": "error",
+      "onBadOutput": "retry",
+      "onError": "value",
+      "onErrorValue": {
+        "tokenScores": [],
+        "answerUsefulness": 0
+      }
+    },
+    {
+      "id": "関連度1__結合",
+      "type": "calc",
+      "lang": "js",
+      "inputs": {
+        "in": {
+          "type": "any",
+          "cardinality": "many"
+        }
+      },
+      "code": "let p=pair??{};let j=judge??{};\ntry{if(typeof p==='string')p=JSON.parse(p);}catch(_){p={};}\ntry{if(typeof j==='string')j=JSON.parse(j);}catch(_){j={};}\nconst toks=Array.isArray(p.conceptTokens)?p.conceptTokens:[];\nlet ts=Array.isArray(j.tokenScores)?j.tokenScores.map(x=>Math.max(0,Math.min(100,Number(x)||0))):[];\nif(ts.length<toks.length)ts=ts.concat(Array(toks.length-ts.length).fill(0));\nif(ts.length>toks.length)ts=ts.slice(0,toks.length);\nconst util=Math.max(0,Math.min(100,Number(j.answerUsefulness)||0));\nconst avg=ts.length?ts.reduce((a,b)=>a+b,0)/ts.length:0;\nconst min=ts.length?Math.min(...ts):0;\nconst overall=Math.round(avg*0.45+min*0.15+util*0.40);\nreturn {...p,tokenScores:ts,answerUsefulness:util,avgTokenScore:Math.round(avg),minTokenScore:min,overall};"
+    },
+    {
+      "id": "関連度2Map",
+      "type": "map",
+      "map": {
+        "id": "関連度2Map"
+      },
+      "order": "input",
+      "onItemError": "value",
+      "onItemErrorValue": {
+        "candidate": "",
+        "overall": 0,
+        "tokenScores": [],
+        "answerUsefulness": 0
+      },
+      "routing": {
+        "mode": "parallel",
+        "failurePolicy": "fail_fast"
+      }
+    },
+    {
+      "id": "関連度2__Judge",
+      "type": "llm",
+      "provider": "local",
+      "model": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "contextSize": 1024,
+      "prompt": {
+        "system": "候補語1個を評価する。conceptTokensは元質問の意味アンカー。tokenScoresはconceptTokensと同じ順番で、各トークンとの関連度を0〜100で付ける。answerUsefulnessは、この候補語が元質問の答えを考える材料としてどれだけ役立つか0〜100。数字だけ・個数表現・メタ語・質問の言い換えはanswerUsefulnessを20以下。無理に高得点を付けない。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "{{{in}}}"
+        },
+        "suffix": "tokenScoresとanswerUsefulnessだけをJSONで返す。"
+      },
+      "generation": {
+        "maxTokens": 64,
+        "temperature": 0
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "tokenScores",
+          "answerUsefulness"
+        ],
+        "properties": {
+          "tokenScores": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "maxItems": 6
+          },
+          "answerUsefulness": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        }
+      },
+      "onTruncate": "error",
+      "onBadOutput": "retry",
+      "onError": "value",
+      "onErrorValue": {
+        "tokenScores": [],
+        "answerUsefulness": 0
+      }
+    },
+    {
+      "id": "関連度2__結合",
+      "type": "calc",
+      "lang": "js",
+      "inputs": {
+        "in": {
+          "type": "any",
+          "cardinality": "many"
+        }
+      },
+      "code": "let p=pair??{};let j=judge??{};\ntry{if(typeof p==='string')p=JSON.parse(p);}catch(_){p={};}\ntry{if(typeof j==='string')j=JSON.parse(j);}catch(_){j={};}\nconst toks=Array.isArray(p.conceptTokens)?p.conceptTokens:[];\nlet ts=Array.isArray(j.tokenScores)?j.tokenScores.map(x=>Math.max(0,Math.min(100,Number(x)||0))):[];\nif(ts.length<toks.length)ts=ts.concat(Array(toks.length-ts.length).fill(0));\nif(ts.length>toks.length)ts=ts.slice(0,toks.length);\nconst util=Math.max(0,Math.min(100,Number(j.answerUsefulness)||0));\nconst avg=ts.length?ts.reduce((a,b)=>a+b,0)/ts.length:0;\nconst min=ts.length?Math.min(...ts):0;\nconst overall=Math.round(avg*0.45+min*0.15+util*0.40);\nreturn {...p,tokenScores:ts,answerUsefulness:util,avgTokenScore:Math.round(avg),minTokenScore:min,overall};"
+    },
+    {
+      "id": "選別1",
+      "type": "calc",
+      "lang": "js",
+      "code": "const rows=Array.isArray(inputs[0])?inputs[0]:[];\nconst rr=rows.map(r=>{let x=r??{};try{if(typeof x==='string')x=JSON.parse(x);}catch(_){x={};}return x;}).filter(x=>String(x.candidate??'').trim());\nif(!rr.length)return {question:'',conceptTokens:[],constraints:{count:3},generation:0,frontier:[],accepted:[],seen:[],roundScores:[]};\nconst base=rr[0];\nconst sorted=[...rr].sort((a,b)=>(Number(b.overall)||0)-(Number(a.overall)||0));\nlet keep=sorted.filter(x=>(Number(x.overall)||0)>=55&&(Number(x.answerUsefulness)||0)>=50&&(Number(x.minTokenScore)||0)>=10).slice(0,6);\nif(!keep.length)keep=sorted.slice(0,4);\nconst prior=Array.isArray(base.accepted)?base.accepted:[];\nconst by=new Map();\nfor(const x of prior){const w=String(x.word??x.candidate??'').trim();if(w)by.set(w.toLowerCase(),x);}\nfor(const x of keep){const w=String(x.candidate??'').trim();if(!w)continue;const k=w.toLowerCase();const old=by.get(k);const obj={word:w,overall:Number(x.overall)||0,tokenScores:Array.isArray(x.tokenScores)?x.tokenScores:[],answerUsefulness:Number(x.answerUsefulness)||0,avgTokenScore:Number(x.avgTokenScore)||0,minTokenScore:Number(x.minTokenScore)||0,generation:Number(x.generation)||0};if(!old||obj.overall>Number(old.overall||0))by.set(k,obj);}\nconst accepted=[...by.values()].sort((a,b)=>(b.overall||0)-(a.overall||0)).slice(0,12);\nconst seen=[...new Set([...(Array.isArray(base.seen)?base.seen:[]),...rr.map(x=>String(x.candidate??'').trim()).filter(Boolean)])];\nreturn {question:String(base.question??''),conceptTokens:Array.isArray(base.conceptTokens)?base.conceptTokens:[],constraints:base.constraints??{count:3},generation:Number(base.generation??0),frontier:keep.map(x=>String(x.candidate??'')).filter(Boolean),accepted,seen,roundScores:sorted.map(x=>({word:String(x.candidate??''),overall:Number(x.overall)||0,tokenScores:Array.isArray(x.tokenScores)?x.tokenScores:[],answerUsefulness:Number(x.answerUsefulness)||0}))};",
+      "routing": {
+        "mode": "parallel",
+        "failurePolicy": "fail_fast"
+      }
+    },
+    {
+      "id": "選別2",
+      "type": "calc",
+      "lang": "js",
+      "code": "const rows=Array.isArray(inputs[0])?inputs[0]:[];\nconst rr=rows.map(r=>{let x=r??{};try{if(typeof x==='string')x=JSON.parse(x);}catch(_){x={};}return x;}).filter(x=>String(x.candidate??'').trim());\nif(!rr.length)return {question:'',conceptTokens:[],constraints:{count:3},generation:0,frontier:[],accepted:[],seen:[],roundScores:[]};\nconst base=rr[0];\nconst sorted=[...rr].sort((a,b)=>(Number(b.overall)||0)-(Number(a.overall)||0));\nlet keep=sorted.filter(x=>(Number(x.overall)||0)>=55&&(Number(x.answerUsefulness)||0)>=50&&(Number(x.minTokenScore)||0)>=10).slice(0,6);\nif(!keep.length)keep=sorted.slice(0,4);\nconst prior=Array.isArray(base.accepted)?base.accepted:[];\nconst by=new Map();\nfor(const x of prior){const w=String(x.word??x.candidate??'').trim();if(w)by.set(w.toLowerCase(),x);}\nfor(const x of keep){const w=String(x.candidate??'').trim();if(!w)continue;const k=w.toLowerCase();const old=by.get(k);const obj={word:w,overall:Number(x.overall)||0,tokenScores:Array.isArray(x.tokenScores)?x.tokenScores:[],answerUsefulness:Number(x.answerUsefulness)||0,avgTokenScore:Number(x.avgTokenScore)||0,minTokenScore:Number(x.minTokenScore)||0,generation:Number(x.generation)||0};if(!old||obj.overall>Number(old.overall||0))by.set(k,obj);}\nconst accepted=[...by.values()].sort((a,b)=>(b.overall||0)-(a.overall||0)).slice(0,12);\nconst seen=[...new Set([...(Array.isArray(base.seen)?base.seen:[]),...rr.map(x=>String(x.candidate??'').trim()).filter(Boolean)])];\nreturn {question:String(base.question??''),conceptTokens:Array.isArray(base.conceptTokens)?base.conceptTokens:[],constraints:base.constraints??{count:3},generation:Number(base.generation??0),frontier:keep.map(x=>String(x.candidate??'')).filter(Boolean),accepted,seen,roundScores:sorted.map(x=>({word:String(x.candidate??''),overall:Number(x.overall)||0,tokenScores:Array.isArray(x.tokenScores)?x.tokenScores:[],answerUsefulness:Number(x.answerUsefulness)||0}))};"
+    },
+    {
+      "id": "回答材料",
+      "type": "calc",
+      "lang": "js",
+      "code": "let s=inputs[0]??{};try{if(typeof s==='string')s=JSON.parse(s);}catch(_){s={};}\nconst n=Math.max(1,Math.min(8,Number(s.constraints?.count??3)||3));\nconst rel=(Array.isArray(s.accepted)?s.accepted:[]).sort((a,b)=>(Number(b.overall)||0)-(Number(a.overall)||0)).slice(0,Math.max(6,n*2));\nreturn {question:String(s.question??''),conceptTokens:Array.isArray(s.conceptTokens)?s.conceptTokens:[],constraints:{count:n,explicitCount:s.constraints?.explicitCount===true},relatedWords:rel,searchGeneration:Number(s.generation??0),lastRound:Array.isArray(s.roundScores)?s.roundScores:[]};",
+      "routing": {
+        "mode": "parallel",
+        "failurePolicy": "fail_fast"
+      }
+    },
+    {
+      "id": "回答生成",
+      "type": "llm",
+      "provider": "local",
+      "model": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "contextSize": 1024,
+      "prompt": {
+        "system": "元質問へ直接答える。relatedWordsは連想探索で残った思考材料で、必要に応じて組み合わせて使う。constraints.count件の、互いに重複しない具体的な答えをitemsに入れる。個数表現そのもの、見出し、質問の言い換え、メタ文は禁止。関連語をそのまま全部列挙する必要はない。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "探索結果:\n{{{in}}}"
+        },
+        "suffix": "itemsだけをJSONで返す。"
+      },
+      "generation": {
+        "maxTokens": 128,
+        "temperature": 0.35
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "maxItems": 8
+          }
+        }
+      },
+      "onTruncate": "use",
+      "onBadOutput": "retry",
+      "onError": "value",
+      "onErrorValue": {
+        "items": []
+      },
+      "routing": {
+        "mode": "parallel",
+        "failurePolicy": "fail_fast"
+      }
+    },
+    {
+      "id": "Judge材料",
+      "type": "calc",
+      "lang": "js",
+      "inputs": {
+        "in": {
+          "type": "any",
+          "cardinality": "many"
+        }
+      },
+      "code": "let m=material??{};let a=answer??{};\ntry{if(typeof m==='string')m=JSON.parse(m);}catch(_){m={};}\ntry{if(typeof a==='string')a=JSON.parse(a);}catch(_){a={};}\nreturn {question:String(m.question??''),conceptTokens:Array.isArray(m.conceptTokens)?m.conceptTokens:[],constraints:m.constraints??{count:3},relatedWords:Array.isArray(m.relatedWords)?m.relatedWords:[],answerItems:Array.isArray(a.items)?a.items:[]};"
+    },
+    {
+      "id": "回答Judge",
+      "type": "llm",
+      "provider": "local",
+      "model": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "contextSize": 1024,
+      "prompt": {
+        "system": "最終回答を0〜100で採点する。questionFit=元質問への直接適合、specificity=具体性、materialUse=relatedWordsから有用な材料を活かせている度合い。個数だけ、重複、質問の言い換え、未完の断片があれば低くする。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "{{{in}}}"
+        },
+        "suffix": "3項目の点数だけをJSONで返す。"
+      },
+      "generation": {
+        "maxTokens": 40,
+        "temperature": 0
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "questionFit",
+          "specificity",
+          "materialUse"
+        ],
+        "properties": {
+          "questionFit": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "specificity": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "materialUse": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        }
+      },
+      "onTruncate": "error",
+      "onBadOutput": "retry",
+      "onError": "value",
+      "onErrorValue": {
+        "questionFit": 0,
+        "specificity": 0,
+        "materialUse": 0
+      }
+    },
+    {
+      "id": "最終",
+      "type": "calc",
+      "lang": "js",
+      "inputs": {
+        "in": {
+          "type": "any",
+          "cardinality": "many"
+        }
+      },
+      "code": "let m=material??{};let a=answer??{};let j=judge??{};\nfor(const k of ['m','a','j']){}\ntry{if(typeof m==='string')m=JSON.parse(m);}catch(_){m={};}\ntry{if(typeof a==='string')a=JSON.parse(a);}catch(_){a={};}\ntry{if(typeof j==='string')j=JSON.parse(j);}catch(_){j={};}\nconst n=Math.max(1,Math.min(8,Number(m.constraints?.count??3)||3));\nconst pureCount=/^[0-9０-９一二三四五六七八九十]+\\s*(?:つ|個|件|例|項目)?$/;\nconst meta=/^(?:回答|答え|例|項目|候補|見出し|以上|以下)$/;\nconst norm=s=>String(s??'').replace(/^\\s*[-*]?\\s*\\d+[\\.．、\\)]\\s*/,'').trim();\nlet items=(Array.isArray(a.items)?a.items:[]).map(norm).filter(x=>x&&!pureCount.test(x)&&!meta.test(x));\nitems=[...new Map(items.map(x=>[x.toLowerCase(),x])).values()].slice(0,n);\nconst countPass=items.length===n;\nconst uniquePass=(new Set(items.map(x=>x.toLowerCase()))).size===items.length;\nconst judgeScores={questionFit:Number(j.questionFit??0),specificity:Number(j.specificity??0),materialUse:Number(j.materialUse??0)};\nconst judgePass=judgeScores.questionFit>=70&&judgeScores.specificity>=60;\nconst pass=countPass&&uniquePass&&judgePass;\nreturn {pass,answer:items.map((x,i)=>`${i+1}. ${x}`).join('\\n'),items,countPass,uniquePass,judgePass,judgeScores,conceptTokens:Array.isArray(m.conceptTokens)?m.conceptTokens:[],relatedWords:Array.isArray(m.relatedWords)?m.relatedWords:[],searchGeneration:Number(m.searchGeneration??0)};",
+      "routing": {
+        "mode": "parallel",
+        "failurePolicy": "fail_fast"
+      }
+    },
+    {
+      "id": "点検",
+      "type": "assert",
+      "lang": "expr",
+      "onFail": "continue",
+      "asserts": [
+        {
+          "name": "最終合格",
+          "expr": "最終.out.pass == true",
+          "severity": "fail"
+        },
+        {
+          "name": "要求個数",
+          "expr": "最終.out.countPass == true",
+          "severity": "fail"
+        },
+        {
+          "name": "重複なし",
+          "expr": "最終.out.uniquePass == true",
+          "severity": "fail"
+        },
+        {
+          "name": "質問適合70以上",
+          "expr": "最終.out.judgeScores.questionFit >= 70",
+          "severity": "fail"
+        },
+        {
+          "name": "具体性60以上",
+          "expr": "最終.out.judgeScores.specificity >= 60",
+          "severity": "warn"
+        },
+        {
+          "name": "連想材料あり",
+          "expr": "len(最終.out.relatedWords) > 0",
+          "severity": "warn"
+        }
+      ]
+    },
+    {
+      "id": "out",
+      "type": "output"
+    }
+  ],
+  "edges": [
+    {
+      "from": {
+        "node": "in",
+        "port": "out"
+      },
+      "to": {
+        "node": "契約",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "契約",
+        "port": "out"
+      },
+      "to": {
+        "node": "概念分解",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "契約",
+        "port": "out"
+      },
+      "to": {
+        "node": "準備",
+        "port": "in"
+      },
+      "position": 0,
+      "as": "contract"
+    },
+    {
+      "from": {
+        "node": "概念分解",
+        "port": "out"
+      },
+      "to": {
+        "node": "準備",
+        "port": "in"
+      },
+      "position": 1,
+      "as": "decomp"
+    },
+    {
+      "from": {
+        "node": "準備",
+        "port": "out"
+      },
+      "to": {
+        "node": "連想1",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "準備",
+        "port": "out"
+      },
+      "to": {
+        "node": "候補1",
+        "port": "in"
+      },
+      "position": 0,
+      "as": "state"
+    },
+    {
+      "from": {
+        "node": "連想1",
+        "port": "out"
+      },
+      "to": {
+        "node": "候補1",
+        "port": "in"
+      },
+      "position": 1,
+      "as": "assoc"
+    },
+    {
+      "from": {
+        "node": "候補1",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度1Map",
+        "port": "in"
+      },
+      "position": 0
+    },
+    {
+      "from": {
+        "node": "関連度1Map",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度1__Judge",
+        "port": "in"
+      },
+      "mapRole": "body",
+      "position": 0
+    },
+    {
+      "from": {
+        "node": "関連度1Map",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度1__結合",
+        "port": "in"
+      },
+      "mapRole": "body",
+      "position": 0,
+      "as": "pair"
+    },
+    {
+      "from": {
+        "node": "関連度1__Judge",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度1__結合",
+        "port": "in"
+      },
+      "position": 1,
+      "as": "judge"
+    },
+    {
+      "from": {
+        "node": "関連度1__結合",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度1Map",
+        "port": "in"
+      },
+      "map": {
+        "id": "関連度1Map"
+      },
+      "position": 1
+    },
+    {
+      "from": {
+        "node": "関連度1Map",
+        "port": "out"
+      },
+      "to": {
+        "node": "選別1",
+        "port": "in"
+      },
+      "mapRole": "done"
+    },
+    {
+      "from": {
+        "node": "選別1",
+        "port": "out"
+      },
+      "to": {
+        "node": "連想2",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "選別1",
+        "port": "out"
+      },
+      "to": {
+        "node": "候補2",
+        "port": "in"
+      },
+      "position": 0,
+      "as": "state"
+    },
+    {
+      "from": {
+        "node": "連想2",
+        "port": "out"
+      },
+      "to": {
+        "node": "候補2",
+        "port": "in"
+      },
+      "position": 1,
+      "as": "assoc"
+    },
+    {
+      "from": {
+        "node": "候補2",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度2Map",
+        "port": "in"
+      },
+      "position": 0
+    },
+    {
+      "from": {
+        "node": "関連度2Map",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度2__Judge",
+        "port": "in"
+      },
+      "mapRole": "body",
+      "position": 0
+    },
+    {
+      "from": {
+        "node": "関連度2Map",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度2__結合",
+        "port": "in"
+      },
+      "mapRole": "body",
+      "position": 0,
+      "as": "pair"
+    },
+    {
+      "from": {
+        "node": "関連度2__Judge",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度2__結合",
+        "port": "in"
+      },
+      "position": 1,
+      "as": "judge"
+    },
+    {
+      "from": {
+        "node": "関連度2__結合",
+        "port": "out"
+      },
+      "to": {
+        "node": "関連度2Map",
+        "port": "in"
+      },
+      "map": {
+        "id": "関連度2Map"
+      },
+      "position": 1
+    },
+    {
+      "from": {
+        "node": "関連度2Map",
+        "port": "out"
+      },
+      "to": {
+        "node": "選別2",
+        "port": "in"
+      },
+      "mapRole": "done"
+    },
+    {
+      "from": {
+        "node": "選別2",
+        "port": "out"
+      },
+      "to": {
+        "node": "回答材料",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "回答材料",
+        "port": "out"
+      },
+      "to": {
+        "node": "回答生成",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "回答材料",
+        "port": "out"
+      },
+      "to": {
+        "node": "最終",
+        "port": "in"
+      },
+      "position": 0,
+      "as": "material"
+    },
+    {
+      "from": {
+        "node": "回答生成",
+        "port": "out"
+      },
+      "to": {
+        "node": "最終",
+        "port": "in"
+      },
+      "position": 1,
+      "as": "answer"
+    },
+    {
+      "from": {
+        "node": "回答Judge",
+        "port": "out"
+      },
+      "to": {
+        "node": "最終",
+        "port": "in"
+      },
+      "position": 2,
+      "as": "judge"
+    },
+    {
+      "from": {
+        "node": "最終",
+        "port": "out"
+      },
+      "to": {
+        "node": "点検",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "最終",
+        "port": "out"
+      },
+      "to": {
+        "node": "out",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "回答材料",
+        "port": "out"
+      },
+      "to": {
+        "node": "Judge材料",
+        "port": "in"
+      },
+      "position": 0,
+      "as": "material"
+    },
+    {
+      "from": {
+        "node": "回答生成",
+        "port": "out"
+      },
+      "to": {
+        "node": "Judge材料",
+        "port": "in"
+      },
+      "position": 1,
+      "as": "answer"
+    },
+    {
+      "from": {
+        "node": "Judge材料",
+        "port": "out"
+      },
+      "to": {
+        "node": "回答Judge",
+        "port": "in"
+      }
+    }
+  ]
+}

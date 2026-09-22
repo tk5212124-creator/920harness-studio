@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.32.0 端末が落ちないようにする
+## 1. 現状 — v0.33.0 何十回呼んでも落ちないようにする
 
 | 段階 | 状態 |
 |---|---|
@@ -60,7 +60,8 @@ iPhone でもPCでも同じ操作。
 | 記憶 v0.30.0（`memory`＝入口ごとに ためる/入れ替える/消す/読むだけ。Run 全体か場ごとか・出し方4種・流す条件・上限と重複なし。中身は実行の記録に残り Resume でも続く／診断が「Runtime が読まないキー」を名指し） | 実装済み |
 | 画面と JSON の対応 v0.31.0（JSONで書けることは画面でも決められる。入口の名前・受け取る数と型・型チェック・Mapの戻り線・mockの中身・topP・json_objectのkeys・ノードの種類変更・ハーネスの名前/版/vars。両方向を `harness-parity.mjs` で毎回確かめる） | 実装済み |
 | v0.31.1（残りの穴も塞いだ: providers を画面から作る/名前を変える/消す・adapter 4種の全キー・provider の generation/schema/transport・モジュールの名前/版/メモ/削除・出口の名前と範囲の取り出し） | 実装済み |
-| **端末が落ちないようにする v0.32.0（Checkpoint をまとめて書く＝28.7MB→4.1MB・保存できなかったら赤字で出す・文脈の窓に入らない文は送らない・空になる差し込みを診断で名指し・点検の行き止まりを error にしない）** | **いまここ** |
+| 端末が落ちないようにする v0.32.0（Checkpoint をまとめて書く＝28.7MB→4.1MB・保存できなかったら赤字で出す・文脈の窓に入らない文は送らない・空になる差し込みを診断で名指し・点検の行き止まりを error にしない） | 実装済み |
+| **何十回呼んでも落ちない v0.33.0（webllm を1回ごとに resetChat＝KVの山 19281→1867 の90%減・needs_reset で engine を捨てて読み直す・実ハーネスを JSON 無改変で画面から実行する回帰テスト）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -1090,7 +1091,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト85件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き）
+node tests/harness-runtime.mjs      # 自己テスト86件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
@@ -1109,6 +1110,7 @@ node tests/harness-calc.mjs         # 計算ノード（式/JavaScript）・条�
 node tests/harness-race.mjs         # 先着（race）— 足す・中身を決める・実行して候補が止まる・記録・診断・使い方3タブ
 node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱い・毎周たまる・記録・診断・使い方3タブ
 node tests/harness-parity.mjs       # 画面とJSONの対応（JSONの全キーに画面の欄があるか・画面の操作がJSONに入るか）
+node tests/harness-realspec.mjs     # 実際に使う大きいハーネス（23ノード/21回推論）を JSON 無改変で画面から実行
 MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
 
