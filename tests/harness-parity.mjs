@@ -167,10 +167,105 @@ R['受け取る数を画面から'] = await p.evaluate(() => (JSON.parse(documen
   ok.cardFromUI = d.cardinality === 'many' && d.type === 'any'; }
 await tap('#shClose');
 
+// ── provider（モデルの置き場）: adapter ごとに Runtime が読むキー全部に欄があるか
+const openProv = async () => { await p.evaluate(() => window.__ui.openProvidersSheet()); await p.waitForTimeout(220); };
+const provCtl = async () => p.evaluate(() => {
+  const got = new Set();
+  for (const a of ['pv', 'pb', 'pb1', 'pj', 'ps', 'pp']) {
+    document.querySelectorAll(`#sheetBody [data-${a}]`).forEach(el => got.add(el.dataset[a]));
+  }
+  return [...got];
+});
+const PROV_CASES = [
+  ['mock', { adapter: 'mock' }, ['adapter', 'name', 'generation', 'schema', 'transport']],
+  ['openai_local', { adapter: 'openai_local', model: 'q', endpoint: 'http://x/v1', stream: false },
+    ['adapter', 'model', 'endpoint', 'stream', 'generation', 'schema', 'transport']],
+  ['webllm', { adapter: 'webllm', model: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', moduleSource: 'cdn', useWorker: false, indexedDB: false, workerBootMs: 1000, weightsUrl: 'https://x/', noSite: true, custom: { model: 'a', model_lib: 'b' }, overrides: { context_window_size: 2048 } },
+    ['adapter', 'model', 'moduleSource', 'useWorker', 'indexedDB', 'workerBootMs', 'weightsUrl', 'noSite', 'custom', 'overrides', 'generation', 'schema', 'transport']],
+  ['wllama', { adapter: 'wllama', model: 'g', url: 'https://x/a.gguf', contextSize: 2048, gpuLayers: 0, threads: 4, stallMs: 1000, cache: false, base: 'v/', moduleUrl: 'a.js', wasmUrl: 'a.wasm', compatJsUrl: 'c.js', compatWasmUrl: 'c.wasm', moduleTimeoutMs: 5000 },
+    ['adapter', 'model', 'url', 'contextSize', 'gpuLayers', 'threads', 'stallMs', 'cache', 'base', 'moduleUrl', 'wasmUrl', 'compatJsUrl', 'compatWasmUrl', 'moduleTimeoutMs', 'generation', 'schema', 'transport']],
+];
+const pMissing = [];
+for (const [name, def, want] of PROV_CASES) {
+  await paste({ metadata: { name: 'p', version: '1' }, providers: { P: def },
+    nodes: [{ id: 'in', type: 'input' }, { id: 'X', type: 'llm', provider: 'P' }, { id: 'out', type: 'output' }],
+    edges: [{ from: { node: 'in', port: 'out' }, to: { node: 'X', port: 'in' } },
+      { from: { node: 'X', port: 'out' }, to: { node: 'out', port: 'in' } }] });
+  await openProv();
+  const got = await provCtl();
+  const bad = want.filter(k => !got.includes(k));
+  R['provider: ' + name] = bad.length ? '欄が無い: ' + bad.join(', ') : 'ぜんぶ欄がある';
+  if (bad.length) pMissing.push(name + ' → ' + bad.join(', '));
+  await tap('#shClose');
+}
+ok.providerKeys = pMissing.length === 0;
+// provider を画面から足す・名前を変える・消す
+await paste({ metadata: { name: 'p', version: '1' }, providers: { P: { adapter: 'mock' } },
+  nodes: [{ id: 'in', type: 'input' }, { id: 'X', type: 'llm', provider: 'P' }, { id: 'out', type: 'output' }],
+  edges: [{ from: { node: 'in', port: 'out' }, to: { node: 'X', port: 'in' } },
+    { from: { node: 'X', port: 'out' }, to: { node: 'out', port: 'in' } }] });
+await openProv();
+await p.fill('[data-pp="name"]', 'あたらしい');
+await p.evaluate(() => document.querySelector('#sheetBody [data-pp="name"]').dispatchEvent(new Event('change')));
+await p.waitForTimeout(260);
+R['provider の名前を画面から'] = await p.evaluate(() => { const o = JSON.parse(document.querySelector('#spec').value);
+  return { keys: Object.keys(o.providers), node: o.nodes.find(n => n.id === 'X').provider }; });
+ok.provRename = JSON.stringify(R['provider の名前を画面から']) === '{"keys":["あたらしい"],"node":"あたらしい"}';
+await p.selectOption('select[data-ps="adapter"]', 'wllama'); await p.waitForTimeout(300);
+R['provider の種類を画面から'] = await p.evaluate(() => JSON.parse(document.querySelector('#spec').value).providers);
+ok.provAdapter = (Object.values(R['provider の種類を画面から'])[0] || {}).adapter === 'wllama'
+  && !!(Object.values(R['provider の種類を画面から'])[0] || {}).url;
+await tap('#shClose');
+
+// ── モジュール: 名前・版・メモ・削除
+await paste({ metadata: { name: 'p', version: '1' }, providers: { m: { adapter: 'mock' } },
+  modules: { M: { version: '2', note: 'メモ', spec: { nodes: [{ id: 'i', type: 'input' }, { id: 'o', type: 'output' }], edges: [{ from: { node: 'i', port: 'out' }, to: { node: 'o', port: 'in' } }] } } },
+  nodes: [{ id: 'in', type: 'input' }, { id: 'X', type: 'module', module: 'M' }, { id: 'out', type: 'output' }],
+  edges: [{ from: { node: 'in', port: 'out' }, to: { node: 'X', port: 'in' } },
+    { from: { node: 'X', port: 'out' }, to: { node: 'out', port: 'in' } }] });
+await p.evaluate(() => window.__ui.openModulesSheet()); await p.waitForTimeout(220);
+const modGot = await p.evaluate(() => [...document.querySelectorAll('#sheetBody [data-mm]')].map(el => el.dataset.mm));
+R['モジュールの欄'] = modGot;
+ok.moduleKeys = ['name', 'version', 'note', 'del'].every(k => modGot.includes(k));
+await p.fill('[data-mm="name"]', 'MM');
+await p.evaluate(() => document.querySelector('#sheetBody [data-mm="name"]').dispatchEvent(new Event('change')));
+await p.waitForTimeout(260);
+R['モジュールの名前を画面から'] = await p.evaluate(() => { const o = JSON.parse(document.querySelector('#spec').value);
+  return { keys: Object.keys(o.modules), node: o.nodes.find(n => n.id === 'X').module }; });
+ok.modRename = JSON.stringify(R['モジュールの名前を画面から']) === '{"keys":["MM"],"node":"MM"}';
+await tap('#shClose');
+
+// ── 出口（ports）: 名前（from.port）と取り出し方を手で書けるか
+await paste({ metadata: { name: 'p', version: '1' }, providers: { m: { adapter: 'mock' } },
+  nodes: [{ id: 'in', type: 'input' },
+    { id: 'X', type: 'llm', provider: 'm', mock: { fixed: { items: ['a', 'b', 'c'] } },
+      schema: { type: 'object', required: ['items'], properties: { items: { type: 'array', items: { type: 'string' } } } },
+      ports: [{ id: 'p1', label: '1つ目', pick: 'items.0' }] },
+    { id: 'out', type: 'output' }],
+  edges: [{ from: { node: 'in', port: 'out' }, to: { node: 'X', port: 'in' } },
+    { from: { node: 'X', port: 'p1' }, to: { node: 'out', port: 'in' } }] });
+await openNode('X');
+const pfGot = await p.evaluate(() => [...document.querySelectorAll('#sheetBody [data-pf]')].map(el => el.dataset.pf));
+R['出口の欄'] = [...new Set(pfGot)];
+ok.portFields = ['label', 'key', 'id', 'pick'].every(k => pfGot.includes(k));
+// 範囲の取り出しを画面から書ける
+await p.fill('[data-pf="pick"][data-i="0"]', 'items.1..2'); await p.waitForTimeout(260);
+R['範囲の取り出しを画面から'] = await p.evaluate(() => JSON.parse(document.querySelector('#spec').value).nodes.find(n => n.id === 'X').ports[0].pick);
+ok.pickRange = R['範囲の取り出しを画面から'] === 'items.1..2';
+// 出口の名前を変えると線も付け替わる
+await p.fill('[data-pf="id"][data-i="0"]', 'さいしょ');
+await p.evaluate(() => { const el = document.querySelector('#sheetBody [data-pf="id"][data-i="0"]'); el.dispatchEvent(new Event('input')); });
+await p.waitForTimeout(280);
+R['出口の名前を画面から'] = await p.evaluate(() => { const o = JSON.parse(document.querySelector('#spec').value);
+  return { id: o.nodes.find(n => n.id === 'X').ports[0].id, edge: o.edges[1].from.port }; });
+ok.portRename = JSON.stringify(R['出口の名前を画面から']) === '{"id":"さいしょ","edge":"さいしょ"}';
+await tap('#shClose');
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 if (missing.length) console.log('\nノードで欄が無いもの:\n  ' + missing.join('\n  '));
 if (eMissing.length) console.log('\n線で欄が無いもの:\n  ' + eMissing.join('\n  '));
+if (pMissing.length) console.log('\nproviderで欄が無いもの:\n  ' + pMissing.join('\n  '));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;
 console.log('\n判定: ' + JSON.stringify(ok));
 console.log(all ? 'ALL PASS' : 'FAIL');

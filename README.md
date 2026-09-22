@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.31.0 画面と JSON を揃える
+## 1. 現状 — v0.31.1 画面と JSON を揃える（providers・モジュール・出口まで）
 
 | 段階 | 状態 |
 |---|---|
@@ -58,7 +58,8 @@ iPhone でもPCでも同じ操作。
 | 式リファレンスの実測修正 v0.28.1（`&&`/`\|\|`/`!`・`input.<ID>`・`first_match` の priority・wllama の全設定。文書を実装へ合わせ、自己テストで固定） | 実装済み |
 | 先着 v0.29.0（`race`＝先に条件を満たしたものを採り、まだ動いていない候補を止める。onNone 4種／検証がLLM以外のノードにも届くよう修正） | 実装済み |
 | 記憶 v0.30.0（`memory`＝入口ごとに ためる/入れ替える/消す/読むだけ。Run 全体か場ごとか・出し方4種・流す条件・上限と重複なし。中身は実行の記録に残り Resume でも続く／診断が「Runtime が読まないキー」を名指し） | 実装済み |
-| **画面と JSON の対応 v0.31.0（JSONで書けることは画面でも決められる。入口の名前・受け取る数と型・型チェック・Mapの戻り線・mockの中身・topP・json_objectのkeys・ノードの種類変更・ハーネスの名前/版/vars。両方向を `harness-parity.mjs` で毎回確かめる）** | **いまここ** |
+| 画面と JSON の対応 v0.31.0（JSONで書けることは画面でも決められる。入口の名前・受け取る数と型・型チェック・Mapの戻り線・mockの中身・topP・json_objectのkeys・ノードの種類変更・ハーネスの名前/版/vars。両方向を `harness-parity.mjs` で毎回確かめる） | 実装済み |
+| **v0.31.1（残りの穴も塞いだ: providers を画面から作る/名前を変える/消す・adapter 4種の全キー・provider の generation/schema/transport・モジュールの名前/版/メモ/削除・出口の名前と範囲の取り出し）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |

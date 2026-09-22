@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 画面とJSONを揃える v0.31.0</title>
+<title>Harness Studio — providers とモジュールも画面から v0.31.1</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.31.0 · 画面とJSONを揃える</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.31.1 · 画面とJSONを揃える</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -146,7 +146,8 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 
 <div class="card" style="margin-bottom:16px"><h2>接続の確認（上級者向け）</h2>
 <div class="mini">ここは<b>繋がるかどうかを試す場所</b>。ふだんは触らなくてよい。
-どのモデルを使うかは<b>ノードをタップして「このノードで使うモデル」</b>で決める。</div>
+どのモデルを使うかは<b>ノードをタップして「このノードで使うモデル」</b>で決める。
+置き場そのものを作る・直すのは<b>「このハーネスの設定」→「モデルの置き場（providers）」</b>。</div>
 <div class="row"><div class="seg" id="adapterSeg">
 <button data-ad="mock" class="on">mock</button><button data-ad="openai_local">OpenAI互換ローカル</button><button data-ad="webllm">内蔵LLM（WebGPU）</button>
 </div></div>
@@ -4796,11 +4797,17 @@ function splitFields(n){
       +`<select data-pf="key" data-i="${i}" style="flex:1"><option value=""${pr.key?"":" selected"}>値ぜんぶ</option>`
         +keys.map(k=>`<option value="${esc(k)}"${pr.key===k?" selected":""}>${esc(k)}</option>`).join("")+extra+`</select>`
       +`<button data-pfdel="${i}">削除</button></div>`;
-    if(pr.take!=="all")
-      h+=`<div class="ordrow"><b></b><span class="mini">手で書いた取り出し方: <code>${esc(q.pick)}</code>（上で選び直すと消える）</span></div>`;
+    // 出口の名前（線の from.port）と、取り出し方を手で書く欄。JSONで書けるものは画面でも書けるようにする
+    h+=`<div class="ordrow"><b></b><span class="mini">名前</span>`
+      +`<input type="text" data-pf="id" data-i="${i}" value="${esc(q.id||"")}" placeholder="p${i+1}" style="flex:0 1 90px;min-width:50px">`
+      +`<span class="mini">取り出し方</span>`
+      +`<input type="text" data-pf="pick" data-i="${i}" value="${esc(q.pick||"")}" placeholder="キー名 / キー名.0 / キー名.1..3 / 0" style="flex:1"></div>`;
   });
   h+=`</div></div><div class="mini"><button id="pfAdd">＋ 出口を足す</button>`
-    +` いまの出口: <code>${esc(ps.map((q,i)=>(q.label||String(i+1))+"="+(q.pick||"ぜんぶ")).join(" / "))}</code></div>`;
+    +` いまの出口: <code>${esc(ps.map((q,i)=>(q.id||"p"+(i+1))+"/"+(q.label||String(i+1))+"="+(q.pick||"ぜんぶ")).join(" / "))}</code>`
+    +`<br><b>名前</b>は線の「出口の名前」で選ぶときの名前（JSONの <code>from.port</code>）。`
+    +`<b>取り出し方</b>は上のプルダウンで選べる形以外も書ける`
+    +`（<code>items.0</code>＝1つ目 / <code>items.1..3</code>＝2〜4つ目 / <code>items.1..</code>＝2つ目以降 / <code>0</code>＝配列の1つ目）。</div>`;
   return h;
 }
 function parsePickSafe(pick){
@@ -5753,6 +5760,19 @@ function openNodeSheet(id){
     const upd=()=>{
       const i=+el.dataset.i;const q=(n.ports||[])[i];if(!q)return;
       if(el.dataset.pf==="label"){if(el.value)q.label=el.value;else delete q.label;syncFromCanvas();return;}
+      // 出口の名前（JSONの ports[].id）。線の from.port も一緒に付け替える
+      if(el.dataset.pf==="id"){
+        const to=el.value.trim();if(!to||to===q.id)return;
+        if(/[\s."{}>]/.test(to))return setHint("出口の名前に使えない文字がある");
+        if((n.ports||[]).some((x,j)=>j!==i&&x.id===to))return setHint("その出口の名前はもうある");
+        const from=q.id;q.id=to;
+        (Ed.spec.edges||[]).forEach(e=>{if(e.from.node===n.id&&(e.from.port||"out")===from)e.from.port=to;});
+        syncFromCanvas();openNodeSheet(n.id);return;}
+      // 取り出し方を手で書いたとき（範囲など、プルダウンで選べない形もそのまま持つ）
+      if(el.dataset.pf==="pick"){
+        const v=el.value.trim();
+        if(v)q.pick=v;else delete q.pick;
+        syncFromCanvas();return;}
       const was=parsePickSafe(q.pick).key;
       const k=el.value;
       if(k)q.pick=k;else delete q.pick;
@@ -6184,7 +6204,11 @@ function openSpecSheet(){
   h+=`<div class="fld"><span>図の並び（同時に届いたときの順番だけに使う）</span>`
     +sel("metadata.flow",m.flow||"tb",[{v:"tb",t:"縦に流す（上が先）"},{v:"lr",t:"横に流す（左が先）"}])+`</div>`;
   h+=`<div class="mini">これは<b>見た目と「同時のときの並び順」だけ</b>。何が動くか・何が流れるかは変わらない。</div>`;
+  h+=`<div class="row"><button id="spProv">モデルの置き場（providers）</button>`
+    +`<button id="spMod">モジュール（${Object.keys(Ed.spec.modules||{}).length}）</button></div>`;
   openSheet(h);bindClose();bindFields(Ed.spec);
+  {const b1=$("#spProv");if(b1)b1.onclick=openProvidersSheet;}
+  {const b2=$("#spMod");if(b2)b2.onclick=openModulesSheet;}
   const writeVars=()=>{
     const o={};let bad=false;
     $("#sheetBody").querySelectorAll("[data-vk]").forEach(el=>{
@@ -6209,6 +6233,229 @@ function openSpecSheet(){
      const o=Object.assign({},Ed.spec.vars||{});
      let i=1;while(o["値"+i]!==undefined)i++;
      o["値"+i]=0;Ed.spec.vars=o;syncFromCanvas();openSpecSheet();};}
+}
+/* ---- provider（モデルの置き場）の編集 ----
+   JSONの providers に書ける全部のキーを画面からも決められるようにする。
+   adapter ごとに Runtime が読むキーだけを出す（読まないキーの欄は作らない）。 */
+const ADAPTER_OPTS=[
+  {v:"mock",t:"mock（テスト用・推論しない）"},
+  {v:"webllm",t:"webllm（この端末のGPUで動く・内蔵LLM）"},
+  {v:"wllama",t:"wllama（CPUで動く・WebGPU不要）"},
+  {v:"openai_local",t:"openai_local（OpenAI互換のローカルサーバ）"}];
+function jsonRow(key,label,val,ph){
+  return `<div class="fld"><span>${esc(label)}</span>`
+    +`<textarea data-pj="${esc(key)}" placeholder="${esc(ph||"")}">`
+    +`${esc(val===undefined?"":JSON.stringify(val))}</textarea></div>`;
+}
+function providerFields(pid,def){
+  const ad=def.adapter||"mock";
+  const t=(k,label,ph)=>`<div class="fld"><span>${esc(label)}</span>`
+    +`<input type="text" data-pv="${esc(k)}" value="${esc(def[k]==null?"":String(def[k]))}" `
+    +`placeholder="${esc(ph||"")}" spellcheck="false"></div>`;
+  const nu=(k,label,ph)=>`<div class="fld"><span>${esc(label)}</span>`
+    +`<input type="number" data-pv="${esc(k)}" value="${def[k]==null?"":esc(String(def[k]))}" `
+    +`placeholder="${esc(ph||"")}"></div>`;
+  const ck=(k,label,dflt)=>`<div class="fld"><label class="ck">`
+    +`<input type="checkbox" data-pb="${esc(k)}"${(def[k]===undefined?dflt:def[k]!==false)?" checked":""}>`
+    +`${esc(label)}</label></div>`;
+  let h="";
+  if(ad!=="mock")h+=t("model","model（このproviderの既定のモデル）",
+    ad==="wllama"?"Qwen2.5-0.5B-Instruct-Q4_K_M":ad==="webllm"?"Qwen2.5-0.5B-Instruct-q4f16_1-MLC":"qwen2.5:3b");
+  if(ad==="openai_local"){
+    h+=t("endpoint","endpoint（必須）","http://localhost:11434/v1");
+    h+=ck("stream","途中の文字を流してもらう（stream）",true);}
+  if(ad==="webllm"){
+    h+=`<div class="fld"><span>本体の置き場（moduleSource）</span>`
+      +sel2("moduleSource",def.moduleSource||"vendor",
+        [{v:"vendor",t:"同梱版（このサイトから）"},{v:"cdn",t:"CDN"}])+`</div>`;
+    h+=ck("useWorker","Worker で動かす（useWorker）",true);
+    h+=ck("indexedDB","IndexedDB に重みを保存する（indexedDB）",true);
+    h+=nu("workerBootMs","Worker が立ち上がるまでの待ち（ms・空なら20000）","20000");
+    h+=t("weightsUrl","重みの置き場（weightsUrl・空ならこのサイトの分か既定）","https://…/");
+    h+=`<div class="fld"><label class="ck">`
+      +`<input type="checkbox" data-pb1="noSite"${def.noSite?" checked":""}>`
+      +`このサイトの重みを使わない（noSite）</label></div>`;
+    h+=jsonRow("custom","自分で置いたモデル（custom）",def.custom,'{"model":"https://…/","model_lib":"https://…/x.wasm"}');
+    h+=jsonRow("overrides","engine への追加設定（overrides）",def.overrides,'{"context_window_size":2048}');}
+  if(ad==="wllama"){
+    h+=t("url","GGUF の置き場（url・必須）","https://…/x.gguf");
+    h+=`<div class="fld2">${nu("contextSize","文脈の長さ（contextSize・空なら1024）","1024")}`
+      +`${nu("gpuLayers","GPUに載せる層（gpuLayers・0でCPUだけ）","0")}</div>`;
+    h+=`<div class="fld2">${nu("threads","スレッド数（threads・空なら既定）","4")}`
+      +`${nu("stallMs","進まなくなったら打ち切る（stallMs・空なら180000）","180000")}</div>`;
+    h+=ck("cache","端末に取り置きする（cache）",true);
+    h+=t("base","本体の置き場（base・空なら vendor/wllama/）","vendor/wllama/");
+    h+=`<div class="fld2">${t("moduleUrl","moduleUrl","<base>index.js")}${t("wasmUrl","wasmUrl","<base>wllama.wasm")}</div>`;
+    h+=`<div class="fld2">${t("compatJsUrl","compatJsUrl","<base>compat/wllama.js")}`
+      +`${t("compatWasmUrl","compatWasmUrl","<base>compat/wllama.wasm")}</div>`;
+    h+=nu("moduleTimeoutMs","本体が読めないときの打ち切り（moduleTimeoutMs・空なら30000）","30000");}
+  h+=jsonRow("generation","このproviderを使うノードの既定（generation）",def.generation,'{"maxTokens":256,"temperature":0.7}');
+  h+=jsonRow("schema","このproviderを使うノードの既定の出力の形（schema）",def.schema,'{"type":"object"}');
+  h+=t("transport","fetch の差し替え（transport・テスト用）","（ふつうは空）");
+  h+=`<div class="mini">transport は自動テストで fetch を差し替えるための口。`
+    +`登録していない名前を書くと実行時に落ちる。</div>`;
+  return h;
+}
+/* このシートの中だけで使う小さい select（bindFields を通さず自分で配線する） */
+function sel2(key,val,opts){
+  return `<select data-ps="${esc(key)}">`+opts.map(o=>
+    `<option value="${esc(o.v)}"${o.v===val?" selected":""}>${esc(o.t)}</option>`).join("")+`</select>`;
+}
+let provSheetPick=null;
+function openProvidersSheet(){
+  const ps=Ed.spec.providers=Ed.spec.providers||{};
+  const ks=Object.keys(ps);
+  if(provSheetPick&&!ps[provSheetPick])provSheetPick=null;
+  if(!provSheetPick)provSheetPick=ks[0]||null;
+  let h=head("モデルの置き場（providers）");
+  h+=`<div class="mini">ノードの <b>Provider</b> で選ぶ置き場をここで作る。`
+    +`JSONの <code>providers</code> と同じものを画面からも決められる。</div>`;
+  if(!ks.length)h+=`<div class="mini">まだ1つも無い。下の「＋ 置き場を足す」で足す。</div>`;
+  else{
+    h+=`<div class="fld"><span>どの置き場を編集するか</span>`
+      +`<select data-pp="sel">`+ks.map(k=>
+        `<option value="${esc(k)}"${k===provSheetPick?" selected":""}>${esc(k)}（${esc((ps[k]||{}).adapter||"?")}）</option>`).join("")
+      +`</select></div>`;
+    const def=ps[provSheetPick]||{};
+    h+=`<div class="fld2"><div class="fld"><span>名前（ノードから参照する名前）</span>`
+      +`<input type="text" data-pp="name" value="${esc(provSheetPick)}" spellcheck="false"></div>`
+      +`<div class="fld"><span>種類（adapter）</span>`+sel2("adapter",def.adapter||"mock",ADAPTER_OPTS)+`</div></div>`;
+    h+=providerFields(provSheetPick,def);
+    const used=(Ed.spec.nodes||[]).filter(n=>n.provider===provSheetPick).map(n=>n.id);
+    h+=`<div class="mini">${used.length?`この置き場を使っているノード: <code>${esc(used.join(", "))}</code>`
+      :"どのノードからも使われていない"}</div>`;
+    h+=`<div class="row"><button class="danger" data-pp="del">この置き場を削除</button></div>`;
+  }
+  h+=`<div class="row"><button data-pp="add">＋ 置き場を足す</button></div>`;
+  openSheet(h);bindClose();
+  const refresh=()=>{syncFromCanvas();openProvidersSheet();};
+  const cur=()=>Ed.spec.providers[provSheetPick]||{};
+  const set=(k,v)=>{const d=Object.assign({},cur());
+    if(v===""||v===undefined)delete d[k];else d[k]=v;
+    Ed.spec.providers[provSheetPick]=d;syncFromCanvas();};
+  {const sl=$("#sheetBody").querySelector('[data-pp="sel"]');
+   if(sl)sl.onchange=()=>{provSheetPick=sl.value;openProvidersSheet();};}
+  {const nm=$("#sheetBody").querySelector('[data-pp="name"]');
+   if(nm)nm.onchange=()=>{
+     const to=nm.value.trim();
+     if(!to||to===provSheetPick)return;
+     if(Ed.spec.providers[to])return setHint("その名前はもうある");
+     const o={};for(const k of Object.keys(Ed.spec.providers))o[k===provSheetPick?to:k]=Ed.spec.providers[k];
+     Ed.spec.providers=o;
+     (Ed.spec.nodes||[]).forEach(n=>{if(n.provider===provSheetPick)n.provider=to;});
+     provSheetPick=to;refresh();setHint("置き場の名前を変えた（使っているノードも付け替えた）");};}
+  {const ad=$("#sheetBody").querySelector('select[data-ps="adapter"]');
+   if(ad)ad.onchange=()=>{
+     // 種類を変えたら、その種類で読まないキーは落とす（残しても効かない）
+     const keepByAd={mock:[],openai_local:["endpoint","stream"],
+       webllm:["moduleSource","useWorker","indexedDB","workerBootMs","weightsUrl","noSite","custom","overrides"],
+       wllama:["url","contextSize","gpuLayers","threads","stallMs","cache","base","moduleUrl","wasmUrl",
+         "compatJsUrl","compatWasmUrl","moduleTimeoutMs"]};
+     const keep=new Set(["adapter","model","generation","schema","transport"].concat(keepByAd[ad.value]||[]));
+     const d={};for(const[k,v]of Object.entries(cur()))if(keep.has(k))d[k]=v;
+     d.adapter=ad.value;
+     if(ad.value==="wllama"&&!d.url){const g=GGUF_CATALOG[0];d.model=g.id;d.url=g.url;
+       if(d.contextSize==null)d.contextSize=1024;if(d.gpuLayers==null)d.gpuLayers=0;}
+     if(ad.value==="openai_local"&&!d.endpoint)d.endpoint="http://localhost:11434/v1";
+     if(ad.value==="webllm"&&!d.model)d.model=(webllmModelOptions()[0]||{}).v||"";
+     Ed.spec.providers[provSheetPick]=d;refresh();};}
+  {const ms=$("#sheetBody").querySelector('select[data-ps="moduleSource"]');
+   if(ms)ms.onchange=()=>{set("moduleSource",ms.value);};}
+  $("#sheetBody").querySelectorAll("[data-pv]").forEach(el=>el.oninput=()=>{
+    const k=el.dataset.pv,v=el.value.trim();
+    set(k,v===""?"":(el.type==="number"?Number(v):v));});
+  $("#sheetBody").querySelectorAll("[data-pb]").forEach(el=>el.onchange=()=>{
+    // 既定が true のもの。false のときだけ書く（既定と同じ値を残さない）
+    if(el.checked){const d=Object.assign({},cur());delete d[el.dataset.pb];
+      Ed.spec.providers[provSheetPick]=d;syncFromCanvas();}
+    else set(el.dataset.pb,false);});
+  $("#sheetBody").querySelectorAll("[data-pb1]").forEach(el=>el.onchange=()=>{
+    // 既定が false のもの。true のときだけ書く
+    if(el.checked)set(el.dataset.pb1,true);
+    else{const d=Object.assign({},cur());delete d[el.dataset.pb1];
+      Ed.spec.providers[provSheetPick]=d;syncFromCanvas();}});
+  $("#sheetBody").querySelectorAll("[data-pj]").forEach(el=>el.oninput=()=>{
+    const k=el.dataset.pj,v=el.value.trim();
+    if(!v){const d=Object.assign({},cur());delete d[k];Ed.spec.providers[provSheetPick]=d;
+      el.style.borderColor="";syncFromCanvas();return;}
+    let p;try{p=JSON.parse(v);}catch(_){el.style.borderColor="var(--err)";return;}
+    el.style.borderColor="";set(k,p);});
+  {const dl=$("#sheetBody").querySelector('[data-pp="del"]');
+   if(dl)dl.onclick=()=>{
+     const used=(Ed.spec.nodes||[]).filter(n=>n.provider===provSheetPick).map(n=>n.id);
+     if(used.length&&dl.dataset.armed!=="1"){dl.dataset.armed="1";
+       return setHint(`もう一度押すと削除する（${used.join(", ")} の Provider が未設定になる）`);}
+     delete Ed.spec.providers[provSheetPick];
+     if(!Object.keys(Ed.spec.providers).length)delete Ed.spec.providers;
+     provSheetPick=null;refresh();setHint("置き場を削除した");};}
+  {const ad=$("#sheetBody").querySelector('[data-pp="add"]');
+   if(ad)ad.onclick=()=>{
+     Ed.spec.providers=Ed.spec.providers||{};
+     let i=1;while(Ed.spec.providers["置き場"+i])i++;
+     Ed.spec.providers["置き場"+i]={adapter:"mock"};
+     provSheetPick="置き場"+i;refresh();};}
+}
+/* ---- モジュールの管理（名前を変える・消す・メモ） ---- */
+let modSheetPick=null;
+function openModulesSheet(){
+  const ms=Ed.spec.modules||{};
+  const ks=Object.keys(ms);
+  if(modSheetPick&&!ms[modSheetPick])modSheetPick=null;
+  if(!modSheetPick)modSheetPick=ks[0]||null;
+  let h=head("モジュール（部分ハーネス）");
+  if(!ks.length)h+=`<div class="mini">まだ1つも無い。`
+    +`「書き出す」→<b>いまのハーネスをモジュールにする</b>で作る。</div>`;
+  else{
+    h+=`<div class="fld"><span>どのモジュールを見るか</span>`
+      +`<select data-mm="sel">`+ks.map(k=>
+        `<option value="${esc(k)}"${k===modSheetPick?" selected":""}>`
+        +`${esc(k)}（v${esc(String((ms[k]||{}).version||"?"))}・ノード${(((ms[k]||{}).spec||{}).nodes||[]).length}）</option>`).join("")
+      +`</select></div>`;
+    const def=ms[modSheetPick]||{};
+    h+=`<div class="fld2"><div class="fld"><span>名前（ノードから参照する名前）</span>`
+      +`<input type="text" data-mm="name" value="${esc(modSheetPick)}" spellcheck="false"></div>`
+      +`<div class="fld"><span>版（version）</span>`
+      +`<input type="text" data-mm="version" value="${esc(String(def.version==null?"":def.version))}" placeholder="1"></div></div>`;
+    h+=`<div class="fld"><span>メモ（note・画面の説明に出る）</span>`
+      +`<input type="text" data-mm="note" value="${esc(def.note==null?"":def.note)}" placeholder="何をするモジュールか"></div>`;
+    const p=modulePorts(def);
+    h+=`<div class="mini">入口: <code>${esc(p.in.join(" / ")||"なし")}</code>`
+      +` ／ 出口: <code>${esc(p.out.join(" / ")||"なし")}</code>`
+      +`（中の入力ノード／出力ノードがそのまま口になる）</div>`;
+    const used=(Ed.spec.nodes||[]).filter(n=>n.module===modSheetPick).map(n=>n.id);
+    h+=`<div class="mini">${used.length?`使っているノード: <code>${esc(used.join(", "))}</code>`
+      :"どのノードからも使われていない"}</div>`;
+    h+=`<div class="row"><button class="danger" data-mm="del">このモジュールを削除</button></div>`;
+    h+=`<div class="mini">中身を作り直したいときは、そのモジュールを「このモジュールだけを開く」で開いて直し、`
+      +`「書き出す」から同じ名前で入れ直す。</div>`;
+  }
+  openSheet(h);bindClose();
+  const refresh=()=>{syncFromCanvas();openModulesSheet();};
+  {const sl=$("#sheetBody").querySelector('[data-mm="sel"]');
+   if(sl)sl.onchange=()=>{modSheetPick=sl.value;openModulesSheet();};}
+  {const nm=$("#sheetBody").querySelector('[data-mm="name"]');
+   if(nm)nm.onchange=()=>{
+     const to=nm.value.trim();
+     if(!to||to===modSheetPick)return;
+     if(Ed.spec.modules[to])return setHint("その名前はもうある");
+     const o={};for(const k of Object.keys(Ed.spec.modules))o[k===modSheetPick?to:k]=Ed.spec.modules[k];
+     Ed.spec.modules=o;
+     (Ed.spec.nodes||[]).forEach(n=>{if(n.module===modSheetPick)n.module=to;});
+     modSheetPick=to;refresh();setHint("モジュールの名前を変えた（使っているノードも付け替えた）");};}
+  {const vv=$("#sheetBody").querySelector('[data-mm="version"]');
+   if(vv)vv.oninput=()=>{const d=Ed.spec.modules[modSheetPick];if(!d)return;
+     if(vv.value.trim())d.version=vv.value.trim();else delete d.version;syncFromCanvas();};}
+  {const nt=$("#sheetBody").querySelector('[data-mm="note"]');
+   if(nt)nt.oninput=()=>{const d=Ed.spec.modules[modSheetPick];if(!d)return;
+     if(nt.value.trim())d.note=nt.value.trim();else delete d.note;syncFromCanvas();};}
+  {const dl=$("#sheetBody").querySelector('[data-mm="del"]');
+   if(dl)dl.onclick=()=>{
+     const used=(Ed.spec.nodes||[]).filter(n=>n.module===modSheetPick).map(n=>n.id);
+     if(used.length&&dl.dataset.armed!=="1"){dl.dataset.armed="1";
+       return setHint(`もう一度押すと削除する（${used.join(", ")} が壊れる）`);}
+     delete Ed.spec.modules[modSheetPick];
+     if(!Object.keys(Ed.spec.modules).length)delete Ed.spec.modules;
+     modSheetPick=null;refresh();setHint("モジュールを削除した");};}
 }
 /* 分岐のしかたを選ばせる（隠れた既定値を作らない） */
 function askRouting(nodeId,cb){
@@ -7367,7 +7614,7 @@ setHint("ノードをタップすると中身を編集。○ → ● の順に�
 /* 調査用の覗き口。画面から見えない中身（いまの実行・いまのSpec）を読むだけ。
    不具合調べと自動テストで使う（ここから書き換えはできない） */
 // 画面の編集シートを直接開く口（自動テスト用。図をタップしなくても開ける）
-window.__ui={openNodeSheet,openEdgeSheet,openSpecSheet,closeSheet};
+window.__ui={openNodeSheet,openEdgeSheet,openSpecSheet,openProvidersSheet,openModulesSheet,closeSheet};
 window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
   nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;},
   // Runtime をそのまま呼べる口（自動テスト用。画面を触らずに走らせて中身を見る）
@@ -7656,6 +7903,9 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 | 決めたいもの | どこで |
 |---|---|
 | ハーネスの名前・版・**どこからでも読める値（vars）**・図の流れる向き | **このハーネスの設定** |
+| **モデルの置き場（providers）** … 足す・名前を変える・消す・adapter ごとの設定ぜんぶ | このハーネスの設定 → モデルの置き場 |
+| **モジュール** … 名前を変える・版・メモ・消す | このハーネスの設定 → モジュール |
+| 出口を分ける（**出口の名前**と**取り出し方**。範囲も手で書ける） | ノードをタップ →「出力の渡し方」を分ける |
 | ノードの**種類**・ID・中身ぜんぶ | ノードをタップ |
 | **入口ごとの受け取り方**（1つだけ／複数まとめて・型） | ノードをタップ →「入口ごとの受け取り方」 |
 | mock（テスト用）の返し方 | ノードをタップ → Provider を mock にすると出る |
@@ -8205,8 +8455,14 @@ ${HELP_JSON_EXAMPLE}
 |---|---|
 | \`metadata.name\` / \`metadata.version\` / \`metadata.flow\` | このハーネスの設定 |
 | \`vars\` | このハーネスの設定 →「どこからでも読める値」 |
-| \`providers\` | モデル（この端末の中で動くLLM）／ノードの Provider |
-| \`modules\` | 書き出す →「いまのハーネスをモジュールにする」 |
+| \`providers\`（足す・名前を変える・消す・adapter を変える） | このハーネスの設定 → **モデルの置き場（providers）** |
+| \`providers.*\` の \`endpoint\` \`stream\` | 同じ場所（adapter が \`openai_local\` のとき） |
+| \`providers.*\` の \`moduleSource\` \`useWorker\` \`indexedDB\` \`workerBootMs\` \`weightsUrl\` \`noSite\` \`custom\` \`overrides\` | 同じ場所（\`webllm\` のとき） |
+| \`providers.*\` の \`url\` \`contextSize\` \`gpuLayers\` \`threads\` \`cache\` \`stallMs\` \`base\` \`moduleUrl\` \`wasmUrl\` \`compatJsUrl\` \`compatWasmUrl\` \`moduleTimeoutMs\` | 同じ場所（\`wllama\` のとき） |
+| \`providers.*\` の \`generation\` / \`schema\` / \`transport\` | 同じ場所（どの adapter でも） |
+| \`modules\`（名前・\`version\`・\`note\`・削除） | このハーネスの設定 → **モジュール** |
+| \`modules\` の中身を作る | 書き出す →「いまのハーネスをモジュールにする」 |
+| \`ports[].id\` / \`ports[].label\` / \`ports[].pick\`（範囲も） | ノードをタップ →「出力の渡し方」を分ける |
 | ノードの \`type\` | ノードをタップ →「種類」（その種類で読まないキーは消える・何が消えるか出る） |
 | \`inputs.<入口>.cardinality\` / \`.type\` | ノードをタップ →「入口ごとの受け取り方」 |
 | \`mock\` の中身 | ノードをタップ → Provider を mock にすると「mock の返し方」が出る |
