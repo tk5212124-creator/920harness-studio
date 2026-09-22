@@ -16,6 +16,7 @@ node tests/harness-calc.mjs         # 計算ノード・条件分岐ノード・
 node tests/harness-modexp.mjs       # モジュール（部分ハーネスの再利用）と「くらべる（実験）」
 node tests/harness-race.mjs         # 先着（race）— 足す・中身を決める・実行して候補が止まる・記録・診断・使い方3タブ
 node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱い・毎周たまる・記録・診断・使い方3タブ
+node tests/harness-parity.mjs       # 画面とJSONの対応（片方だけでできることを作らない、を機械で固定）
 ```
 
 必要なもの: Node 22 以上と Playwright（Chromium）。

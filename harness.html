@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 記憶（ためる・入れ替える） v0.30.0</title>
+<title>Harness Studio — 画面とJSONを揃える v0.31.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -90,7 +90,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .ordrow{display:flex;gap:6px;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px solid var(--line)}
 .ordrow:last-child{border-bottom:0}
 .ordrow b{min-width:16px;color:var(--sub);font-weight:600}
-.ordrow span.nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ordrow span.nm,.ordrow span.pn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ordrow button{padding:3px 10px;font-size:13px}
 .ordrow select{width:auto;flex:0 0 auto;font-size:12px;padding:3px 6px}
 #helpBtn{position:fixed;right:10px;top:calc(8px + env(safe-area-inset-top));z-index:39;
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.30.0 · 記憶</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.31.0 · 画面とJSONを揃える</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -186,7 +186,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 </div>
 <div class="mini" id="nowSpec"></div>
 <div class="hintbar" id="hint"></div>
-<div class="row"><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button><button id="btnExp">くらべる</button></div>
+<div class="row"><button id="btnSpec">このハーネスの設定</button><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button><button id="btnExp">くらべる</button></div>
 <input type="file" id="fileIn" accept=".hsl,.json,.txt,text/plain,application/json" style="display:none">
 </div>
 <div class="row"><div class="seg" id="exSeg">
@@ -4873,6 +4873,77 @@ function inputPickFields(n){
   return `<div class="fld"><span>入ってきた値のどれを使うか</span><div>${rows.join("")}</div></div>`
     +`<div class="mini">項目を宣言しているノードから来た線だけ選べる（宣言が無いと文章で届く）。</div>`;
 }
+/* mock（テスト用・推論しない）の返し方。JSONの node.mock と同じものを画面でも決められる。
+   どれを選んでも「本物と同じ道」を通る（使用量は apiCalls を1と数える）。 */
+const MOCK_KINDS=[
+  {v:"text",t:"決めた文をそのまま返す"},
+  {v:"tag",t:"名前＋周回（案1, 案2 …）"},
+  {v:"fixed",t:"決めた JSON をそのまま返す"},
+  {v:"raw",t:"生の文字列（本番と同じ道で JSON を読む・schema も確認する）"},
+  {v:"rawByIteration",t:"周回ごとに別の生の文字列"},
+  {v:"scoreByIteration",t:"周回ごとに点数（{text, score}）"},
+  {v:"echoPrompt",t:"組み上がった本文をそのまま返す（まとめ方の確認）"},
+  {v:"echoInput",t:"入口 in に来た値を返す"},
+  {v:"stream",t:"1文字ずつ流す（中断の試験）"},
+  {v:"cut",t:"maxTokens で切れたことにする"},
+  {v:"fail",t:"失敗させる"}];
+const mockKindOf=m=>{
+  for(const k of ["tag","fixed","raw","rawByIteration","scoreByIteration","cut","stream","fail"])
+    if(m&&m[k]!==undefined)return k;
+  if(m&&m.echoPrompt)return "echoPrompt";
+  if(m&&m.echoInput)return "echoInput";
+  return "text";};
+function mockFields(n){
+  const m=n.mock||{},k=mockKindOf(m);
+  let h=fld("mock の返し方",sel("__mk",k,MOCK_KINDS));
+  if(k==="text")h+=fld("返す文",txt("__mv",m.text==null?"":m.text,"(mock)"));
+  if(k==="tag")h+=fld("名前（後ろに周回の数が付く）",txt("__mv",m.tag==null?"":m.tag,"案"));
+  if(k==="raw")h+=fld("生の文字列",area("__mv",m.raw==null?"":String(m.raw),'{"score":8}'));
+  if(k==="fixed")h+=fld("返す JSON",
+    `<textarea data-mj="fixed" placeholder='{"score":8}'>${esc(m.fixed===undefined?"":JSON.stringify(m.fixed))}</textarea>`);
+  if(k==="rawByIteration")h+=fld("周回ごとの生の文字列（JSONの配列）",
+    `<textarea data-mj="rawByIteration" placeholder='["{\"score\":5}","{\"score\":9}"]'>${esc(m.rawByIteration===undefined?"":JSON.stringify(m.rawByIteration))}</textarea>`);
+  if(k==="scoreByIteration")h+=fld("周回ごとの点数（JSONの配列）",
+    `<textarea data-mj="scoreByIteration" placeholder="[5,7,9]">${esc(m.scoreByIteration===undefined?"":JSON.stringify(m.scoreByIteration))}</textarea>`);
+  if(k==="stream")h+=fld("1文字ずつ流すもの（JSONの配列）",
+    `<textarea data-mj="stream" placeholder='["あ","い","う"]'>${esc(m.stream===undefined?"":JSON.stringify(m.stream))}</textarea>`);
+  if(k==="cut")h+=fld("切れかたの設定（JSON）",
+    `<textarea data-mj="cut" placeholder='{"needs":96,"full":"{\"item\":\"あいうえお\"}","at":12}'>${esc(m.cut===undefined?"":JSON.stringify(m.cut))}</textarea>`);
+  if(k==="fail")h+=fld("どう失敗させるか",sel("__mv",m.fail||"generic",[
+    {v:"oom",t:"メモリ不足（RESOURCE_EXHAUSTED・retryable）"},
+    {v:"model_load",t:"モデルが読めない（MODEL_LOAD_FAILED・retryable）"},
+    {v:"generic",t:"ふつうの失敗（PROVIDER_ERROR・retryable でない）"}]));
+  if(k==="stream")h+=fld("1文字ごとの待ち時間（ms・空でよい）",num("__mdelay",m.delayMs,"10"));
+  h+=`<div class="mini">推論しないが<b>使用量は apiCalls を1と数える</b>（実際に呼んだのと同じ形で試すため）。`
+    +`「生の文字列」「周回ごとの生の文字列」は<b>本番と同じ道</b>で JSON を読むので、schema の確認まで通る。</div>`;
+  return h;
+}
+/* 入口ごとの「いくつ受け取るか」と「型」。JSONの inputs と同じものを画面でも決められる。
+   線をつないだ数で自動で many にもなるが、1本のときも自分で決められるようにしてある。 */
+const CARD_OPTS=[{v:"",t:"1つだけ（one・既定）"},{v:"many",t:"複数まとめて受け取る（many）"}];
+const PTYPE_OPTS=[{v:"",t:"何でも（any・既定）"},{v:"text",t:"文章（text）だけ"},{v:"json",t:"JSON だけ"}];
+function portFields(n){
+  if(n.type==="input")return "";
+  const ports=inPortNames(n);
+  if(!ports.length)return "";
+  let h=`<div class="fld"><span>入口ごとの受け取り方</span><div>`;
+  for(const q of ports){
+    const d=(n.inputs||{})[q]||{};
+    const cnt=(Ed.spec.edges||[]).filter(e=>!e.loop&&!e.map&&e.to.node===n.id&&(e.to.port||"in")===q).length;
+    h+=`<div class="ordrow"><span class="pn">${esc(q)}</span>`
+      +`<select data-pc="${esc(q)}">`+CARD_OPTS.map(o=>
+        `<option value="${o.v}"${(d.cardinality==="many"?"many":"")===o.v?" selected":""}>${esc(o.t)}</option>`).join("")+`</select>`
+      +`<select data-pt="${esc(q)}">`+PTYPE_OPTS.map(o=>
+        `<option value="${o.v}"${(d.type&&d.type!=="any"?d.type:"")===o.v?" selected":""}>${esc(o.t)}</option>`).join("")+`</select>`
+      +`<span class="mini">線 ${cnt}本</span></div>`;
+  }
+  h+=`</div></div><div class="mini"><b>複数まとめて受け取る</b>にすると、その入口に入る<b>線ごとに1つずつ</b>値が並ぶ`
+    +`（順番は下の「入力の順番」）。線を2本つなぐと自動でこちらになる。`
+    +`<br><b>履歴がたまるわけではない。</b>同じ線から何度も届いたら最後の1つだけ。`
+    +`ためたいときは<b>記憶</b>ノードを使う。`
+    +`<br>型を決めると、合わない値が来たときにそこで失敗する（つながりの「型のチェック」で外せる）。</div>`;
+  return h;
+}
 /* 入口に2本以上入っているときの順番。上が先（まとめる順・position の順）。
    線をつないだ順に自動で振ってあるので、ここは入れ替えるだけ。 */
 function inputOrderFields(n){
@@ -4893,6 +4964,17 @@ function inputOrderFields(n){
     h+=`</div></div>`;
   }
   return h;
+}
+/* その入口に入っている線の position を 0,1,2… に振り直す（抜けや重複を作らない） */
+function renumberPort(nodeId,port){
+  const es=(Ed.spec.edges||[]).filter(e=>!e.loop&&!e.map&&e.to.node===nodeId&&(e.to.port||"in")===port)
+    .sort((a,b)=>(a.position==null?1e9:a.position)-(b.position==null?1e9:b.position));
+  if(es.length<2){es.forEach(e=>{delete e.position;});return;}
+  es.forEach((e,k)=>{e.position=k;});
+  const n=nodeById(nodeId);
+  if(n&&n.type!=="input"){const c=n.inputs&&n.inputs[port]&&n.inputs[port].cardinality;
+    if(c!=="many"){n.inputs=n.inputs||{};
+      n.inputs[port]=Object.assign({type:"any"},n.inputs[port]||{},{cardinality:"many"});}}
 }
 function moveInput(nodeId,port,i,dir){
   const es=(Ed.spec.edges||[]).filter(e=>!e.loop&&e.to.node===nodeId&&(e.to.port||"in")===port)
@@ -4989,6 +5071,11 @@ function openNodeSheet(id){
   const provAdapter=provDef&&provDef.adapter;
   let h=head("ノード: "+id);
   h+=fld("ID",txt("id",n.id));
+  // 種類も変えられるようにする（JSONでは type を書き換えられるので）
+  h+=fld("種類",sel("__ntype",n.type||"llm",
+    NODE_KINDS.map(k=>({v:k.type,t:k.label})).concat(
+      (n.type||"llm")==="tool"?[{v:"tool",t:"ツール（LLMと同じ道）"}]:[])));
+  h+=`<div class="mini">種類を変えると、その種類で使わない設定は<b>消える</b>（押したときに何が消えるか出る）。</div>`;
   h+=fld("種類",`<input type="text" value="${esc((TYPE_LABEL[n.type||"llm"]||n.type)+"（"+(n.type||"llm")+"）")}" disabled>`);
   if(n.type==="input"){
     h+=fld("入力画面に出す文言（何を入れる場所か）",txt("label",n.label,"例: 直したい文章を貼る"));
@@ -5019,6 +5106,8 @@ function openNodeSheet(id){
     h+=`<div class="mini">入ってきた<b>配列</b>の1件ずつに、同じところを通す。`
       +`全部終わったら<b>入力と同じ順番</b>の配列にして「終わったあと」へ流す。</div>`;
     h+=fld("この1件ずつの名前（戻り線と合わせる）",txt("map.id",getP(n,"map.id")||n.id,n.id));
+    h+=`<div class="mini">結果の並べ方（JSONの <code>order</code>）は <code>"input"</code>（入力と同じ順）だけ。`
+      +`終わった順はまだ実装していないので、他の値を書くと検証で落ちる。</div>`;
     h+=fld("1件が失敗したとき",sel("onItemError",n.onItemError||"error",[
       {v:"error",t:"実行を止める（既定）"},
       {v:"skip",t:"その件を結果から外して、残りを続ける"},
@@ -5276,6 +5365,7 @@ function openNodeSheet(id){
   }
   if(n.type==="llm"||n.type===undefined){
     h+=fld("Provider",sel("__prov",provVal,provOpts));
+    if(n.mock)h+=mockFields(n);
     // モデルは一覧から選ぶ（providerの種類で中身が変わる）
     if(provAdapter==="webllm"||provAdapter==="openai_local"||provAdapter==="wllama"){
       const list=provAdapter==="webllm"?webllmModelOptions()
@@ -5303,6 +5393,8 @@ function openNodeSheet(id){
       area("prompt.template.value",getP(n,"prompt.template.value"),"空なら前のノードの出力をそのまま渡す"));
     h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prompt.prefix",getP(n,"prompt.prefix")))}${fld("必ず後ろに付ける文",txt("prompt.suffix",getP(n,"prompt.suffix")))}</div>`;
     h+=`<div class="fld2">${fld("maxTokens",num("generation.maxTokens",getP(n,"generation.maxTokens")))}${fld("temperature",num("generation.temperature",getP(n,"generation.temperature")))}</div>`;
+    h+=fld("topP（上位いくつまでの語から選ぶか・空なら Provider の既定）",
+      num("generation.topP",getP(n,"generation.topP"),"0.9"));
     h+=fld("maxTokens に届いて途中で切れたとき",sel("onTruncate",n.onTruncate||"",[
       {v:"",t:"エラーにして止める（既定）"},
       {v:"use",t:"切れたところまでを使う（JSONは閉じ直す）"},
@@ -5340,6 +5432,21 @@ function openNodeSheet(id){
         txt("__labels",(n.labels||[]).join(", "),srcs.join(", ")||"案A, 案B"));
       h+=`<div class="mini">空なら名前なし（markdownは箇条書き・csvは見出し無し）。<button id="jnAuto">つないだノード名を入れる</button></div>`;
     }
+    if(n.op==="json_object"){
+      const ks=Array.isArray(n.keys)?n.keys:[];
+      h+=`<div class="fld"><span>キーと位置の対応（上の名前より優先・順番を変えたり飛ばしたいとき）</span><div>`;
+      if(!ks.length)h+=`<div class="mini">まだ無い。上の「それぞれの名前」だけで足りるならこのままでよい`
+        +`（つないだ順にキーが付く）。</div>`;
+      ks.forEach((k,i)=>{
+        h+=`<div class="ordrow"><b>${i+1}</b>`
+          +`<input type="text" data-jk="${i}" value="${esc((k&&k.key)||"")}" placeholder="キー名" style="flex:1;min-width:70px">`
+          +`<span class="mini">＝ 入力の</span>`
+          +`<input type="number" data-jp="${i}" value="${k&&k.position!=null?k.position:""}" placeholder="0" style="width:64px">`
+          +`<span class="mini">番目</span><button data-jkdel="${i}">削除</button></div>`;});
+      h+=`</div></div><div class="mini"><button id="jkAdd">＋ 対応を足す</button>`
+        +` 番目は<b>0から</b>（「入力の順番」の1番目が 0）。`
+        +`これを1つでも書くと、上の「それぞれの名前」はキーには使われない。</div>`;
+    }
     if(JOIN_TEXT_OPS.includes(n.op))
       h+=`<div class="fld2">${fld("必ず前に付ける文",txt("prefix",n.prefix))}${fld("必ず後ろに付ける文",txt("suffix",n.suffix))}</div>`;
   }
@@ -5350,6 +5457,7 @@ function openNodeSheet(id){
     h+=`<div class="mini">この ループに出口の取り出し設定が残っている: `
       +`<code>${esc(n.ports.map(q=>(q.label||q.id)+"="+(q.pick||"ぜんぶ")).join(" / "))}</code>`
       +` <button id="lpPortsOff">取り出しをやめて値をそのまま渡す</button></div>`;
+  h+=portFields(n);
   h+=inputPickFields(n);
   h+=inputOrderFields(n);
   if(n.type==="loop"){
@@ -5375,6 +5483,68 @@ function openNodeSheet(id){
       else if(n.prompt)delete n.prompt.template;
     }
   });
+  // 種類を変える。その種類で読まないキーは落とす（残しても効かないので黙って持たない）
+  {const nt=$("#sheetBody").querySelector('select[data-f="__ntype"]');
+   if(nt)nt.onchange=()=>{
+     const to=nt.value,from=n.type||"llm";
+     if(to===from)return;
+     const perType={
+       llm:["provider","model","prompt","generation","schema","mock","onTruncate","onBadOutput","ports"],
+       tool:["provider","model","prompt","generation","schema","mock","onTruncate","onBadOutput","ports"],
+       input:["label","default"],output:[],pass:[],
+       join:["op","sep","labels","keys","prefix","suffix","template"],
+       loop:["loop","ports"],cond:["lang","ports"],calc:["lang","code"],
+       map:["map","order","onItemError","onItemErrorValue"],module:["module"],
+       reduce:["op","path","skipMissing"],
+       quorum:["lang","condition","required","requiredRatio","total","onBadItem"],
+       race:["lang","condition","onNone","onNoneValue","path","cancel","total","onBadItem"],
+       memory:["scope","rules","out","max","emit","lang","when","unique","initial"],
+       assert:["lang","asserts","onFail"]};
+     const COMMON=["id","type","inputs","start","merge","routing","onError","onErrorValue"];
+     const keep=new Set(COMMON.concat(perType[to]||[]));
+     const drop=Object.keys(n).filter(k=>!keep.has(k));
+     if(drop.length&&nt.dataset.armed!==to){
+       nt.dataset.armed=to;
+       setHint(`もう一度選ぶと ${from} → ${to} に変える（消えるもの: ${drop.join(", ")}）`);
+       return;}
+     for(const k of drop)delete n[k];
+     n.type=to;
+     // その種類が最低限必要にしているものを入れる（空のまま検証エラーにしない）
+     if(to==="join"&&!n.op){n.op="markdown";n.inputs=Object.assign({},n.inputs||{},
+       {items:{type:"any",cardinality:"many"}});}
+     if(to==="loop"&&!n.loop)n.loop={id:n.id,max:5};
+     if(to==="map"&&!n.map){n.map={id:n.id};n.order="input";n.onItemError="error";}
+     if(to==="cond"&&!n.ports){n.lang="expr";
+       n.ports=[{id:"c1",label:"10文字以上",expr:"len(value) >= 10"},{id:"c2",label:"それ以外",else:true}];}
+     if(to==="calc"&&!n.code){n.lang="expr";n.code="inputs[0]";}
+     if(to==="reduce"&&!n.op){n.op="best";n.path="score";}
+     if(to==="quorum"&&!n.condition){n.lang="expr";n.condition="value.score >= 80";n.required=2;}
+     if(to==="race"&&!n.condition){n.lang="expr";n.condition="value.score >= 80";
+       n.onNone="error";n.cancel="pending";n.start={mode:"any"};}
+     if(to==="memory"&&!n.rules){n.scope="run";n.rules=[{port:"in",op:"append"}];
+       n.emit="always";n.out="items";n.lang="expr";n.start={mode:"any"};}
+     if(to==="assert"&&!n.asserts){n.lang="expr";n.onFail="continue";
+       n.asserts=[{name:"点数が8以上",expr:"value.score >= 8",severity:"fail"}];}
+     if((to==="llm"||to==="tool")&&!n.provider&&!n.mock){
+       const ps=Object.keys(Ed.spec.providers||{});
+       if(ps.length)n.provider=ps[0];else n.mock={text:"(mock)"};}
+     syncFromCanvas();openNodeSheet(n.id);
+     setHint(`${from} → ${to} に変えた`+(drop.length?`（消した: ${drop.join(", ")}）`:""));};}
+  $("#sheetBody").querySelectorAll("[data-pc]").forEach(sl=>sl.onchange=()=>{
+    const q=sl.dataset.pc;n.inputs=n.inputs||{};
+    const d=Object.assign({},n.inputs[q]||{});
+    if(sl.value==="many")d.cardinality="many";else delete d.cardinality;
+    if(!d.type)d.type="any";
+    if(d.cardinality||d.type!=="any")n.inputs[q]=d;else{delete n.inputs[q];
+      if(!Object.keys(n.inputs).length)delete n.inputs;}
+    syncFromCanvas();openNodeSheet(n.id);});
+  $("#sheetBody").querySelectorAll("[data-pt]").forEach(sl=>sl.onchange=()=>{
+    const q=sl.dataset.pt;n.inputs=n.inputs||{};
+    const d=Object.assign({type:"any"},n.inputs[q]||{});
+    d.type=sl.value||"any";
+    if(d.cardinality||d.type!=="any")n.inputs[q]=d;else{delete n.inputs[q];
+      if(!Object.keys(n.inputs).length)delete n.inputs;}
+    syncFromCanvas();openNodeSheet(n.id);});
   $("#sheetBody").querySelectorAll("[data-mv]").forEach(b=>{
     b.onclick=()=>moveInput(n.id,b.dataset.port,Number(b.dataset.i),b.dataset.mv);});
   $("#sheetBody").querySelectorAll("[data-mrole]").forEach(sl=>{
@@ -5698,6 +5868,61 @@ function openNodeSheet(id){
      if(oi.value!=="value")delete n.onItemErrorValue;
      else if(n.onItemErrorValue===undefined)n.onItemErrorValue=null;
      syncFromCanvas();openNodeSheet(n.id);};}
+  // mock の返し方
+  {const mk=$("#sheetBody").querySelector('select[data-f="__mk"]');
+   if(mk)mk.onchange=()=>{
+     const keep={};                                  // 返し方を替えたら前の指定は落とす（混ざらないように）
+     if(n.mock&&n.mock.delayMs!=null)keep.delayMs=n.mock.delayMs;
+     const d={text:{text:"(mock)"},tag:{tag:"案"},fixed:{fixed:{score:8}},
+       raw:{raw:'{"score":8}'},rawByIteration:{rawByIteration:['{"score":5}','{"score":9}']},
+       scoreByIteration:{scoreByIteration:[5,7,9]},
+       echoPrompt:{echoPrompt:true},echoInput:{echoInput:true},
+       stream:{stream:["あ","い","う"]},cut:{cut:{needs:96,full:'{"item":"あいうえお"}',at:12}},
+       fail:{fail:"generic"}}[mk.value]||{text:"(mock)"};
+     n.mock=Object.assign({},d,mk.value==="stream"?keep:{});
+     syncFromCanvas();openNodeSheet(n.id);};}
+  {const mv=$("#sheetBody").querySelector('[data-f="__mv"]');
+   if(mv)mv.oninput=mv.onchange=()=>{
+     const k=mockKindOf(n.mock||{});
+     n.mock=n.mock||{};
+     if(k==="text")n.mock.text=mv.value;
+     else if(k==="tag")n.mock.tag=mv.value;
+     else if(k==="raw")n.mock.raw=mv.value;
+     else if(k==="fail")n.mock.fail=mv.value;
+     syncFromCanvas();};}
+  {const md=$("#sheetBody").querySelector('[data-f="__mdelay"]');
+   if(md)md.oninput=()=>{n.mock=n.mock||{};
+     if(md.value==="")delete n.mock.delayMs;else n.mock.delayMs=Number(md.value);
+     syncFromCanvas();};}
+  $("#sheetBody").querySelectorAll("[data-mj]").forEach(el=>el.oninput=()=>{
+    const k=el.dataset.mj,v=el.value.trim();
+    n.mock=n.mock||{};
+    if(!v){delete n.mock[k];el.style.borderColor="";syncFromCanvas();return;}
+    let p;try{p=JSON.parse(v);}catch(_){el.style.borderColor="var(--err)";return;}
+    if(["rawByIteration","scoreByIteration","stream"].includes(k)&&!Array.isArray(p)){
+      el.style.borderColor="var(--err)";return;}
+    n.mock[k]=p;el.style.borderColor="";syncFromCanvas();});
+  // join の keys（キーと位置の対応）
+  {const writeJK=()=>{
+     const rows=[];
+     $("#sheetBody").querySelectorAll("[data-jk]").forEach(el=>{
+       const i=+el.dataset.jk;
+       const pe=$("#sheetBody").querySelector(`[data-jp="${i}"]`);
+       const key=el.value.trim();if(!key)return;
+       rows[i]={key,position:pe&&pe.value!==""?Number(pe.value):0};});
+     const v=rows.filter(Boolean);
+     if(v.length)n.keys=v;else delete n.keys;
+     syncFromCanvas();};
+   $("#sheetBody").querySelectorAll("[data-jk],[data-jp]").forEach(el=>el.oninput=writeJK);
+   $("#sheetBody").querySelectorAll("[data-jkdel]").forEach(el=>el.onclick=()=>{
+     n.keys=(n.keys||[]).filter((_,i)=>i!==+el.dataset.jkdel);
+     if(!n.keys.length)delete n.keys;
+     syncFromCanvas();openNodeSheet(n.id);});
+   const ja=$("#jkAdd");
+   if(ja)ja.onclick=()=>{
+     const cur=Array.isArray(n.keys)?n.keys.slice():[];
+     cur.push({key:"キー"+(cur.length+1),position:cur.length});
+     n.keys=cur;syncFromCanvas();openNodeSheet(n.id);};}
   {const ev=$("#sheetBody").querySelector('[data-json="onErrorValue"]');
    if(ev)ev.oninput=()=>{
      const v=ev.value.trim();
@@ -5816,14 +6041,49 @@ function renameNode(oldId,newId){
   if(Ed.sel&&Ed.sel.kind==="node"&&Ed.sel.id===oldId)Ed.sel.id=newId;
 }
 /* 辺の編集 */
+/* そのノードの入口の名前（JSONの to.port にあたるもの）。書いてあるものを全部集める。 */
+function inPortNames(node){
+  if(!node)return["in"];
+  const q=new Set();
+  if(node.type==="join")q.add("items");
+  for(const k of Object.keys(node.inputs||{}))q.add(k);
+  for(const r of (node.rules||[]))if(r&&r.port)q.add(r.port);       // 記憶ノード
+  for(const e of Ed.spec.edges||[])if(e.to.node===node.id)q.add(e.to.port||"in");
+  if(!q.size)q.add("in");
+  return[...q];
+}
+/* そのノードの出口の名前（JSONの from.port）。ports を作っていればその id。 */
+function outPortNames(node){
+  const q=new Set(["out"]);
+  for(const c of ((node&&node.ports)||[]))if(c&&c.id)q.add(c.id);
+  for(const e of Ed.spec.edges||[])if(node&&e.from.node===node.id)q.add(e.from.port||"out");
+  return[...q];
+}
 function openEdgeSheet(i){
   const e=(Ed.spec.edges||[])[i];if(!e)return;
-  const toLoop=isLoopNode(nodeById(e.to.node)),fromLoop=isLoopNode(nodeById(e.from.node));
-  const kind=(e.loop&&toLoop)?"back":e.loop?"loop":e.else?"else":e.if?"if":"plain";
+  const toNode=nodeById(e.to.node),fromNode=nodeById(e.from.node);
+  const toLoop=isLoopNode(toNode),fromLoop=isLoopNode(fromNode);
+  const toMap=isMapNode(toNode),fromMap=isMapNode(fromNode);
+  const kind=(e.map&&toMap)?"mapback":(e.loop&&toLoop)?"back":e.loop?"loop":e.else?"else":e.if?"if":"plain";
   let h=head(`つながり: ${e.from.node} → ${e.to.node}`);
   const kinds=[{v:"plain",t:"そのまま流す"},{v:"if",t:"if（条件が真のとき）"},{v:"else",t:"else（どれにも当たらないとき）"}];
+  if(toMap)kinds.push({v:"mapback",t:"Map の1件ぶんの戻り線"});
   kinds.push(toLoop?{v:"back",t:"ループの戻り線（繰り返しに戻す）"}:{v:"loop",t:"loop（戻して繰り返す）"});
   h+=fld("種類",sel("__kind",kind,kinds));
+  // 入口・出口の名前。JSONの from.port / to.port と同じものをここで決められる
+  {const ops=outPortNames(fromNode),ips=inPortNames(toNode);
+   const cur=e.from.port||"out",curi=e.to.port||"in";
+   h+=`<div class="fld2">`
+     +fld(`出口の名前（${esc(e.from.node)} から）`,
+       sel("__fport",cur,ops.map(v=>({v,t:v==="out"?"out（ふつうの出口）":v}))
+         .concat(ops.includes(cur)?[]:[{v:cur,t:cur}])))
+     +fld(`入口の名前（${esc(e.to.node)} へ）`,
+       sel("__tport",curi,ips.map(v=>({v,t:v==="in"?"in（ふつうの入口）":v}))
+         .concat(ips.includes(curi)?[]:[{v:curi,t:curi}])))
+     +`</div>`;
+   h+=`<div class="mini">入口の名前を分けると、受け取る側で口ごとに扱いを変えられる`
+     +`（記憶ノードの「入口ごとに何をするか」・Join の <code>items</code> など）。`
+     +`<button id="ePortNew">新しい入口の名前を作る</button></div>`;}
   if(kind==="back")h+=`<div class="mini">これは <b>${esc(e.to.node)}</b> の繰り返しに戻す線。何回まわるか・いつ抜けるかは <b>${esc(e.to.node)}</b> をタップして決める。</div>`;
   if(fromLoop)h+=fld("この出口の役割",sel("__lrole",e.loopRole==="done"?"done":"body",
     [{v:"body",t:"繰り返す先（本体）"},{v:"done",t:"抜けたあと"}]));
@@ -5833,10 +6093,25 @@ function openEdgeSheet(i){
   {const sib=(Ed.spec.edges||[]).filter(x=>!x.loop&&x.to.node===e.to.node&&(x.to.port||"in")===(e.to.port||"in"));
    if(sib.length>1&&!e.loop){h+=fld("何番目に渡すか（0が先）",num("position",e.position));
      h+=`<div class="mini">順番はノード編集の「入力の順番」でも入れ替えられる。</div>`;}}
+  // どの値を取り出すか。送り元が項目を宣言していなくても書けるようにする（JSONでは書けるので）
+  {const keys=schemaKeys(fromNode);
+   h+=fld("渡す値（送り元のどこを取り出すか）",
+     txt("pick",e.pick,keys.length?keys.join(" / "):"score / items.0 / a.b（空なら来た値ぜんぶ）"));
+   if(keys.length)h+=`<div class="mini">${esc(e.from.node)} が宣言している項目: `
+     +keys.map(k=>`<button data-pk="${esc(k)}">${esc(k)}</button>`).join(" ")
+     +` <button data-pk="">ぜんぶ</button></div>`;
+   else h+=`<div class="mini">送り元が項目を宣言していないので候補は出せない。`
+     +`入れ子は <code>a.b</code>、配列は <code>items.0</code> と書く。</div>`;}
   h+=fld("値の変換",sel("transform",e.transform,[{v:"",t:"なし"},
     {v:"list_to_text",t:"配列 → 箇条書きの文（リストを次のLLMに渡すとき）"},
     {v:"json_stringify",t:"json_stringify（json→text）"},
     {v:"json_parse",t:"json_parse（text→json）"}]));
+  h+=fld("型のチェック",sel("__vchk",getP(e,"validation.typeCheck")==="bypass"?"bypass":"",
+    [{v:"",t:"する（型が合わないと失敗・既定）"},
+     {v:"bypass",t:"しない（bypass・そのまま渡す）"}]));
+  if(getP(e,"validation.typeCheck")==="bypass")
+    h+=`<div class="mini" style="color:var(--warn)">チェックを外している。合わない値がそのまま次へ行く`
+      +`（次のノードで別のエラーになることがある）。</div>`;
   h+=`<div class="mini">線が重なって見づらいときは、<b>線の途中の丸をドラッグ</b>すると形を変えられる。</div>`;
   h+=`<div class="row">${bendOf(e)?`<button id="eStraight">線の形を戻す</button>`:""}<button class="danger" id="eDel">このつながりを削除</button></div>`;
   openSheet(h);bindClose();bindFields(e);
@@ -5844,17 +6119,96 @@ function openEdgeSheet(i){
   if(st)st.onclick=()=>{setBend(e,null);syncFromCanvas();openEdgeSheet(i);setHint("線の形を戻した");};
   const kk=$("#sheetBody").querySelector('[data-f="__kind"]');
   kk.onchange=()=>{
-    delete e.if;delete e.else;delete e.loop;
+    delete e.if;delete e.else;delete e.loop;delete e.map;
     if(kk.value==="if")e.if="true==true";
     else if(kk.value==="else")e.else=true;
     else if(kk.value==="back")e.loop={id:loopIdOf(nodeById(e.to.node))};
+    else if(kk.value==="mapback")e.map={id:mapIdOf(nodeById(e.to.node)||{id:e.to.node})};
     else if(kk.value==="loop")e.loop={id:"loop"+i,max:3};
     syncFromCanvas();openEdgeSheet(i);
   };
+  // 出口・入口の名前
+  {const fp=$("#sheetBody").querySelector('select[data-f="__fport"]');
+   if(fp)fp.onchange=()=>{e.from.port=fp.value||"out";syncFromCanvas();openEdgeSheet(i);};}
+  {const tp=$("#sheetBody").querySelector('select[data-f="__tport"]');
+   if(tp)tp.onchange=()=>{
+     const old=e.to.port||"in";
+     e.to.port=tp.value||"in";
+     renumberPort(e.to.node,e.to.port);renumberPort(e.to.node,old);
+     syncFromCanvas();openEdgeSheet(i);};}
+  {const pn=$("#sheetBody").querySelector("#ePortNew");
+   if(pn)pn.onclick=()=>{
+     const q=(prompt("新しい入口の名前（日本語でよい。空白と . \" { } > は使えない）","追加")||"").trim();
+     if(!q)return;
+     if(/[\s."{}>]/.test(q))return setHint("入口の名前に使えない文字がある");
+     const old=e.to.port||"in";
+     e.to.port=q;renumberPort(e.to.node,q);renumberPort(e.to.node,old);
+     syncFromCanvas();openEdgeSheet(i);setHint("入口の名前を "+q+" にした");};}
+  // 渡す値（pick）の候補ボタン
+  $("#sheetBody").querySelectorAll("[data-pk]").forEach(b=>b.onclick=()=>{
+    if(b.dataset.pk)e.pick=b.dataset.pk;else delete e.pick;
+    syncFromCanvas();openEdgeSheet(i);});
+  // 型のチェック
+  {const vc=$("#sheetBody").querySelector('select[data-f="__vchk"]');
+   if(vc)vc.onchange=()=>{
+     if(vc.value==="bypass"){e.validation=Object.assign({},e.validation||{},{typeCheck:"bypass"});}
+     else if(e.validation){delete e.validation.typeCheck;
+       if(!Object.keys(e.validation).length)delete e.validation;}
+     syncFromCanvas();openEdgeSheet(i);};}
   const lr=$("#sheetBody").querySelector('[data-f="__lrole"]');
   if(lr)lr.onchange=()=>{if(lr.value==="done")e.loopRole="done";else delete e.loopRole;
     syncFromCanvas();openEdgeSheet(i);};
   $("#eDel").onclick=()=>{Ed.spec.edges.splice(i,1);Ed.sel=null;closeSheet();syncFromCanvas();setHint("つながりを削除した");};
+}
+/* このハーネス全体の設定。JSONの metadata と vars を画面からも決められるようにする。 */
+function openSpecSheet(){
+  const m=Ed.spec.metadata=Ed.spec.metadata||{};
+  const vars=Ed.spec.vars||{};
+  const ks=Object.keys(vars);
+  let h=head("このハーネスの設定");
+  h+=`<div class="fld2">${fld("名前",txt("metadata.name",m.name,"改稿ループ"))}`
+    +`${fld("版（version）",txt("metadata.version",m.version,"1"))}</div>`;
+  h+=`<div class="mini">名前と版は書き出し・共有リンク・実行の記録（<code>harnessVersion</code>）に入る。`
+    +`<b>版は自分で上げる</b>（勝手には変えない）。</div>`;
+  h+=`<div class="fld"><span>どこからでも読める値（vars）</span><div>`;
+  if(!ks.length)h+=`<div class="mini">まだ1つも無い。下の「＋ 値を足す」で足す。</div>`;
+  ks.forEach((k,i)=>{
+    h+=`<div class="ordrow"><b>${i+1}</b>`
+      +`<input type="text" data-vk="${i}" value="${esc(k)}" placeholder="名前" style="flex:1;min-width:70px">`
+      +`<input type="text" data-vv="${i}" value="${esc(JSON.stringify(vars[k]))}" placeholder='8 / "ていねい"' style="flex:1">`
+      +`<button data-vdel="${i}">削除</button></div>`;});
+  h+=`</div></div><div class="mini"><button id="vAdd">＋ 値を足す</button>`
+    +` 値は <b>JSON</b> で書く（数は <code>8</code>、文字は <code>"ていねい"</code>）。`
+    +`<br>式からは <code>vars.名前</code>、本文テンプレからは <code>{{{vars.名前}}}</code> で読める。`
+    +`名前は日本語でよい。</div>`;
+  h+=`<div class="fld"><span>図の並び（同時に届いたときの順番だけに使う）</span>`
+    +sel("metadata.flow",m.flow||"tb",[{v:"tb",t:"縦に流す（上が先）"},{v:"lr",t:"横に流す（左が先）"}])+`</div>`;
+  h+=`<div class="mini">これは<b>見た目と「同時のときの並び順」だけ</b>。何が動くか・何が流れるかは変わらない。</div>`;
+  openSheet(h);bindClose();bindFields(Ed.spec);
+  const writeVars=()=>{
+    const o={};let bad=false;
+    $("#sheetBody").querySelectorAll("[data-vk]").forEach(el=>{
+      const i=+el.dataset.vk;
+      const ve=$("#sheetBody").querySelector(`[data-vv="${i}"]`);
+      const k=el.value.trim();if(!k)return;
+      let v;try{v=JSON.parse((ve&&ve.value.trim())||"null");}
+      catch(_){if(ve)ve.style.borderColor="var(--err)";bad=true;return;}
+      if(ve)ve.style.borderColor="";
+      o[k]=v;});
+    if(bad)return;
+    if(Object.keys(o).length)Ed.spec.vars=o;else delete Ed.spec.vars;
+    syncFromCanvas();};
+  $("#sheetBody").querySelectorAll("[data-vk],[data-vv]").forEach(el=>el.oninput=writeVars);
+  $("#sheetBody").querySelectorAll("[data-vdel]").forEach(el=>el.onclick=()=>{
+    const i=+el.dataset.vdel;const o={};
+    Object.keys(Ed.spec.vars||{}).forEach((k,j)=>{if(j!==i)o[k]=Ed.spec.vars[k];});
+    if(Object.keys(o).length)Ed.spec.vars=o;else delete Ed.spec.vars;
+    syncFromCanvas();openSpecSheet();});
+  {const va=$("#vAdd");
+   if(va)va.onclick=()=>{
+     const o=Object.assign({},Ed.spec.vars||{});
+     let i=1;while(o["値"+i]!==undefined)i++;
+     o["値"+i]=0;Ed.spec.vars=o;syncFromCanvas();openSpecSheet();};}
 }
 /* 分岐のしかたを選ばせる（隠れた既定値を作らない） */
 function askRouting(nodeId,cb){
@@ -6335,6 +6689,7 @@ function openExpSheet(){
   };
 }
 let reviewCtl=null;
+$("#btnSpec").onclick=openSpecSheet;
 $("#btnExp").onclick=openExpSheet;
 $("#btnExport").onclick=openExportSheet;
 $("#btnImport").onclick=openImportSheet;
@@ -7011,6 +7366,8 @@ checkVersion();                                             // 古い版を握�
 setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 /* 調査用の覗き口。画面から見えない中身（いまの実行・いまのSpec）を読むだけ。
    不具合調べと自動テストで使う（ここから書き換えはできない） */
+// 画面の編集シートを直接開く口（自動テスト用。図をタップしなくても開ける）
+window.__ui={openNodeSheet,openEdgeSheet,openSpecSheet,closeSheet};
 window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
   nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;},
   // Runtime をそのまま呼べる口（自動テスト用。画面を触らずに走らせて中身を見る）
@@ -7282,11 +7639,31 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 使用量は**失敗した呼び出しも数える**（実際にモデルを動かしているため）。
 - 版が古いと画面の上にお知らせが出る。リロードすると新しくなる。
 
+**このハーネスの設定** … 名前・版・**vars（どこからでも読める値）**・図の流れる向きを決める。
+\`vars\` は式から \`vars.名前\`、本文テンプレから \`{{{vars.名前}}}\` で読める。
+
 ## 14. 書き出す・渡す・戻す
 - **書き出す**: HSL（人が読める1枚のテキスト）か JSON。共有リンクも作れる（中身はURLに入る・サーバには送らない）。
 - **外部のLLMに直させる**: 「書き出す」→ 説明付きの1枚を渡し、返ってきた文を「取り込む」に貼ると、**差分を見てから**適用できる。
 - **取り込む**: HSL / JSON / 共有リンクのどれでも。読めないときは行番号付きで理由が出る。
 - **JSONで直に書く**: このシートの上の「**JSONで書く**」タブに、ノードと線に書ける設定が全部載っている。そこも全文コピーできるので、外部のLLMに渡す説明としてそのまま使える。
+
+## 14.3 画面で決められることと JSON で書けることは同じ
+
+**JSON に書けることは画面でも決められる。画面で決めたことは必ず JSON に入る。**
+片方だけでできることは作らない（自動テスト \`harness-parity.mjs\` で毎回確かめている）。
+
+| 決めたいもの | どこで |
+|---|---|
+| ハーネスの名前・版・**どこからでも読める値（vars）**・図の流れる向き | **このハーネスの設定** |
+| ノードの**種類**・ID・中身ぜんぶ | ノードをタップ |
+| **入口ごとの受け取り方**（1つだけ／複数まとめて・型） | ノードをタップ →「入口ごとの受け取り方」 |
+| mock（テスト用）の返し方 | ノードをタップ → Provider を mock にすると出る |
+| **入口・出口の名前**・渡す値（pick）・値の変換・**型のチェック** | 線をタップ |
+| 線の種類（そのまま／if／else／ループの戻り／**Map の1件ぶんの戻り**） | 線をタップ |
+| ノードの位置・大きさ・線の形 | ドラッグ（**見た目だけ**。JSONの \`metadata\` に入る） |
+
+\`order\`（Map の並べ方）だけは \`"input"\` しか動かないので、読み取り専用で理由を出している。
 
 ## 14.5 この使い方には3つのタブがある
 
@@ -7819,6 +8196,32 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 ~~~
 ${HELP_JSON_EXAMPLE}
 ~~~
+
+## 12.5 このキーは画面のどこで決められるか
+
+**JSON に書けることは画面でも決められる**（片方だけでできることは作らない）。
+
+| JSON | 画面 |
+|---|---|
+| \`metadata.name\` / \`metadata.version\` / \`metadata.flow\` | このハーネスの設定 |
+| \`vars\` | このハーネスの設定 →「どこからでも読める値」 |
+| \`providers\` | モデル（この端末の中で動くLLM）／ノードの Provider |
+| \`modules\` | 書き出す →「いまのハーネスをモジュールにする」 |
+| ノードの \`type\` | ノードをタップ →「種類」（その種類で読まないキーは消える・何が消えるか出る） |
+| \`inputs.<入口>.cardinality\` / \`.type\` | ノードをタップ →「入口ごとの受け取り方」 |
+| \`mock\` の中身 | ノードをタップ → Provider を mock にすると「mock の返し方」が出る |
+| \`generation.topP\` | ノードをタップ → topP |
+| \`keys\`（json_object） | Join のノード →「キーと位置の対応」 |
+| \`order\`（map） | \`"input"\` だけなので読み取り専用（理由を画面に出している） |
+| \`from.port\` / \`to.port\` | 線をタップ →「出口の名前」「入口の名前」 |
+| \`pick\` | 線をタップ →「渡す値」（ノード側の「どれを使うか」からでも） |
+| \`transform\` | 線をタップ →「値の変換」 |
+| \`validation.typeCheck\` | 線をタップ →「型のチェック」 |
+| \`map:{id}\` | 線をタップ → 種類「Map の1件ぶんの戻り線」 |
+| \`metadata.layout\` / \`sizes\` / \`bends\` | ドラッグ（**見た目だけ**） |
+
+逆に、**画面で決めたことは必ず JSON に入る**（画面は JSON を書き換えているだけ）。
+自動テスト \`tests/harness-parity.mjs\` が両方向を毎回確かめている。
 
 ## 13. 書いたあとの確かめ方
 

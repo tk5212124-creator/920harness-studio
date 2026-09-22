@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.30.0 記憶（値をためる・入れ替える）
+## 1. 現状 — v0.31.0 画面と JSON を揃える
 
 | 段階 | 状態 |
 |---|---|
@@ -57,7 +57,8 @@ iPhone でもPCでも同じ操作。
 | 詳しい動き v0.28.0（第3タブ = Runtime意味論の全部・検証済みの完全JSON例16本／日本語 pick の修正） | 実装済み |
 | 式リファレンスの実測修正 v0.28.1（`&&`/`\|\|`/`!`・`input.<ID>`・`first_match` の priority・wllama の全設定。文書を実装へ合わせ、自己テストで固定） | 実装済み |
 | 先着 v0.29.0（`race`＝先に条件を満たしたものを採り、まだ動いていない候補を止める。onNone 4種／検証がLLM以外のノードにも届くよう修正） | 実装済み |
-| **記憶 v0.30.0（`memory`＝入口ごとに ためる/入れ替える/消す/読むだけ。Run 全体か場ごとか・出し方4種・流す条件・上限と重複なし。中身は実行の記録に残り Resume でも続く／診断が「Runtime が読まないキー」を名指し）** | **いまここ** |
+| 記憶 v0.30.0（`memory`＝入口ごとに ためる/入れ替える/消す/読むだけ。Run 全体か場ごとか・出し方4種・流す条件・上限と重複なし。中身は実行の記録に残り Resume でも続く／診断が「Runtime が読まないキー」を名指し） | 実装済み |
+| **画面と JSON の対応 v0.31.0（JSONで書けることは画面でも決められる。入口の名前・受け取る数と型・型チェック・Mapの戻り線・mockの中身・topP・json_objectのkeys・ノードの種類変更・ハーネスの名前/版/vars。両方向を `harness-parity.mjs` で毎回確かめる）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -1105,6 +1106,7 @@ node tests/harness-outputs.mjs      # 出力の項目（出力1・出力2…）�
 node tests/harness-calc.mjs         # 計算ノード（式/JavaScript）・条件分岐ノード・ループのJSモード・使い方の？とJSONタブ
 node tests/harness-race.mjs         # 先着（race）— 足す・中身を決める・実行して候補が止まる・記録・診断・使い方3タブ
 node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱い・毎周たまる・記録・診断・使い方3タブ
+node tests/harness-parity.mjs       # 画面とJSONの対応（JSONの全キーに画面の欄があるか・画面の操作がJSONに入るか）
 MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
 
