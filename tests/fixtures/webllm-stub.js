@@ -7,7 +7,7 @@ window.__installStub=function(){
     "関連度2__Judge":{tokenScores:[78,72,88],answerUsefulness:71},
     "回答生成":{items:["読書をする","映画を見る","料理をする"]},
     "回答Judge":{questionFit:85,specificity:75,materialUse:70}};
-  const S=window.__stub={loads:0,releases:0,resets:0,calls:0,kvPeak:0,oomAt:null,oomFired:0,out:null,eng:null};
+  const S=window.__stub={loads:0,releases:0,resets:0,calls:0,kvPeak:0,oomAt:null,oomFired:0,hangAt:null,hung:0,out:null,eng:null};
   const P=window.__dbg.eng.PROVIDERS;
   const mkEngine=function(){
     const e={kv:0};
@@ -18,6 +18,8 @@ window.__installStub=function(){
       var chars=(opt.messages||[]).reduce(function(a,m){return a+String(m.content||"").length;},0);
       e.kv+=chars;                                  // resetChat しないと積みっぱなしになる
       if(e.kv>S.kvPeak)S.kvPeak=e.kv;
+      // hangAt: その回で返事を返さない（端末が推論中に落ちた状況を作るため）
+      if(S.hangAt&&S.calls===S.hangAt){S.hung=1;await new Promise(function(){});}
       if(S.oomAt&&S.calls===S.oomAt){S.oomFired++;
         throw new Error("Out of memory: failed to allocate buffer");}
       var text=JSON.stringify(S.out||{ok:true});

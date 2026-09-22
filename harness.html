@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 何十回呼んでも落ちないようにする v0.33.0</title>
+<title>Harness Studio — 落ちても記録が残るようにする v0.34.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.33.0 · 何十回呼んでも落ちない</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.34.0 · 落ちても記録が残る</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -206,6 +206,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <button id="repCopy" class="primary">まとめてコピー（Spec＋ログ＋端末）</button><button id="repSave">まとめて保存</button></div>
 <div class="row"><label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--sub)"><input type="checkbox" id="logVerbose"> 詳しく（送った文・値の全文もログに出す）</label>
 <button id="trcCopy">実行の記録をコピー（機械が読む全部入り）</button><button id="trcSave">実行の記録を保存</button></div>
+<div class="row"><button id="bbShow">落ちる前の記録（端末が落ちても残る）</button></div>
 <div class="mini" id="logMsg">うまくいかないときは「まとめてコピー」を押して、その文をそのまま外部のLLMや相談先に貼れる（Spec・実行ログ・失敗の理由・端末の対応状況・実行の記録が1つに入る）。</div>
 <div class="mini">Provider は「推論する / Usageを返す / cancelに応答する / 失敗理由を返す」だけ。失敗の波及（fail_fast）は Runtime だけが判断する。</div></div>
 
@@ -1345,6 +1346,135 @@ function mapWebLLMError(e,def){
    weightsUrl があれば、そのモデルの重みだけ自前の置き場（このサイトなど）から取る。
    wasm（model_lib）は WebLLM が元から持っているものをそのまま使う。 */
 /* 「読み込み中に画面が落ちた」を次に開いたときに分かるようにする目印 */
+/* ==================================================================
+   ブラックボックス（落ちても残る記録）
+   端末が落ちるとメモリの中のログは全部消える。画面のログも Checkpoint も間に合わない。
+   そこで **1回の書き込みを極小にして localStorage に置く**。
+   localStorage は同期なので、setItem が返った時点でもう残っている＝落ちても消えない。
+
+   - 進んだ所 … hbb.cur（1件だけ上書き。いまどの Work Item か）
+   - 危ない所 … hbb.open（始める前に書いて、終わったら消す。落ちたらこれが残る＝そこで死んだ）
+   - 流れ     … hbb.0 .. hbb.<CAP-1> の輪（古いものから上書き）
+   1回の書き込みは数百バイト。全部足しても数十KB にしかならない。
+   ================================================================== */
+const BB_CAP=300,BB_P="hbb.";
+const BB={t0:Date.now(),runId:null,n:0,head:0,on:true};
+const bbSet=(k,v)=>{try{localStorage.setItem(BB_P+k,v);return true;}
+  catch(e){BB.on=false;BB.err=String((e&&e.name)||e).slice(0,40);return false;}};
+const bbDel=k=>{try{localStorage.removeItem(BB_P+k);}catch(e){}}
+const bbGet=k=>{try{return localStorage.getItem(BB_P+k);}catch(e){return null;}};
+/* 1件が大きくなりすぎないように切る。
+   文字列の途中で切ると JSON として読めなくなるので、**中の文字列を短くする**やり方で縮める。
+   それでも入らなければ要点（時刻と種類）だけ残す。_cut がその印。 */
+function bbCut(o){
+  let s=JSON.stringify(o);
+  if(s.length<=400)return s;
+  const o2={};
+  for(const k of Object.keys(o)){const v=o[k];
+    o2[k]=(typeof v==="string"&&v.length>120)?v.slice(0,120)+"…":v;}
+  o2._cut=1;s=JSON.stringify(o2);
+  return s.length<=400?s:JSON.stringify({t:o.t,e:o.e,_cut:2});
+}
+/* 輪に1件足す（これが「流れ」になる） */
+function bbPush(e,x){
+  if(!BB.on)return;
+  const o=Object.assign({t:Date.now()-BB.t0,e},x||{});
+  bbSet(String(BB.head),bbCut(o));
+  BB.head=(BB.head+1)%BB_CAP;BB.n=Math.min(BB.n+1,BB_CAP);
+  bbSet("h",BB.head+"|"+BB.n+"|"+(BB.runId||"")+"|"+HARNESS_BUILD);
+}
+/* いまどこを通っているか（1件だけ上書きするので書き込みが軽い） */
+function bbCur(x){if(BB.on)bbSet("cur",bbCut(Object.assign({t:Date.now()-BB.t0},x||{})));}
+/* 危ない所の前後。落ちると open が残る＝そこで死んだと分かる */
+function bbOpen(e,x){if(BB.on)bbSet("open",bbCut(Object.assign({t:Date.now()-BB.t0},{e},x||{})));}
+function bbClose(e,x){if(!BB.on)return;bbDel("open");bbPush(e,x);}
+/* 端末の限界を記録する（落ちた原因を切り分けるのに要る） */
+async function bbDevice(){
+  const d={ua:(typeof navigator!=="undefined"&&navigator.userAgent||"").slice(0,120),
+    mem:(typeof navigator!=="undefined"&&navigator.deviceMemory)||null,
+    heap:(typeof performance!=="undefined"&&performance.memory)
+      ?Math.round(performance.memory.usedJSHeapSize/1048576):null,
+    heapCap:(typeof performance!=="undefined"&&performance.memory)
+      ?Math.round(performance.memory.jsHeapSizeLimit/1048576):null,
+    gpu:null};
+  try{
+    if(typeof navigator!=="undefined"&&navigator.gpu){
+      const a=await navigator.gpu.requestAdapter();
+      if(a){const L=a.limits||{};
+        d.gpu={maxBuf:L.maxBufferSize||null,maxBind:L.maxStorageBufferBindingSize||null,
+          vendor:(a.info&&a.info.vendor)||null,arch:(a.info&&a.info.architecture)||null};}
+      else d.gpu="adapterが取れない";
+    }else d.gpu="WebGPUなし";
+  }catch(e){d.gpu="調べられない";}
+  return d;
+}
+/* いま残っている記録を読む（落ちたあとに見る） */
+function bbRead(){
+  const h=bbGet("h");if(!h)return null;
+  const[headS,nS,runId,build]=String(h).split("|");
+  const head=Number(headS)||0,n=Number(nS)||0;
+  const rows=[];
+  for(let i=0;i<n;i++){
+    const idx=(head-n+i+BB_CAP*2)%BB_CAP;
+    const v=bbGet(String(idx));if(!v)continue;
+    try{rows.push(JSON.parse(v));}catch(_){rows.push({e:"（読めない）",raw:String(v).slice(0,80)});}
+  }
+  let open=null,cur=null;
+  try{const o=bbGet("open");if(o)open=JSON.parse(o);}catch(_){}
+  try{const c=bbGet("cur");if(c)cur=JSON.parse(c);}catch(_){}
+  /* 「途中で消えた」の判定。最後の1件だけで決めてはいけない
+     （ページを離れる時は left のあとに vis が来るなど、後ろに別の記録が付く）。
+     いちばん新しい「実行の始まり（run）」より後ろに、
+       - 実行の終わり（end）か、ページを離れた（left）が1つでもある → きれいに終わった
+       - どちらも無い → 途中で消えた
+     加えて、始めたのに終わっていないもの（open）が残っていれば、それは落ちた場所そのもの。
+     実行を始めていない（run が無い）なら、報せることは何も無い＝きれい扱い。 */
+  let iRun=-1;for(let i=rows.length-1;i>=0;i--)if(rows[i].e==="run"){iRun=i;break;}
+  const closed=iRun<0?true:rows.slice(iRun).some(x=>x.e==="end"||x.e==="left");
+  return{runId,build,rows,open,cur,closed,startedRun:iRun>=0,clean:!open&&closed};
+}
+function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));bbDel("h");bbDel("open");bbDel("cur");
+  BB.head=0;BB.n=0;}
+const HARNESS_BUILD="0.34.0";
+/* 前回の記録は、今回書き始める前に読み出しておく（輪は古いものから上書きするので、後からでは遅い）。
+   読み出したら捨てる。こうすると輪の先頭（BB.head=0）から今回の分だけを書ける。 */
+const BB_PREV=bbRead();
+bbClear();
+function bbHeap(){try{return(typeof performance!=="undefined"&&performance.memory)
+  ?Math.round(performance.memory.usedJSHeapSize/1048576):null;}catch(e){return null;}}
+/* 1回の実行の始まり。ここで時計を0に戻し、端末の限界も記録する
+   （落ちた原因が「端末の上限」なのかを後から切り分けるのに要る）。 */
+async function bbRunStart(spec,tag){
+  BB.t0=Date.now();BB.runId="r"+Date.now().toString(36);BB.calls=0;
+  bbPush("run",{tag:tag||"run",v:HARNESS_BUILD,
+    name:(spec&&spec.metadata&&spec.metadata.name)||null,
+    nodes:((spec&&spec.nodes)||[]).length,edges:((spec&&spec.edges)||[]).length,heap:bbHeap()});
+  try{bbPush("dev",await bbDevice());}
+  catch(e){bbPush("dev",{err:String((e&&e.message)||e).slice(0,80)});}
+}
+/* 記録を人が読める1枚の文にする（そのまま相談先に貼れる形にする） */
+function bbText(r){
+  r=(r===undefined?bbRead():r);
+  if(!r)return "（記録なし。まだ一度も実行していないか、この端末で localStorage が使えない）\n";
+  const L=[];
+  L.push("# 落ちる前の記録（ブラックボックス）");
+  L.push("版: "+(r.build||"?")+" / 実行: "+(r.runId||"(実行前)")+" / 件数: "+r.rows.length
+    +(r.rows.length>=BB_CAP?"（これより古いものは上書きで消えている）":""));
+  L.push("終わり方: "+(r.clean?"最後まで行った（end か left で終わっている）"
+    :"**途中で消えた**（端末が落ちたか、いきなり閉じられた）"));
+  if(r.open)L.push("**始めたのに終わっていない＝ここで消えた: "+JSON.stringify(r.open)+"**");
+  if(r.cur)L.push("最後に通った Work Item: "+JSON.stringify(r.cur));
+  if(!BB.on)L.push("注意: 途中で localStorage へ書けなくなった（いっぱいか、書き込み禁止）。記録はそこまで。");
+  L.push("");
+  L.push("## 流れ（古い順・t は実行の始まりからのミリ秒）");
+  L.push("  e の意味: run=実行開始 / dev=端末の限界 / load=モデルの読み込み / call=推論1回"
+    +" / vis=表に出た・裏に回った / err=例外 / end=実行の終わり / left=ページを離れた");
+  for(const o of r.rows){
+    const rest=Object.assign({},o);delete rest.t;delete rest.e;
+    L.push(("       "+(o.t==null?"?":String(o.t))).slice(-8)+"ms  "+String(o.e||"?").padEnd(5," ")
+      +"  "+JSON.stringify(rest));}
+  return L.join("\n")+"\n";
+}
 const LOADING_KEY="harness_loading_v1";
 function markLoading(model,def){try{localStorage.setItem(LOADING_KEY,JSON.stringify({model,at:Date.now(),
   ctx:(def&&def.overrides&&def.overrides.context_window_size)||null}));}catch(e){}}
@@ -1784,7 +1914,14 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
   if(adapter.ensureLoaded){
     log&&log("prov",`⚙ ${adapter.id}: ${model} をロード確認`
       +(adapter.id==="webllm"&&typeof SITE_WEIGHTS!=="undefined"&&SITE_WEIGHTS[model]?"（重みはこのサイトから）":""));
-    handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:adapter.id,model}),adapter,signal,ctl&&ctl.onProgress);
+    /* 落ちても残る記録。始める前に open を書き、終わったら消す。
+       落ちると open が残る＝「モデルの読み込み中に消えた」と次に開いたとき分かる。 */
+    const bbT0=Date.now();
+    bbOpen("load",{n:node.id,a:adapter.id,m:model,ctx:contextWindowOf(def,node),heap:bbHeap()});
+    try{handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:adapter.id,model}),adapter,signal,ctl&&ctl.onProgress);}
+    catch(e){bbClose("load",{n:node.id,ms:Date.now()-bbT0,
+      err:String((e&&(e.code||e.message))||e).slice(0,80)});throw e;}
+    bbClose("load",{n:node.id,ms:Date.now()-bbT0,heap:bbHeap()});
   }
   /* maxTokens に届いて途中で切れたときの扱い（node.onTruncate）
        error（既定）… そこで止める
@@ -1795,6 +1932,7 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
   const badPol=node.onBadOutput||"error";
   const msgs={messages:buildMessages(node,inputs,ex,run)};
   let gen=generation,tries=0,badTries=0,res=null;
+  let bbInCall=false,bbCT0=0,bbCall=null;      // 落ちても残る記録用（推論1回ぶんの見出し）
   /* 実際にモデルへ送った文を残す（「なぜこの答えになったのか」はここを見ないと分からない）。
      checkpoint が膨らまないように1通 4000字で切る。 */
   attempt.request={provider:node.provider||(node.mock?"mock":null),adapter:adapter.id,model,
@@ -1810,11 +1948,23 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
       if(fit){attempt.context=fit;
         log&&log("dim",`  ${node.id} 送る文 ${fit.chars}字（少なく見て約${fit.estPromptTokens}トークン）`
           +` ＋ maxTokens ${fit.maxTokens} / 窓 ${fit.window}`);}
+      /* 推論1回のぶんを「落ちても残る記録」に入れる。
+         推論中に落ちるのがいちばん多いので、送る前に open を書いておく。 */
+      BB.calls=(BB.calls||0)+1;bbCT0=Date.now();bbInCall=true;
+      /* ch（送った文の字数）と mt は、終わった記録にも残す。
+         回を追うごとに ch が伸びていないか＝文脈が積もっていないかを、あとから読めるようにする。 */
+      bbCall={n:node.id,i:BB.calls,mdl:model,
+        ch:(msgs.messages||[]).reduce((a,m)=>a+String(m.content==null?"":m.content).length,0),
+        mt:(gen&&gen.maxTokens)!=null?gen.maxTokens:null};
+      bbOpen("call",Object.assign({},bbCall,{heap:bbHeap()}));
       res=await adapter.invoke({
         input:msgs,model,generation:gen,schema,signal,handle,providerDef:def,node,inputs,ex,
         onToken:t=>{attempt.partialOutput=(attempt.partialOutput||"")+t;ctl&&ctl.onToken&&ctl.onToken(node.id,t);}
       });
+      bbInCall=false;bbClose("call",Object.assign({},bbCall,{ms:Date.now()-bbCT0,heap:bbHeap()}));
     }catch(err){
+      if(bbInCall){bbInCall=false;bbClose("call",Object.assign({},bbCall,{ms:Date.now()-bbCT0,
+        err:String((err&&(err.code||err.message))||err).slice(0,80),heap:bbHeap()}));}
       // Provider が「リセットが要る」と言ってきたら、その場で engine を捨てる。
       // 捨てずに次を呼ぶと壊れた状態のまま呼び直すことになり、端末ごと落ちやすい。
       if(err&&err.providerState==="needs_reset"&&adapter.ensureLoaded){
@@ -3170,6 +3320,9 @@ async function processOneWorkItem(spec,run,store,log,ctl){
   const wi=run.workQueue[at];const ex=run.executions[wi.execId];
   if(!ex){run.workQueue.splice(at,1);return{kind:"skip"};}
   const node=byId[ex.nodeId];if(!node){failRun(run,ex.nodeId,{code:"REFERENCE_ERROR",message:"no node"},store,false);return{kind:"failed"};}
+  /* 落ちても残る記録の「いまどこ」。1件を上書きするだけなので、毎回書いても軽い。 */
+  bbCur({w:wi.phase,n:node.id,ty:node.type,q:run.workQueue.length,
+    it:ex.iteration==null?null:ex.iteration,li:ex.loopInstanceId||null});
 
   if(wi.phase==="execute"){
     ex.status="running";
@@ -3832,7 +3985,7 @@ async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
   if(hitGuard&&run.status==="running"){
     run.status="paused";run.resumable=true;
     log&&log("err",`■ 安全装置: ${RUN_GUARD}回まわったので止めた（打ち切り条件が真にならないか、無限ループ）。Resume で続けられる`);
-    if(store)store.save(run);return run;}
+    if(store)store.save(run);bbPush("end",{st:run.status,g:guard,heap:bbHeap()});return run;}
   if(run.status==="running"){
     const anyWork=run.workQueue.length>0;const anyReady=Object.values(run.executions).some(e=>e.status==="ready");
     if(!anyWork&&!anyReady){
@@ -3848,6 +4001,7 @@ async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
             ?`（${why.map(w=>w.node+": "+w.why).join(" / ")}）`:"")},store,false);}
     }
   }
+  bbPush("end",{st:run.status,g:guard,calls:(run.totals&&run.totals.apiCalls)||0,heap:bbHeap()});
   return run;}
 function startRun(spec,run){const start=(spec.nodes.find(n=>n.type==="input")||spec.nodes[0]);const act=`act#${++run.actSeq}`;
   makeExec(run,start.id,{activationId:act,loopInstanceId:null,iteration:null});}
@@ -7703,6 +7857,13 @@ function reportText(){
   L.push("## Spec（JSON）");
   L.push($("#spec").value.trim());
   L.push("");
+  L.push("## 落ちる前の記録（今回）");
+  L.push(bbText().trim());
+  if(BB_PREV&&!BB_PREV.clean){
+    L.push("");
+    L.push("## 落ちる前の記録（前回・最後まで行かずに終わっている）");
+    L.push(bbText(BB_PREV).trim());}
+  L.push("");
   L.push("## 実行の記録（機械が読む用・値は800字で切ってある。全文は「実行の記録をコピー」）");
   if(cur){let sp=Ed.spec;try{sp=JSON.parse($("#spec").value);}catch(_){}
     try{L.push(traceText(sp,cur,{cap:800}));}catch(e){L.push("（作れない: "+errText(e)+"）");}}
@@ -7738,6 +7899,26 @@ function traceOut(){
   let sp=Ed.spec;try{sp=JSON.parse($("#spec").value);}catch(_){}
   try{return traceText(sp,cur,{});}catch(e){return "（記録を作れない: "+errText(e)+"）";}
 }
+/* ---- 落ちても残る記録を見せる ----
+   端末が落ちると画面のログは消える。これは localStorage に1手ずつ書いてあるので残る。 */
+function openBBSheet(r){
+  const rec=(r===undefined?bbRead():r);
+  const txt=bbText(rec);
+  openSheet(`<h3>落ちる前の記録（ブラックボックス）</h3>
+    <div class="mini">端末が落ちても残る記録。実行中は1手ごとに極小の記録を localStorage へ書いている
+      （localStorage は同期なので、書き終わった分は落ちても消えない）。
+      ${rec&&!rec.clean?"<b>この記録は途中で切れている＝そこで消えた。</b>":""}</div>
+    <pre class="diag" style="display:block;max-height:46vh;overflow:auto;white-space:pre-wrap">${esc(txt)}</pre>
+    <div class="row"><button id="bbCopyBtn" class="primary">コピー</button>
+      <button id="bbSaveBtn">保存</button>
+      <button id="bbClearBtn">この記録を捨てる</button>
+      <button id="bbCloseBtn">閉じる</button></div>`);
+  $("#bbCopyBtn").onclick=()=>copyOut(txt,"落ちる前の記録");
+  $("#bbSaveBtn").onclick=()=>saveOut(txt,"harness-blackbox-"+stamp()+".txt");
+  $("#bbClearBtn").onclick=()=>{bbClear();closeSheet();setHint("落ちる前の記録を捨てた");};
+  $("#bbCloseBtn").onclick=closeSheet;
+}
+$("#bbShow").onclick=()=>openBBSheet();
 $("#trcCopy").onclick=()=>copyOut(traceOut(),"実行の記録");
 $("#trcSave").onclick=()=>saveOut(traceOut(),"harness-trace-"+stamp()+".json");
 $("#logVerbose").onchange=()=>{LOGOPT.verbose=$("#logVerbose").checked;
@@ -7758,6 +7939,7 @@ function noteBlocked(){
 }
 async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec){noteBlocked();return;}
   log("cp",`▶ 実行するハーネス: ${(spec.metadata&&spec.metadata.name)||"名前なし"}（ノード${(spec.nodes||[]).length}・線${(spec.edges||[]).length}）`);
+  await bbRunStart(spec,"run");           // 落ちても残る記録をここから始める
   store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
   setRunUI(true);setState("running");
   try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}
@@ -7768,6 +7950,7 @@ async function stepOne(){const spec=parseSpec();if(!spec){noteBlocked();return;}
 async function doResume(){clearLog();const cp=store.load();if(!cp){log("err","Checkpointなし");return;}if(cp.status==="success"){log("err","terminal success はResume不可");return;}
   const spec=parseSpec();if(!spec)return;if(canonSpec(spec)!==cp.specCanon){log("err","Spec変更のためResume拒否（自動移行しない）");return;}
   cur=cp;ctl=newCtl();log("cp",`▣ Resume: status=${cp.status} queue先頭=${JSON.stringify(cp.workQueue[0])}`);
+  await bbRunStart(spec,"resume");
   setRunUI(true);try{await resumeRun(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}report();}
 async function doRetry(){const spec=parseSpec();if(!spec||!cur)return;
   const failed=Object.values(cur.executions).find(e=>e.status==="failed");if(!failed){log("err","failedなExecutionが無い");return;}
@@ -7782,11 +7965,24 @@ setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("webllm");loadEx("e
 loadSiteModels().then(scanModels);        // 何が端末にあるかを最初に調べる（押さなくても分かるように）
 webgpuDiagnostics().then(d=>{lastDiag=d;}).catch(()=>{});   // 端末の対応状況（調査用メモに載せる）
 checkVersion();                                             // 古い版を握っていないか
+/* ---- 落ちる直前に「ここまで行った」を残すための出口 ----
+   iOS Safari はタブを捨てるとき unload を出さないことがあるので pagehide を使う。
+   端末ごと落ちる（プロセスが殺される）場合はどのイベントも来ない。
+   そのときは hbb.open が残っているので「始めたのに終わっていない」から場所が分かる。 */
+addEventListener("pagehide",()=>{bbPush("left",{heap:bbHeap()});});
+addEventListener("visibilitychange",()=>{bbPush("vis",{h:document.hidden?1:0,heap:bbHeap()});});
+addEventListener("error",e=>{bbPush("err",{msg:String((e&&e.message)||e||"").slice(0,160),
+  src:String((e&&e.filename)||"").slice(-40),ln:(e&&e.lineno)||null});});
+addEventListener("unhandledrejection",e=>{const r=e&&e.reason;
+  bbPush("err",{kind:"reject",msg:String((r&&(r.message||r.code))||r||"").slice(0,160)});});
 setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 /* 調査用の覗き口。画面から見えない中身（いまの実行・いまのSpec）を読むだけ。
    不具合調べと自動テストで使う（ここから書き換えはできない） */
 // 画面の編集シートを直接開く口（自動テスト用。図をタップしなくても開ける）
-window.__ui={openNodeSheet,openEdgeSheet,openSpecSheet,openProvidersSheet,openModulesSheet,closeSheet};
+window.__ui={openNodeSheet,openEdgeSheet,openSpecSheet,openProvidersSheet,openModulesSheet,openBBSheet,closeSheet};
+// 落ちても残る記録の口（自動テスト用。落ちた状態を作って読めるようにする）
+window.__bb={read:bbRead,text:bbText,push:bbPush,open:bbOpen,close:bbClose,cur:bbCur,
+  clear:bbClear,device:bbDevice,prev:()=>BB_PREV,state:()=>BB,CAP:BB_CAP,P:BB_P};
 window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
   nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;},
   // Runtime をそのまま呼べる口（自動テスト用。画面を触らずに走らせて中身を見る）
@@ -8059,6 +8255,13 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - ノードごとに「**エラーが起きたとき**」を決められる（止める／決めた値を出す／null を出す／そのノードだけ止めて先へ進む）。どれを選んでも、エラーはログと記録に残る。
 - 使用量は**失敗した呼び出しも数える**（実際にモデルを動かしているため）。
 - 版が古いと画面の上にお知らせが出る。リロードすると新しくなる。
+
+**端末ごと落ちてログが取れないとき** … 「**落ちる前の記録（端末が落ちても残る）**」を押す。
+実行中は1手ごとに**極小の記録をこの端末に書いている**（画面のログとは別物）。
+端末が落ちても、閉じても、その記録は残る。次に開いたときは
+「前回は最後まで行かずに終わっている」と上に出て、**どこで消えたか**（どのノードの何回目の推論か・
+送った文の字数・そのときの空きメモリ）が読める。そのままコピーして相談先に貼れる
+（「まとめてコピー」にも入る）。
 
 **このハーネスの設定** … 名前・版・**vars（どこからでも読める値）**・図の流れる向きを決める。
 \`vars\` は式から \`vars.名前\`、本文テンプレから \`{{{vars.名前}}}\` で読める。
@@ -8653,6 +8856,12 @@ ${HELP_JSON_EXAMPLE}
 
 逆に、**画面で決めたことは必ず JSON に入る**（画面は JSON を書き換えているだけ）。
 自動テスト \`tests/harness-parity.mjs\` が両方向を毎回確かめている。
+
+## 12.5 落ちたときの記録は設定ではない（JSONに書くことは無い）
+
+端末が落ちても残る記録（ブラックボックス）は**いつも取っている**。
+JSON で入れたり切ったりする設定は無い（そういうキーは作っていない）。
+見るのは画面の「落ちる前の記録」ボタンだけ。置き場はこの端末の localStorage の \`hbb.*\`。
 
 ## 13. 書いたあとの確かめ方
 
@@ -9944,6 +10153,71 @@ Runtime 側でやっていることは次の3つ。
 
 **wllama（CPU）には1回ごとのリセットが無い**（API に無いため）。
 そこは未確認として書いておく。落ちるときは上の表で減らす。
+
+## 39.8 落ちても残る記録（ブラックボックス）
+
+端末ごと落ちると、**画面のログもメモリの中の Run も全部消える**。
+Checkpoint（28章）は Run 全体を書くので、落ちる瞬間には間に合わないことがある。
+そこで「1回の書き込みを極小にして、その場で置いていく」記録を別に持っている。
+
+**なぜ残るのか** … localStorage は**同期**で、\`setItem\` が返った時点でもう置かれている。
+だから「書けたところまで」は落ちても消えない。非同期の置き場（IndexedDB）では間に合わないことがある。
+
+**何をどこに置くか**（localStorage のキー。頭は \`hbb.\`）
+
+| キー | 中身 | 書き方 |
+|---|---|---|
+| \`hbb.0\` … \`hbb.299\` | 流れ（1件ずつ） | 輪。300件を超えたら古いものから上書き |
+| \`hbb.h\` | 輪の先頭・件数・実行ID・版 | 1件足すたびに書き替え |
+| \`hbb.cur\` | いま通っている Work Item | 1件を上書きし続ける（だから軽い） |
+| \`hbb.open\` | **始めたのに終わっていない危ない所** | 始める前に書き、終わったら消す |
+
+**落ちた場所が分かる仕掛けが \`hbb.open\`。**
+モデルの読み込みと推論1回は、始める前に \`open\` を書き、終わったら消して流れに1件足す。
+端末が落ちると消す処理まで行かないので \`open\` が残る。次に開いたとき
+**「始めたのに終わっていない＝ここで消えた」**と名指しできる。
+
+**流れに載る種類**
+
+| e | いつ | 主な中身 |
+|---|---|---|
+| \`run\` | 実行の始まり | ハーネス名・ノード数・線の数・版 |
+| \`dev\` | 実行の始まり（続けて） | UA・端末のメモリ・JSヒープの上限・**WebGPU の限界値**（maxBufferSize など） |
+| \`load\` | モデルの読み込み | ノード・モデル・文脈の窓・掛かった時間 |
+| \`call\` | 推論1回 | ノード・何回目・**送った文の字数**・maxTokens・掛かった時間・そのときのヒープ |
+| \`vis\` | 表に出た／裏に回った | \`h:1\` が裏 |
+| \`err\` | 拾えなかった例外 | メッセージ（160字で切る） |
+| \`end\` | 実行の終わり | 最後の status・回した回数 |
+| \`left\` | ページを離れた | （iOS Safari は \`unload\` を出さないことがあるので \`pagehide\` で取る） |
+
+\`call\` は **open と閉じた記録の両方に字数（\`ch\`）を入れてある**。
+回を追うごとに \`ch\` が伸びていれば、文脈が積もっている（39.7 の話）と読める。
+
+**「途中で消えた」の決め方**（最後の1件だけでは決めない）
+
+いちばん新しい \`run\` より後ろに \`end\` か \`left\` が1つも無ければ、途中で消えた。
+加えて \`hbb.open\` が残っていれば、そこが落ちた場所。
+\`run\` が無い（実行していない）なら報せない。
+※ ページを離れるときは \`left\` のあとに \`vis\` が付くので、「最後が \`left\` か」では判定できない。
+
+**大きさ** … 1件は400字で切る（切るときは**中の文字列を短くする**ので、JSON として読める形は崩さない。
+\`_cut\` がその印）。全部で数十KB。Checkpoint（数MB）とは桁が違うので、書き込みが重くならない。
+localStorage に書けなくなったら（いっぱい・書き込み禁止）そこで記録は止まり、
+読み出した文に「途中で書けなくなった」と出る（**黙って止めない**）。
+
+**開いたときの動き**
+
+1. 読み出して（\`BB_PREV\`）、**すぐ捨てる**。輪の先頭から今回ぶんだけを書けるようにするため。
+2. 前回が「途中で消えた」なら、いちばん上にお知らせと「落ちる前の記録を見る」を出す。
+3. シートで全文が読める。コピー・保存・捨てるができる。「まとめてコピー」にも入る。
+
+**JSON の設定ではない。** いつも取っていて、入れ切りのキーは無い（飾りのキーを作らないため）。
+
+**分かること / 分からないこと**
+
+- 分かる … どのノードの何回目で消えたか、そのときの送った文の字数・maxTokens・空きメモリ、端末の限界値、そこまでの流れと時間。
+- 分からない … **落ちた理由そのもの**。OS がタブを殺すときは何も残せない。
+  記録から読めるのは「落ちる直前の状態」だけで、原因の断定はしていない。
 
 ## 40. mock（推論しないテスト用）
 
@@ -12396,6 +12670,62 @@ export async function CreateMLCEngine(model,opt){
   if(!(normal&&reset&&perCall))
     out.push(`<span class="fail">↳</span>  normal=${normal} reset=${reset} perCall=${perCall}`
       +` loads=${S.loads} releases=${S.releases} calls=${S.calls} resetChat=${eng.n}`);}
+ // 87 落ちても残る記録（ブラックボックス）: 1回の実行の流れが残り、終わりの印で閉じる
+ {const sp={version:"0.1",metadata:{name:"bb"},nodes:[
+    {id:"IN",type:"input"},
+    {id:"A",type:"llm",mock:{contents:["a1"]},prompt:"{{input.IN}}"},
+    {id:"B",type:"llm",mock:{contents:["b1"]},prompt:"{{input.A}}"},
+    {id:"OUT",type:"output"}],
+   edges:[{from:{node:"IN"},to:{node:"A"}},{from:{node:"A"},to:{node:"B"}},{from:{node:"B"},to:{node:"OUT"}}]};
+  bbClear();
+  await bbRunStart(sp,"selftest");
+  const r=await fullRun(sp,{IN:"Q"},memStore(),null);
+  const b=bbRead();
+  const kinds=b?b.rows.map(x=>x.e):[];
+  const hasRun=kinds[0]==="run",hasDev=kinds[1]==="dev";
+  const calls=b?b.rows.filter(x=>x.e==="call"):[];
+  // 推論2回ぶんが「終わった記録」として残る（open は消えている）
+  const callsOk=calls.length===2&&calls.every(x=>x.ms!=null&&x.err===undefined)
+    &&calls[0].n==="A"&&calls[1].n==="B"&&calls[0].ch>0;
+  const endOk=kinds[kinds.length-1]==="end"&&b.rows[b.rows.length-1].st==="success";
+  const cleanOk=b.clean===true&&b.open===null;
+  const curOk=!!b.cur&&typeof b.cur.n==="string";        // 最後に通った Work Item が残る
+  const txtOk=/落ちる前の記録/.test(bbText(b))&&/最後まで行った/.test(bbText(b));
+  bbClear();
+  const okAll=r.status==="success"&&hasRun&&hasDev&&callsOk&&endOk&&cleanOk&&curOk&&txtOk;
+  ok("87 落ちても残る記録: 実行の流れ（開始・端末・推論ごと・終わり）が localStorage に残り、きれいに終わったと分かる",okAll);
+  if(!okAll)out.push(`<span class="fail">↳</span>  status=${r.status} kinds=${JSON.stringify(kinds)}`
+    +` calls=${JSON.stringify(calls)} clean=${b&&b.clean} open=${JSON.stringify(b&&b.open)}`
+    +` cur=${JSON.stringify(b&&b.cur)} txt=${txtOk}`);}
+ // 88 落ちたときに「どこで落ちたか」が残る（始めたのに終わっていない記録が残る）
+ {bbClear();
+  bbPush("run",{tag:"crashtest"});
+  bbCur({w:"execute",n:"A",ty:"llm"});
+  bbOpen("call",{n:"A",i:7,ch:1234,mt:256});          // ここで端末が落ちたことにする
+  const dead=bbRead();
+  const foundOpen=!!dead.open&&dead.open.e==="call"&&dead.open.n==="A"&&dead.open.i===7;
+  const notClean=dead.clean===false;
+  // 落ちる前に pagehide が来ていても、open が残っているなら「途中で消えた」と分かる
+  bbPush("left",{});
+  const stillDirty=bbRead().clean===false;
+  bbClose("call",{n:"A",i:7,ms:5});bbPush("end",{st:"success"});
+  const nowClean=bbRead().clean===true&&bbRead().open===null;
+  const txtOk=/ここで消えた/.test(bbText(dead))&&/途中で消えた/.test(bbText(dead));
+  // 輪は上限で止まり、古いものから消える（localStorage を食いつぶさない）
+  bbClear();for(let i=0;i<BB_CAP+5;i++)bbPush("x",{i});
+  const ring=bbRead();
+  const ringOk=ring.rows.length===BB_CAP&&ring.rows[0].i===5&&ring.rows[BB_CAP-1].i===BB_CAP+4;
+  // 1件が大きくなりすぎない（400字で切る）
+  bbClear();bbPush("big",{s:"あ".repeat(2000)});
+  let cutOk=false;
+  try{const raw=bbGet("0");const c0=JSON.parse(raw);   // 切っても JSON として読めること
+    cutOk=raw.length<=400&&c0._cut===1&&typeof c0.s==="string"&&c0.s.length<=121;}catch(_){}
+  bbClear();
+  const okAll=foundOpen&&notClean&&stillDirty&&nowClean&&txtOk&&ringOk&&cutOk;
+  ok("88 落ちたときに場所が残る: 始めたのに終わっていない記録＋輪の上限＋1件の大きさの上限",okAll);
+  if(!okAll)out.push(`<span class="fail">↳</span>  open=${foundOpen} dirty=${notClean}`
+    +` pagehideでも汚れたまま=${stillDirty} 閉じたら綺麗=${nowClean} 文=${txtOk}`
+    +` 輪=${ringOk}(${ring.rows.length}) 大きさ=${cutOk}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
@@ -12471,6 +12801,25 @@ async function checkVersion(){
   const b2=document.createElement("button");b2.id="memDismiss";b2.textContent="閉じる";
   b2.onclick=()=>{d.remove();msg.remove();};
   if(box&&box.parentNode){box.parentNode.insertBefore(msg,box);d.appendChild(b1);d.appendChild(b2);box.parentNode.insertBefore(d,box);}
+})();
+/* 前回が途中で消えていたら、いちばん見える所で知らせる。
+   「落ちたらログが取れない」を、ここで取れるようにするのがこの仕掛けの目的。 */
+(function bbNotice(){
+  const r=BB_PREV;if(!r||r.clean)return;
+  const box=$("#vErr");if(!box||!box.parentNode)return;
+  const msg=document.createElement("div");msg.className="mini";
+  const where=r.open?`最後に始めて終わっていないのは <b>${esc(String(r.open.e||"?"))}</b>`
+    +(r.open.n?`（ノード ${esc(String(r.open.n))}`+(r.open.i?` / ${esc(String(r.open.i))}回目`:"")+`）`:"")+"。"
+    :(r.cur?`最後に通ったのは <b>${esc(String(r.cur.n||"?"))}</b>。`:"");
+  msg.innerHTML=`前回は<b>最後まで行かずに終わっている</b>（端末が落ちたか、いきなり閉じられた）。`
+    +where+`落ちる直前までの記録が残っているので、そのまま貼って相談できる。`;
+  const d=document.createElement("div");d.className="row";
+  const b1=document.createElement("button");b1.id="bbOpenPrev";b1.className="primary";
+  b1.textContent="落ちる前の記録を見る";b1.onclick=()=>openBBSheet(r);
+  const b2=document.createElement("button");b2.id="bbNoticeClose";b2.textContent="閉じる";
+  b2.onclick=()=>{d.remove();msg.remove();};
+  d.appendChild(b1);d.appendChild(b2);
+  box.parentNode.insertBefore(msg,box);box.parentNode.insertBefore(d,box);
 })();
 (function onload(){
   const cp=store.load();if(!cp)return;

@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.33.0 何十回呼んでも落ちないようにする
+## 1. 現状 — v0.34.0 落ちても記録が残るようにする
 
 | 段階 | 状態 |
 |---|---|
@@ -61,7 +61,8 @@ iPhone でもPCでも同じ操作。
 | 画面と JSON の対応 v0.31.0（JSONで書けることは画面でも決められる。入口の名前・受け取る数と型・型チェック・Mapの戻り線・mockの中身・topP・json_objectのkeys・ノードの種類変更・ハーネスの名前/版/vars。両方向を `harness-parity.mjs` で毎回確かめる） | 実装済み |
 | v0.31.1（残りの穴も塞いだ: providers を画面から作る/名前を変える/消す・adapter 4種の全キー・provider の generation/schema/transport・モジュールの名前/版/メモ/削除・出口の名前と範囲の取り出し） | 実装済み |
 | 端末が落ちないようにする v0.32.0（Checkpoint をまとめて書く＝28.7MB→4.1MB・保存できなかったら赤字で出す・文脈の窓に入らない文は送らない・空になる差し込みを診断で名指し・点検の行き止まりを error にしない） | 実装済み |
-| **何十回呼んでも落ちない v0.33.0（webllm を1回ごとに resetChat＝KVの山 19281→1867 の90%減・needs_reset で engine を捨てて読み直す・実ハーネスを JSON 無改変で画面から実行する回帰テスト）** | **いまここ** |
+| 何十回呼んでも落ちない v0.33.0（webllm を1回ごとに resetChat＝KVの山 19281→1867 の90%減・needs_reset で engine を捨てて読み直す・実ハーネスを JSON 無改変で画面から実行する回帰テスト） | 実装済み |
+| **落ちても記録が残る v0.34.0（ブラックボックス＝1手ごとに極小の記録を localStorage へ同期で置く。端末ごと落ちても「どのノードの何回目の推論で消えたか・送った文の字数・そのときの空きメモリ・端末の限界値」が残り、次に開いたときに知らせてそのままコピーできる。レンダラを本当にクラッシュさせる回帰テスト付き）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -1086,12 +1087,40 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 
 ![ノードの編集](docs/editor-sheet.png)
 
+### 9.1 落ちても残る記録（ブラックボックス）
+
+端末ごと落ちると、画面のログもメモリの中の Run も消える。Checkpoint（Run 全体）は
+落ちる瞬間には間に合わないことがある。そこで**1回の書き込みを極小にして localStorage に置く**
+記録を別に持っている。localStorage は同期なので、`setItem` が返った分は落ちても消えない。
+
+| キー | 中身 |
+|---|---|
+| `hbb.0` … `hbb.299` | 流れ（輪。300件を超えたら古いものから上書き） |
+| `hbb.h` | 輪の先頭・件数・実行ID・版 |
+| `hbb.cur` | いま通っている Work Item（1件を上書きし続ける） |
+| `hbb.open` | **始めたのに終わっていない所**（モデルの読み込み・推論1回。終わったら消す） |
+
+落ちると `hbb.open` が消えずに残る。これが**落ちた場所**そのものになる。
+流れに載るのは `run`（実行開始）/ `dev`（UA・メモリ・JSヒープ上限・**WebGPU の限界値**）/
+`load`（モデルの読み込み）/ `call`（推論1回・**送った文の字数**・maxTokens・時間・ヒープ）/
+`vis`（表↔裏）/ `err`（拾えなかった例外）/ `end` / `left`。
+
+「途中で消えた」は、いちばん新しい `run` より後ろに `end` も `left` も無いか、`open` が残っている場合。
+次に開いたときにいちばん上で知らせ、「落ちる前の記録」ボタンで全文を読み・コピー・保存できる
+（「まとめてコピー」にも入る）。**JSON の設定ではなく、いつも取っている。**
+
+分かるのは「落ちる直前の状態」まで。**落ちた理由そのものは分からない**
+（OS がタブを殺すときは何も残せない）。原因の断定はしていない。
+
+`tests/harness-blackbox.mjs` は、実ハーネスの3回目の推論中に CDP の `Page.crash` で
+**本当にレンダラを落として**、記録が残って読めることを確かめている。
+
 ---
 
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト86件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット）
+node tests/harness-runtime.mjs      # 自己テスト88件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
@@ -1111,6 +1140,7 @@ node tests/harness-race.mjs         # 先着（race）— 足す・中身を決�
 node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱い・毎周たまる・記録・診断・使い方3タブ
 node tests/harness-parity.mjs       # 画面とJSONの対応（JSONの全キーに画面の欄があるか・画面の操作がJSONに入るか）
 node tests/harness-realspec.mjs     # 実際に使う大きいハーネス（23ノード/21回推論）を JSON 無改変で画面から実行
+node tests/harness-blackbox.mjs     # 推論の途中でレンダラを本当にクラッシュさせ、落ちた場所が残って読めるか
 MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
 
