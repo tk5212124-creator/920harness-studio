@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 落ちても記録が残るようにする v0.34.0</title>
+<title>Harness Studio — 落ちても記録が残るようにする v0.34.1</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.34.0 · 落ちても記録が残る</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.34.1 · 落ちても記録が残る</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -1358,7 +1358,10 @@ function mapWebLLMError(e,def){
    1回の書き込みは数百バイト。全部足しても数十KB にしかならない。
    ================================================================== */
 const BB_CAP=300,BB_P="hbb.";
-const BB={t0:Date.now(),runId:null,n:0,head:0,on:true};
+/* mute は「記録しない」。自己テストは1回開くだけで200件以上の実行を回すので、
+   これを輪に入れると**本物の実行の記録が押し出されて消える**（実測: 300枠のうち282枠を自己テストが埋めた）。
+   ユーザーの実行の記録を守るために、自己テストの間は黙らせる。 */
+const BB={t0:Date.now(),runId:null,n:0,head:0,on:true,mute:false};
 const bbSet=(k,v)=>{try{localStorage.setItem(BB_P+k,v);return true;}
   catch(e){BB.on=false;BB.err=String((e&&e.name)||e).slice(0,40);return false;}};
 const bbDel=k=>{try{localStorage.removeItem(BB_P+k);}catch(e){}}
@@ -1377,17 +1380,17 @@ function bbCut(o){
 }
 /* 輪に1件足す（これが「流れ」になる） */
 function bbPush(e,x){
-  if(!BB.on)return;
+  if(!BB.on||BB.mute)return;
   const o=Object.assign({t:Date.now()-BB.t0,e},x||{});
   bbSet(String(BB.head),bbCut(o));
   BB.head=(BB.head+1)%BB_CAP;BB.n=Math.min(BB.n+1,BB_CAP);
   bbSet("h",BB.head+"|"+BB.n+"|"+(BB.runId||"")+"|"+HARNESS_BUILD);
 }
 /* いまどこを通っているか（1件だけ上書きするので書き込みが軽い） */
-function bbCur(x){if(BB.on)bbSet("cur",bbCut(Object.assign({t:Date.now()-BB.t0},x||{})));}
+function bbCur(x){if(BB.on&&!BB.mute)bbSet("cur",bbCut(Object.assign({t:Date.now()-BB.t0},x||{})));}
 /* 危ない所の前後。落ちると open が残る＝そこで死んだと分かる */
-function bbOpen(e,x){if(BB.on)bbSet("open",bbCut(Object.assign({t:Date.now()-BB.t0},{e},x||{})));}
-function bbClose(e,x){if(!BB.on)return;bbDel("open");bbPush(e,x);}
+function bbOpen(e,x){if(BB.on&&!BB.mute)bbSet("open",bbCut(Object.assign({t:Date.now()-BB.t0},{e},x||{})));}
+function bbClose(e,x){if(!BB.on||BB.mute)return;bbDel("open");bbPush(e,x);}
 /* 端末の限界を記録する（落ちた原因を切り分けるのに要る） */
 async function bbDevice(){
   const d={ua:(typeof navigator!=="undefined"&&navigator.userAgent||"").slice(0,120),
@@ -1435,7 +1438,7 @@ function bbRead(){
 }
 function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));bbDel("h");bbDel("open");bbDel("cur");
   BB.head=0;BB.n=0;}
-const HARNESS_BUILD="0.34.0";
+const HARNESS_BUILD="0.34.1";
 /* 前回の記録は、今回書き始める前に読み出しておく（輪は古いものから上書きするので、後からでは遅い）。
    読み出したら捨てる。こうすると輪の先頭（BB.head=0）から今回の分だけを書ける。 */
 const BB_PREV=bbRead();
@@ -1445,12 +1448,23 @@ function bbHeap(){try{return(typeof performance!=="undefined"&&performance.memor
 /* 1回の実行の始まり。ここで時計を0に戻し、端末の限界も記録する
    （落ちた原因が「端末の上限」なのかを後から切り分けるのに要る）。 */
 async function bbRunStart(spec,tag){
+  /* 輪を空にしてから始める。1回の実行に300枠を全部使えるようにするため
+     （前の実行の記録を残すと、長い実行の頭が押し出されて肝心なところが消える）。 */
+  bbClear();
   BB.t0=Date.now();BB.runId="r"+Date.now().toString(36);BB.calls=0;
   bbPush("run",{tag:tag||"run",v:HARNESS_BUILD,
     name:(spec&&spec.metadata&&spec.metadata.name)||null,
     nodes:((spec&&spec.nodes)||[]).length,edges:((spec&&spec.edges)||[]).length,heap:bbHeap()});
   try{bbPush("dev",await bbDevice());}
   catch(e){bbPush("dev",{err:String((e&&e.message)||e).slice(0,80)});}
+}
+/* 実行の始まりを記録し忘れた入口（1 Work Item・Retry・くらべる）から engine に入っても、
+   せめて何のハーネスかと端末の限界が分かるようにする。
+   これが無いと「実行: (実行前)」「端末の限界なし」の記録になって、切り分けができない。 */
+async function bbEnsureRun(spec,tag){
+  if(BB.runId||BB.mute||!BB.on)return false;
+  await bbRunStart(spec,tag||"unknown");
+  return true;
 }
 /* 記録を人が読める1枚の文にする（そのまま相談先に貼れる形にする） */
 function bbText(r){
@@ -1900,6 +1914,9 @@ function effectiveOverrides(def,node){
   return Object.keys(o).length?o:null;
 }
 async function invokeNode(spec,run,node,inputs,ex,ctl,log){
+  // 実行の始まりを記録していない入口（1 Work Item・Retry・くらべる）から来ても、
+  // せめて何のハーネスかと端末の限界だけは残す（これが無いと切り分けができない）
+  await bbEnsureRun(spec,"engine");
   const {adapter,def}=resolveProvider(spec,node);
   def.adapter=def.adapter||adapter.id;
   const model=node.model||def.model||null;
@@ -1914,14 +1931,29 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
   if(adapter.ensureLoaded){
     log&&log("prov",`⚙ ${adapter.id}: ${model} をロード確認`
       +(adapter.id==="webllm"&&typeof SITE_WEIGHTS!=="undefined"&&SITE_WEIGHTS[model]?"（重みはこのサイトから）":""));
+    /* 読み込みは端末が落ちる場所なので、**何を要求しているか**を先に言う。
+       文脈の窓を指定していないときは「モデルの既定を使う」とはっきり書く（隠れた既定を作らない）。 */
+    if(adapter.id==="webllm"){
+      const cw=contextWindowOf(def,node);
+      const vr=(typeof WEBLLM_VRAM!=="undefined"&&WEBLLM_VRAM[model])||null;
+      log&&log("prov",`   文脈の窓: ${cw?cw+"（指定あり）":"未指定（モデルの既定を使う）"}`
+        +(vr?` / 必要メモリの目安 ${vr}MB（この値はモデル側の申告）`:"")
+        +`${!cw&&vr&&vr>=800?" ← 端末が落ちるならまず文脈を小さくする":""}`);
+    }
     /* 落ちても残る記録。始める前に open を書き、終わったら消す。
        落ちると open が残る＝「モデルの読み込み中に消えた」と次に開いたとき分かる。 */
     const bbT0=Date.now();
-    bbOpen("load",{n:node.id,a:adapter.id,m:model,ctx:contextWindowOf(def,node),heap:bbHeap()});
+    /* ctx が null は「文脈の窓を指定していない＝WebLLM の既定を使う」。
+       vram はこの道具が持っている必要メモリの目安（WebLLM の vram_required_MB）。
+       読み込みで落ちたときに「どれだけ要求したのか」を後から言えるようにする。 */
+    const bbCtx=contextWindowOf(def,node);
+    bbOpen("load",{n:node.id,a:adapter.id,m:model,ctx:bbCtx,
+      ctxSrc:bbCtx==null?"未指定(モデルの既定)":"指定あり",
+      vram:(typeof WEBLLM_VRAM!=="undefined"&&WEBLLM_VRAM[model])||null,heap:bbHeap()});
     try{handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:adapter.id,model}),adapter,signal,ctl&&ctl.onProgress);}
     catch(e){bbClose("load",{n:node.id,ms:Date.now()-bbT0,
       err:String((e&&(e.code||e.message))||e).slice(0,80)});throw e;}
-    bbClose("load",{n:node.id,ms:Date.now()-bbT0,heap:bbHeap()});
+    bbClose("load",{n:node.id,m:model,ctx:bbCtx,ms:Date.now()-bbT0,heap:bbHeap()});
   }
   /* maxTokens に届いて途中で切れたときの扱い（node.onTruncate）
        error（既定）… そこで止める
@@ -7223,12 +7255,14 @@ function openExpSheet(){
     const inputs=expInputs($("#expIn").value,specs[0].spec);
     const total=specs.length*inputs.length*nEach;
     EXP.running=true;EXP.cancel=false;$("#expRun").disabled=true;$("#expStop").disabled=false;
+    await bbRunStart(specs[0].spec,"experiment");    // くらべる（何回も回すので落ちやすい）
     let done=0;
     for(const v of specs){
       for(const inp of inputs){
         for(let k=0;k<nEach;k++){
           if(EXP.cancel)break;
           EXP.note=`まわしている… ${done+1}/${total}（${v.name}）`;expRender();
+          bbPush("exp",{v:v.name,k:k+1,of:total,done});
           const ctl=makeController({});
           let run;
           try{run=await fullRun(v.spec,inp,memStore(),ctl);}
@@ -7665,11 +7699,23 @@ async function modelAction(act,id,btn){
     log("prov",`⚙ ${id}: 用意を開始`);
     setMdlMsg(`${id} を用意中…（初回はダウンロードが走る。Wi-Fi推奨。進まないときは中止できる）`);
     let loadSec=0;
+    /* 手で読み込むときも、落ちても残る記録に入れる（ここで落ちる端末があるため）。
+       実行ではないので輪は空にしない（bbEnsureRun で run が無ければ足すだけ）。 */
+    await bbEnsureRun(Ed.spec,"model_panel");
+    const bbMT0=Date.now();
+    bbOpen("load",{n:"（モデルの帯）",a:"webllm",m:id,
+      ctx:(def.overrides&&def.overrides.context_window_size)||null,
+      ctxSrc:(def.overrides&&def.overrides.context_window_size)?"指定あり":"未指定(モデルの既定)",
+      vram:WEBLLM_VRAM[id]||null,heap:bbHeap()});
     try{
       await ModelManager.ensureLoaded(Object.assign({},def,{adapter:"webllm"}),WebLLMProvider,mdlCtl.signal,
         st=>{pct=Math.round((st.progress||0)*100);phase=st.text||phase;setMdlBar(st.progress);});
       loadSec=stopTick();
-    }catch(e){stopTick();throw e;}
+      bbClose("load",{n:"（モデルの帯）",m:id,ms:Date.now()-bbMT0,heap:bbHeap()});
+    }catch(e){stopTick();
+      bbClose("load",{n:"（モデルの帯）",m:id,ms:Date.now()-bbMT0,
+        err:String((e&&(e.code||e.message))||e).slice(0,80)});
+      throw e;}
     mdlCache[id]=true;setMdlBar(1);
     if(act==="get"){
       setRowStat(id,`✔ 起動した（${loadSec}秒）`,true);
@@ -7945,7 +7991,9 @@ async function runAll(){clearLog();clearStream();edClearPreview();const spec=par
   try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}
   report();}
 async function stepOne(){const spec=parseSpec();if(!spec){noteBlocked();return;}
-  if(!cur||cur.status!=="running"){clearLog();clearStream();store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();}
+  if(!cur||cur.status!=="running"){clearLog();clearStream();store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
+    await bbRunStart(spec,"step");}                 // 1手ずつでも記録は残す
+  else await bbEnsureRun(spec,"step");
   const r=await processOneWorkItem(spec,cur,store,log,ctl);log("cp",`  ▸ work: ${r.kind}`);report();}
 async function doResume(){clearLog();const cp=store.load();if(!cp){log("err","Checkpointなし");return;}if(cp.status==="success"){log("err","terminal success はResume不可");return;}
   const spec=parseSpec();if(!spec)return;if(canonSpec(spec)!==cp.specCanon){log("err","Spec変更のためResume拒否（自動移行しない）");return;}
@@ -7955,6 +8003,7 @@ async function doResume(){clearLog();const cp=store.load();if(!cp){log("err","Ch
 async function doRetry(){const spec=parseSpec();if(!spec||!cur)return;
   const failed=Object.values(cur.executions).find(e=>e.status==="failed");if(!failed){log("err","failedなExecutionが無い");return;}
   log("cp",`▣ Retry: ${failed.execId}（iteration不変・attempt+1）`);ctl=newCtl();setRunUI(true);
+  await bbEnsureRun(spec,"retry");                  // 開き直してからの Retry でも記録が残るように
   try{await retryExecution(spec,cur,failed.execId,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}report();}
 $("#run").onclick=runAll;$("#runTop").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResume;$("#retry").onclick=doRetry;
 const doCancel=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
@@ -8259,9 +8308,14 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 **端末ごと落ちてログが取れないとき** … 「**落ちる前の記録（端末が落ちても残る）**」を押す。
 実行中は1手ごとに**極小の記録をこの端末に書いている**（画面のログとは別物）。
 端末が落ちても、閉じても、その記録は残る。次に開いたときは
-「前回は最後まで行かずに終わっている」と上に出て、**どこで消えたか**（どのノードの何回目の推論か・
-送った文の字数・そのときの空きメモリ）が読める。そのままコピーして相談先に貼れる
-（「まとめてコピー」にも入る）。
+「前回は最後まで行かずに終わっている」と上に出て、**どこで消えたか**が読める:
+
+- **推論中に消えた** … どのノードの何回目か・送った文の字数・maxTokens・そのときの空きメモリ
+- **モデルの読み込み中に消えた** … モデル名・**文脈の窓（指定なしならそう書く）**・必要メモリの目安。
+  この場合は知らせにそのまま「**省メモリで試す（文脈1024）**」が出るので、押してもう一度実行できる
+
+そのままコピーして相談先に貼れる（「まとめてコピー」にも入る）。
+実行ボタンだけでなく、**1 Work Item・Retry・くらべる・モデルの帯から手で読み込むとき**も記録している。
 
 **このハーネスの設定** … 名前・版・**vars（どこからでも読める値）**・図の流れる向きを決める。
 \`vars\` は式から \`vars.名前\`、本文テンプレから \`{{{vars.名前}}}\` で読める。
@@ -10183,7 +10237,7 @@ Checkpoint（28章）は Run 全体を書くので、落ちる瞬間には間に
 |---|---|---|
 | \`run\` | 実行の始まり | ハーネス名・ノード数・線の数・版 |
 | \`dev\` | 実行の始まり（続けて） | UA・端末のメモリ・JSヒープの上限・**WebGPU の限界値**（maxBufferSize など） |
-| \`load\` | モデルの読み込み | ノード・モデル・文脈の窓・掛かった時間 |
+| \`load\` | モデルの読み込み | ノード・モデル・**文脈の窓（\`ctx\`。null は「指定なし＝モデルの既定」）**・**必要メモリの目安（\`vram\`）**・掛かった時間 |
 | \`call\` | 推論1回 | ノード・何回目・**送った文の字数**・maxTokens・掛かった時間・そのときのヒープ |
 | \`vis\` | 表に出た／裏に回った | \`h:1\` が裏 |
 | \`err\` | 拾えなかった例外 | メッセージ（160字で切る） |
@@ -10205,10 +10259,30 @@ Checkpoint（28章）は Run 全体を書くので、落ちる瞬間には間に
 localStorage に書けなくなったら（いっぱい・書き込み禁止）そこで記録は止まり、
 読み出した文に「途中で書けなくなった」と出る（**黙って止めない**）。
 
+**1回の実行に300枠を全部使う**
+
+実行の始まりで**輪を空にする**。前の実行の記録を残すと、長い実行の頭から押し出されて
+肝心なところが消えるため。開いたときに自己テストが回るが、**自己テストは記録しない**
+（開くだけで200件以上の実行を回すので、入れると本物の実行が押し出される。v0.34.0 の実機で
+300枠のうち282枠が自己テストで埋まった）。
+
+**記録する入口**
+
+| 入口 | 記録 |
+|---|---|
+| 実行 | \`bbRunStart\`（輪を空にして run と dev を書く） |
+| 1 Work Item | 同じ（続きのときは足すだけ） |
+| Retry | 足すだけ（開き直してからなら run から） |
+| くらべる（実験） | run のあと1回ごとに \`exp\` |
+| モデルの帯（手で読み込む） | \`load\` の open/close |
+| どこからでも（保険） | \`invokeNode\` の先で run が無ければ足す＝**「実行: (実行前)」にならない** |
+
 **開いたときの動き**
 
 1. 読み出して（\`BB_PREV\`）、**すぐ捨てる**。輪の先頭から今回ぶんだけを書けるようにするため。
 2. 前回が「途中で消えた」なら、いちばん上にお知らせと「落ちる前の記録を見る」を出す。
+   消えた場所が**モデルの読み込み**なら「省メモリで試す（文脈1024）」も出す
+   （文脈の窓を指定していなかったときに効く手なので、その場で押せるようにしている）。
 3. シートで全文が読める。コピー・保存・捨てるができる。「まとめてコピー」にも入る。
 
 **JSON の設定ではない。** いつも取っていて、入れ切りのキーは無い（飾りのキーを作らないため）。
@@ -10908,6 +10982,7 @@ const localSpec=(over,nodeOver)=>({metadata:{version:"1"},
   edges:[{from:{node:"in",port:"out"},to:{node:"a",port:"in"}},{from:{node:"a",port:"out"},to:{node:"out",port:"in"}}]});
 
 (async function selfTests(){
+ BB.mute=true;          // 自己テストの実行は輪に残さない（本物の実行の記録を押し出さないため）
  const out=[];const ok=(n,c)=>out.push(`<span class="${c?'pass':'fail'}">${c?'PASS':'FAIL'}</span>  ${n}`);
  const skip=(n,why)=>out.push(`<span style="color:#7a828c">SKIP</span>  ${n} — ${why}`);
  const render=()=>{const passN=out.filter(x=>x.includes(">PASS<")).length;const skipN=out.filter(x=>x.includes(">SKIP<")).length;
@@ -12671,7 +12746,8 @@ export async function CreateMLCEngine(model,opt){
     out.push(`<span class="fail">↳</span>  normal=${normal} reset=${reset} perCall=${perCall}`
       +` loads=${S.loads} releases=${S.releases} calls=${S.calls} resetChat=${eng.n}`);}
  // 87 落ちても残る記録（ブラックボックス）: 1回の実行の流れが残り、終わりの印で閉じる
- {const sp={version:"0.1",metadata:{name:"bb"},nodes:[
+ {BB.mute=false;                       // この2件だけは記録そのものを見るので開ける
+  const sp={version:"0.1",metadata:{name:"bb"},nodes:[
     {id:"IN",type:"input"},
     {id:"A",type:"llm",mock:{contents:["a1"]},prompt:"{{input.IN}}"},
     {id:"B",type:"llm",mock:{contents:["b1"]},prompt:"{{input.A}}"},
@@ -12682,7 +12758,8 @@ export async function CreateMLCEngine(model,opt){
   const r=await fullRun(sp,{IN:"Q"},memStore(),null);
   const b=bbRead();
   const kinds=b?b.rows.map(x=>x.e):[];
-  const hasRun=kinds[0]==="run",hasDev=kinds[1]==="dev";
+  // 実行の始まりで輪が空になるので、必ず run が1件目に来る（前の実行の残りが混ざらない）
+  const hasRun=kinds[0]==="run"&&kinds.filter(x=>x==="run").length===1,hasDev=kinds[1]==="dev";
   const calls=b?b.rows.filter(x=>x.e==="call"):[];
   // 推論2回ぶんが「終わった記録」として残る（open は消えている）
   const callsOk=calls.length===2&&calls.every(x=>x.ms!=null&&x.err===undefined)
@@ -12693,12 +12770,13 @@ export async function CreateMLCEngine(model,opt){
   const txtOk=/落ちる前の記録/.test(bbText(b))&&/最後まで行った/.test(bbText(b));
   bbClear();
   const okAll=r.status==="success"&&hasRun&&hasDev&&callsOk&&endOk&&cleanOk&&curOk&&txtOk;
+  BB.mute=true;
   ok("87 落ちても残る記録: 実行の流れ（開始・端末・推論ごと・終わり）が localStorage に残り、きれいに終わったと分かる",okAll);
   if(!okAll)out.push(`<span class="fail">↳</span>  status=${r.status} kinds=${JSON.stringify(kinds)}`
     +` calls=${JSON.stringify(calls)} clean=${b&&b.clean} open=${JSON.stringify(b&&b.open)}`
     +` cur=${JSON.stringify(b&&b.cur)} txt=${txtOk}`);}
  // 88 落ちたときに「どこで落ちたか」が残る（始めたのに終わっていない記録が残る）
- {bbClear();
+ {BB.mute=false;bbClear();
   bbPush("run",{tag:"crashtest"});
   bbCur({w:"execute",n:"A",ty:"llm"});
   bbOpen("call",{n:"A",i:7,ch:1234,mt:256});          // ここで端末が落ちたことにする
@@ -12722,12 +12800,14 @@ export async function CreateMLCEngine(model,opt){
     cutOk=raw.length<=400&&c0._cut===1&&typeof c0.s==="string"&&c0.s.length<=121;}catch(_){}
   bbClear();
   const okAll=foundOpen&&notClean&&stillDirty&&nowClean&&txtOk&&ringOk&&cutOk;
+  BB.mute=true;
   ok("88 落ちたときに場所が残る: 始めたのに終わっていない記録＋輪の上限＋1件の大きさの上限",okAll);
   if(!okAll)out.push(`<span class="fail">↳</span>  open=${foundOpen} dirty=${notClean}`
     +` pagehideでも汚れたまま=${stillDirty} 閉じたら綺麗=${nowClean} 文=${txtOk}`
     +` 輪=${ringOk}(${ring.rows.length}) 大きさ=${cutOk}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
+ BB.mute=false;bbClear();          // 自己テストの分は輪に残さない（本物の実行の記録を守る）
  window.__selfTest={total:out.length,pass:out.filter(x=>x.includes(">PASS<")).length,skip:out.filter(x=>x.includes(">SKIP<")).length,lines:out.map(x=>x.replace(/<[^>]+>/g,""))};
 })();
 
@@ -12791,6 +12871,9 @@ async function checkVersion(){
 (function crashNotice(){
   const L=lastLoading();if(!L)return;
   clearLoading();
+  /* ブラックボックスが同じ「読み込み中に消えた」を知っているなら、そちらに任せる
+     （モデル名・文脈の窓・必要メモリの目安まで言えるので、二重に出す意味が無い）。 */
+  if(BB_PREV&&BB_PREV.open&&BB_PREV.open.e==="load")return;
   const box=$("#vErr");     // いちばん見える場所に出す
   const d=document.createElement("div");d.className="row";
   const msg=document.createElement("div");msg.className="mini";
@@ -12808,8 +12891,11 @@ async function checkVersion(){
   const r=BB_PREV;if(!r||r.clean)return;
   const box=$("#vErr");if(!box||!box.parentNode)return;
   const msg=document.createElement("div");msg.className="mini";
-  const where=r.open?`最後に始めて終わっていないのは <b>${esc(String(r.open.e||"?"))}</b>`
-    +(r.open.n?`（ノード ${esc(String(r.open.n))}`+(r.open.i?` / ${esc(String(r.open.i))}回目`:"")+`）`:"")+"。"
+  const kindJa={load:"モデルの読み込み",call:"推論"};
+  const where=r.open?`最後に始めて終わっていないのは <b>${esc(kindJa[r.open.e]||String(r.open.e||"?"))}</b>`
+    +(r.open.n?`（ノード ${esc(String(r.open.n))}`+(r.open.i?` / ${esc(String(r.open.i))}回目`:"")
+      +(r.open.m?` / ${esc(String(r.open.m))}`:"")
+      +(r.open.e==="load"?` / 文脈の窓 ${r.open.ctx?esc(String(r.open.ctx)):"未指定"}`:"")+`）`:"")+"。"
     :(r.cur?`最後に通ったのは <b>${esc(String(r.cur.n||"?"))}</b>。`:"");
   msg.innerHTML=`前回は<b>最後まで行かずに終わっている</b>（端末が落ちたか、いきなり閉じられた）。`
     +where+`落ちる直前までの記録が残っているので、そのまま貼って相談できる。`;
@@ -12818,7 +12904,20 @@ async function checkVersion(){
   b1.textContent="落ちる前の記録を見る";b1.onclick=()=>openBBSheet(r);
   const b2=document.createElement("button");b2.id="bbNoticeClose";b2.textContent="閉じる";
   b2.onclick=()=>{d.remove();msg.remove();};
-  d.appendChild(b1);d.appendChild(b2);
+  d.appendChild(b1);
+  /* 消えた場所が「モデルの読み込み」なら、次の一手は文脈を小さくすること。
+     ここで押せるようにする（文脈を指定していなかったときだけ勧める）。 */
+  if(r.open&&r.open.e==="load"){
+    const b3=document.createElement("button");b3.id="bbMemSave";b3.className="primary";
+    b3.textContent="省メモリで試す（文脈1024）";
+    b3.onclick=()=>{const t=setContextWindow(1024,256);
+      msg.innerHTML=`省メモリにした（文脈1024 / 一度に読む量256・${t}か所）。もう一度ためしてみる。`
+        +`前回は<b>${esc(String(r.open.m||"モデル"))}</b>の読み込み中に消えていて、`
+        +`文脈の窓は${r.open.ctx?esc(String(r.open.ctx)):"<b>未指定（モデルの既定）</b>"}だった`
+        +`${r.open.vram?`（必要メモリの目安 ${esc(String(r.open.vram))}MB）`:""}。`;
+      b3.remove();};
+    d.appendChild(b3);}
+  d.appendChild(b2);
   box.parentNode.insertBefore(msg,box);box.parentNode.insertBefore(d,box);
 })();
 (function onload(){

@@ -33,8 +33,16 @@ const paste = async p => {
   await p.evaluate(() => window.__installStub());
 };
 
-// ① ふつうに最後まで走らせると、記録は「きれいに終わった」で閉じる
+// ⓪ 自己テスト（開くだけで200件以上の実行を回す）が記録を埋めてしまわないこと
+//    ここが埋まると、本物の実行の記録が押し出されて消える（v0.34.0 の実機で起きた）
 let p = await newPage();
+R['⓪ 開いた直後'] = await p.evaluate(() => { const r = window.__bb.read();
+  return { 自己テストの記録: r ? r.rows.length : 0, 自己テストは88件通る: window.__selfTest.pass,
+    mute: window.__bb.state().mute }; });
+ok.noSelfTestNoise = R['⓪ 開いた直後'].自己テストの記録 === 0
+  && R['⓪ 開いた直後'].自己テストは88件通る === 88;
+
+// ① ふつうに最後まで走らせると、記録は「きれいに終わった」で閉じる
 await paste(p);
 await tap(p, '#runTop');
 { const t0 = Date.now();
@@ -48,6 +56,12 @@ R['① ふつうの実行'] = await p.evaluate(() => { const r = window.__bb.rea
     推論: c.length, 字数がある: c.every(x => x.ch > 0), 時間がある: c.every(x => x.ms != null),
     モデル名がある: c.every(x => !!x.mdl), clean: r.clean, open: r.open,
     読み込み: r.rows.filter(x => x.e === 'load').length }; });
+// 読み込みの記録に「文脈の窓」と「必要メモリの目安」が入っている（落ちたときの切り分けに要る）
+R['① 読み込みの記録'] = await p.evaluate(() => {
+  const l = window.__bb.read().rows.filter(x => x.e === 'load');
+  return { 件数: l.length, 一件目: l[0] || null }; });
+ok.loadFields = R['① 読み込みの記録'].件数 >= 1
+  && R['① 読み込みの記録'].一件目.m === 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';
 ok.normal = R['① ふつうの実行'].clean === true && R['① ふつうの実行'].open === null
   && R['① ふつうの実行'].最初[0] === 'run' && R['① ふつうの実行'].最初[1] === 'dev'
   && R['① ふつうの実行'].最後 === 'end' && R['① ふつうの実行'].推論 === 21
@@ -114,6 +128,50 @@ const メモ = await p.evaluate(() => navigator.clipboard.readText().catch(() =>
 R['⑥ 調査用メモ'] = { 前回が入っている: /## 落ちる前の記録（前回/.test(メモ),
   今回が入っている: /## 落ちる前の記録（今回/.test(メモ), 字数: メモ.length };
 ok.report = R['⑥ 調査用メモ'].前回が入っている && R['⑥ 調査用メモ'].今回が入っている;
+
+// ⑥.4 「モデルの読み込み中に消えた」記録なら、知らせから省メモリにできる
+{ const p2 = await ctx.newPage();
+  p2.on('pageerror', e => errs.push(String(e).slice(0, 200)));
+  await p2.goto(FILE);
+  await p2.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
+  // 読み込み中に落ちた状態を作る（実機の記録と同じ形）
+  await p2.evaluate(() => { window.__bb.clear();
+    window.__bb.push('run', { tag: 'run', name: 'x', nodes: 3, edges: 2 });
+    window.__bb.open('load', { n: '書く', a: 'webllm', m: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
+      ctx: null, ctxSrc: '未指定(モデルの既定)', vram: 945 }); });
+  await p2.reload(); await p2.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
+  R['⑥.4 読み込み中に消えた'] = await p2.evaluate(() => ({
+    知らせ: !!document.querySelector('#bbOpenPrev'),
+    省メモリ: !!document.querySelector('#bbMemSave'),
+    文: ([...document.querySelectorAll('.mini')].map(x => x.textContent)
+          .find(t => /最後まで行かずに終わっている/.test(t)) || '').slice(0, 140) }));
+  if (R['⑥.4 読み込み中に消えた'].省メモリ) {
+    await p2.locator('#bbMemSave').first().tap(); await p2.waitForTimeout(300);
+    R['⑥.4 省メモリを押した'] = await p2.evaluate(() => {
+      const sp = JSON.parse(document.querySelector('#spec').value);
+      const ov = Object.values(sp.providers || {}).map(d => (d.overrides || {}).context_window_size);
+      return { providers: ov, 文: ([...document.querySelectorAll('.mini')].map(x => x.textContent)
+        .find(t => /省メモリにした/.test(t)) || '').slice(0, 120) }; });
+  }
+  ok.loadNotice = R['⑥.4 読み込み中に消えた'].知らせ === true
+    && R['⑥.4 読み込み中に消えた'].省メモリ === true
+    && /モデルの読み込み/.test(R['⑥.4 読み込み中に消えた'].文)
+    && /文脈の窓 未指定/.test(R['⑥.4 読み込み中に消えた'].文)
+    && (R['⑥.4 省メモリを押した'] || {}).providers.some(v => v === 1024)
+    && /省メモリにした/.test((R['⑥.4 省メモリを押した'] || {}).文 || '');
+  await p2.close(); }
+
+// ⑥.5 「1 Work Item」から入っても、実行の始まりと端末の限界が残る
+//      （v0.34.0 では実行ボタン以外の入口が記録されず「実行: (実行前)」になった）
+await p.evaluate(() => { window.__bb.clear(); window.__bb.state().runId = null; });
+await tap(p, '#step'); await p.waitForTimeout(300);
+await tap(p, '#step'); await p.waitForTimeout(600);
+R['⑥.5 1 Work Item'] = await p.evaluate(() => { const r = window.__bb.read();
+  return { 種類: r ? r.rows.map(x => x.e) : null, runId: (r || {}).runId,
+    tag: r && r.rows[0] ? r.rows[0].tag : null }; });
+ok.stepRecorded = R['⑥.5 1 Work Item'].種類 !== null
+  && R['⑥.5 1 Work Item'].種類[0] === 'run' && R['⑥.5 1 Work Item'].種類[1] === 'dev'
+  && R['⑥.5 1 Work Item'].tag === 'step' && !!R['⑥.5 1 Work Item'].runId;
 
 // ⑦ 捨てたら知らせは出ない
 await tap(p, '#bbOpenPrev');
