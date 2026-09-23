@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 落ちても記録が残るようにする v0.34.1</title>
+<title>Harness Studio — 落ちても記録が残るようにする v0.35.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.34.1 · 落ちても記録が残る</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.35.0 · 落ちても記録が残る</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -1369,14 +1369,15 @@ const bbGet=k=>{try{return localStorage.getItem(BB_P+k);}catch(e){return null;}}
 /* 1件が大きくなりすぎないように切る。
    文字列の途中で切ると JSON として読めなくなるので、**中の文字列を短くする**やり方で縮める。
    それでも入らなければ要点（時刻と種類）だけ残す。_cut がその印。 */
-function bbCut(o){
+function bbCut(o,cap,strCap){
+  cap=cap||400;strCap=strCap||120;
   let s=JSON.stringify(o);
-  if(s.length<=400)return s;
+  if(s.length<=cap)return s;
   const o2={};
   for(const k of Object.keys(o)){const v=o[k];
-    o2[k]=(typeof v==="string"&&v.length>120)?v.slice(0,120)+"…":v;}
+    o2[k]=(typeof v==="string"&&v.length>strCap)?v.slice(0,strCap)+"…":v;}
   o2._cut=1;s=JSON.stringify(o2);
-  return s.length<=400?s:JSON.stringify({t:o.t,e:o.e,_cut:2});
+  return s.length<=cap?s:JSON.stringify({t:o.t,e:o.e,_cut:2});
 }
 /* 輪に1件足す（これが「流れ」になる） */
 function bbPush(e,x){
@@ -1388,18 +1389,50 @@ function bbPush(e,x){
 }
 /* いまどこを通っているか（1件だけ上書きするので書き込みが軽い） */
 function bbCur(x){if(BB.on&&!BB.mute)bbSet("cur",bbCut(Object.assign({t:Date.now()-BB.t0},x||{})));}
+/* 1件だけ上書きする置き場。輪を消費しないので、何回書いても大きさが増えない。
+   - in   … その実行に入れた値（何を入力したか）
+   - last … いま送っている文（落ちたときに「これを送って死んだ」が分かる。長めに残す）
+   - gen  … 生成の途中（何トークンまで出たか。500msに1回まで）
+   - lprg … 読み込みの途中（何%・どの段階か。500msに1回まで）
+   落ちる直前の状態を知るには、流れ（輪）よりこの4つのほうが効く。 */
+const BB_SLOT_CAP={in:1200,last:2000,gen:300,lprg:300};
+function bbSlot(k,x){
+  if(!BB.on||BB.mute)return;
+  bbSet(k,bbCut(Object.assign({t:Date.now()-BB.t0},x||{}),BB_SLOT_CAP[k]||400,
+    k==="last"?1600:(k==="in"?900:120)));
+}
+const BB_THROTTLE_MS=500;
+/* 最初の1回は必ず書く。そのあとは間隔をあける。
+   ただし pct（進み方）が動いたときは間隔を待たずに書く。
+   待つと「0% のまま」の記録で終わってしまい、どこまで読めたのかが分からなくなる。 */
+function bbSlotThrottled(k,x){
+  const now=Date.now();
+  BB.slotAt=BB.slotAt||{};BB.slotPct=BB.slotPct||{};
+  const moved=x&&x.pct!=null&&BB.slotPct[k]!==x.pct;
+  if(!moved&&BB.slotAt[k]&&now-BB.slotAt[k]<BB_THROTTLE_MS)return;
+  BB.slotAt[k]=now;if(x&&x.pct!=null)BB.slotPct[k]=x.pct;
+  bbSlot(k,x);
+}
 /* 危ない所の前後。落ちると open が残る＝そこで死んだと分かる */
 function bbOpen(e,x){if(BB.on&&!BB.mute)bbSet("open",bbCut(Object.assign({t:Date.now()-BB.t0},{e},x||{})));}
 function bbClose(e,x){if(!BB.on||BB.mute)return;bbDel("open");bbPush(e,x);}
 /* 端末の限界を記録する（落ちた原因を切り分けるのに要る） */
 async function bbDevice(){
+  const hasMem=(typeof performance!=="undefined"&&performance.memory);
   const d={ua:(typeof navigator!=="undefined"&&navigator.userAgent||"").slice(0,120),
     mem:(typeof navigator!=="undefined"&&navigator.deviceMemory)||null,
-    heap:(typeof performance!=="undefined"&&performance.memory)
-      ?Math.round(performance.memory.usedJSHeapSize/1048576):null,
-    heapCap:(typeof performance!=="undefined"&&performance.memory)
-      ?Math.round(performance.memory.jsHeapSizeLimit/1048576):null,
-    gpu:null};
+    cpu:(typeof navigator!=="undefined"&&navigator.hardwareConcurrency)||null,
+    /* Safari には「いまメモリをどれだけ使っているか」を読む口が無い（performance.memory は Chrome だけ）。
+       取れないことを null で濁さず、はっきり書いておく。 */
+    heap:hasMem?Math.round(performance.memory.usedJSHeapSize/1048576):null,
+    heapCap:hasMem?Math.round(performance.memory.jsHeapSizeLimit/1048576):null,
+    heapNote:hasMem?null:"この端末ではメモリ使用量を読めない（performance.memory 無し）",
+    disk:null,gpu:null};
+  try{                                     // 置き場（モデルの重みの取り置き）。RAM ではなくディスク
+    if(typeof navigator!=="undefined"&&navigator.storage&&navigator.storage.estimate){
+      const e=await navigator.storage.estimate();
+      d.disk={usedMB:Math.round((e.usage||0)/1048576),quotaMB:Math.round((e.quota||0)/1048576)};}
+  }catch(_){}
   try{
     if(typeof navigator!=="undefined"&&navigator.gpu){
       const a=await navigator.gpu.requestAdapter();
@@ -1425,6 +1458,8 @@ function bbRead(){
   let open=null,cur=null;
   try{const o=bbGet("open");if(o)open=JSON.parse(o);}catch(_){}
   try{const c=bbGet("cur");if(c)cur=JSON.parse(c);}catch(_){}
+  const slot=k=>{try{const v=bbGet(k);return v?JSON.parse(v):null;}catch(_){return null;}};
+  const input=slot("in"),last=slot("last"),gen=slot("gen"),lprg=slot("lprg");
   /* 「途中で消えた」の判定。最後の1件だけで決めてはいけない
      （ページを離れる時は left のあとに vis が来るなど、後ろに別の記録が付く）。
      いちばん新しい「実行の始まり（run）」より後ろに、
@@ -1434,11 +1469,12 @@ function bbRead(){
      実行を始めていない（run が無い）なら、報せることは何も無い＝きれい扱い。 */
   let iRun=-1;for(let i=rows.length-1;i>=0;i--)if(rows[i].e==="run"){iRun=i;break;}
   const closed=iRun<0?true:rows.slice(iRun).some(x=>x.e==="end"||x.e==="left");
-  return{runId,build,rows,open,cur,closed,startedRun:iRun>=0,clean:!open&&closed};
+  return{runId,build,rows,open,cur,input,last,gen,lprg,closed,startedRun:iRun>=0,clean:!open&&closed};
 }
-function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));bbDel("h");bbDel("open");bbDel("cur");
-  BB.head=0;BB.n=0;}
-const HARNESS_BUILD="0.34.1";
+function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));
+  ["h","open","cur","in","last","gen","lprg"].forEach(bbDel);
+  BB.head=0;BB.n=0;BB.slotAt={};BB.slotPct={};}
+const HARNESS_BUILD="0.35.0";
 /* 前回の記録は、今回書き始める前に読み出しておく（輪は古いものから上書きするので、後からでは遅い）。
    読み出したら捨てる。こうすると輪の先頭（BB.head=0）から今回の分だけを書ける。 */
 const BB_PREV=bbRead();
@@ -1447,7 +1483,7 @@ function bbHeap(){try{return(typeof performance!=="undefined"&&performance.memor
   ?Math.round(performance.memory.usedJSHeapSize/1048576):null;}catch(e){return null;}}
 /* 1回の実行の始まり。ここで時計を0に戻し、端末の限界も記録する
    （落ちた原因が「端末の上限」なのかを後から切り分けるのに要る）。 */
-async function bbRunStart(spec,tag){
+async function bbRunStart(spec,tag,input){
   /* 輪を空にしてから始める。1回の実行に300枠を全部使えるようにするため
      （前の実行の記録を残すと、長い実行の頭が押し出されて肝心なところが消える）。 */
   bbClear();
@@ -1457,14 +1493,42 @@ async function bbRunStart(spec,tag){
     nodes:((spec&&spec.nodes)||[]).length,edges:((spec&&spec.edges)||[]).length,heap:bbHeap()});
   try{bbPush("dev",await bbDevice());}
   catch(e){bbPush("dev",{err:String((e&&e.message)||e).slice(0,80)});}
+  /* 何を入力したかを残す。これが無いと、記録を見ても「どの質問で落ちたのか」が分からない。 */
+  if(input!==undefined){let t;try{t=JSON.stringify(input);}catch(_){t=String(input);}
+    bbSlot("in",{v:String(t==null?"":t)});}
 }
 /* 実行の始まりを記録し忘れた入口（1 Work Item・Retry・くらべる）から engine に入っても、
    せめて何のハーネスかと端末の限界が分かるようにする。
    これが無いと「実行: (実行前)」「端末の限界なし」の記録になって、切り分けができない。 */
-async function bbEnsureRun(spec,tag){
+async function bbEnsureRun(spec,tag,input){
   if(BB.runId||BB.mute||!BB.on)return false;
-  await bbRunStart(spec,tag||"unknown");
+  await bbRunStart(spec,tag||"unknown",input);
   return true;
+}
+/* WebGPU が壊れたことは、じつは WebLLM の中の runtime が気づいている。
+   ただし console.error に出すだけなので、**iPhone では誰も見られない**
+   （device.lost / uncapturederror を捕まえているが、アプリには渡ってこない）。
+   そこで console.error を通して記録に入れる。console そのものの動きは変えない。 */
+const BB_HOT=/out of memory|device lost|lost, calling|uncaptured|webgpu|gpu|buffer|allocat|exceed|limit/i;
+function bbTapConsole(){
+  if(typeof console==="undefined"||BB.tapped)return;
+  BB.tapped=true;
+  const wrap=(k,onlyHot)=>{
+    const orig=console[k];
+    if(typeof orig!=="function")return;
+    console[k]=function(){
+      try{
+        const msg=Array.prototype.map.call(arguments,a=>
+          (a&&a.message)?String(a.message):(typeof a==="string"?a:(()=>{try{return JSON.stringify(a);}catch(_){return String(a);}})())
+        ).join(" ").slice(0,200);
+        // 同じ文が続けて出るときは1回だけ（読み込み中は同じ警告が何十回も出る）
+        if(msg&&msg!==BB.lastMsg&&(!onlyHot||BB_HOT.test(msg))){
+          BB.lastMsg=msg;bbPush("err",{kind:k,msg});}
+      }catch(_){}
+      return orig.apply(console,arguments);};
+  };
+  wrap("error",false);      // error は全部（数は多くない）
+  wrap("warn",true);        // warn はメモリ・GPU に関係するものだけ（読み込み中に大量に出るため）
 }
 /* 記録を人が読める1枚の文にする（そのまま相談先に貼れる形にする） */
 function bbText(r){
@@ -1478,8 +1542,17 @@ function bbText(r){
     :"**途中で消えた**（端末が落ちたか、いきなり閉じられた）"));
   if(r.open)L.push("**始めたのに終わっていない＝ここで消えた: "+JSON.stringify(r.open)+"**");
   if(r.cur)L.push("最後に通った Work Item: "+JSON.stringify(r.cur));
+  if(r.lprg)L.push("読み込みの途中: "+JSON.stringify(r.lprg));
+  if(r.gen)L.push("生成の途中: "+JSON.stringify(r.gen));
   if(!BB.on)L.push("注意: 途中で localStorage へ書けなくなった（いっぱいか、書き込み禁止）。記録はそこまで。");
   L.push("");
+  if(r.input){L.push("## 入力（この実行に入れた値）");L.push(String(r.input.v==null?"":r.input.v));
+    if(r.input._cut)L.push("（長いので切ってある）");L.push("");}
+  if(r.last){L.push("## 最後にモデルへ送った文"
+      +`（ノード ${r.last.n} / ${r.last.i}回目 / ${r.last.m||"モデル不明"}`
+      +` / 文脈の窓 ${r.last.ctx||"未指定"} / maxTokens ${r.last.mt==null?"未指定":r.last.mt}）`);
+    L.push(String(r.last.msgs==null?"":r.last.msgs));
+    if(r.last._cut)L.push("（長いので切ってある）");L.push("");}
   L.push("## 流れ（古い順・t は実行の始まりからのミリ秒）");
   L.push("  e の意味: run=実行開始 / dev=端末の限界 / load=モデルの読み込み / call=推論1回"
     +" / vis=表に出た・裏に回った / err=例外 / end=実行の終わり / left=ページを離れた");
@@ -1916,7 +1989,7 @@ function effectiveOverrides(def,node){
 async function invokeNode(spec,run,node,inputs,ex,ctl,log){
   // 実行の始まりを記録していない入口（1 Work Item・Retry・くらべる）から来ても、
   // せめて何のハーネスかと端末の限界だけは残す（これが無いと切り分けができない）
-  await bbEnsureRun(spec,"engine");
+  await bbEnsureRun(spec,"engine",run&&run.input);
   const {adapter,def}=resolveProvider(spec,node);
   def.adapter=def.adapter||adapter.id;
   const model=node.model||def.model||null;
@@ -1950,7 +2023,13 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
     bbOpen("load",{n:node.id,a:adapter.id,m:model,ctx:bbCtx,
       ctxSrc:bbCtx==null?"未指定(モデルの既定)":"指定あり",
       vram:(typeof WEBLLM_VRAM!=="undefined"&&WEBLLM_VRAM[model])||null,heap:bbHeap()});
-    try{handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:adapter.id,model}),adapter,signal,ctl&&ctl.onProgress);}
+    /* 読み込みの進み方も残す（「重みの何枚目で落ちたか」はこれしか手掛かりが無い）。
+       500ms に1回までなので書き込みは軽い。 */
+    const bbProg=pr=>{
+      bbSlotThrottled("lprg",{m:model,pct:Math.round((pr&&pr.progress||0)*100),
+        text:String((pr&&pr.text)||"").slice(0,90),ms:Date.now()-bbT0});
+      if(ctl&&ctl.onProgress)ctl.onProgress(pr);};
+    try{handle=await ModelManager.ensureLoaded(Object.assign({},def,{adapter:adapter.id,model}),adapter,signal,bbProg);}
     catch(e){bbClose("load",{n:node.id,ms:Date.now()-bbT0,
       err:String((e&&(e.code||e.message))||e).slice(0,80)});throw e;}
     bbClose("load",{n:node.id,m:model,ctx:bbCtx,ms:Date.now()-bbT0,heap:bbHeap()});
@@ -1983,6 +2062,12 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
       /* 推論1回のぶんを「落ちても残る記録」に入れる。
          推論中に落ちるのがいちばん多いので、送る前に open を書いておく。 */
       BB.calls=(BB.calls||0)+1;bbCT0=Date.now();bbInCall=true;
+      /* 落ちたときに「この文を送って死んだ」と言えるようにする。
+         1件だけ上書きするので、回数が増えても大きさは増えない。 */
+      bbSlot("last",{n:node.id,i:BB.calls,m:model,ctx:contextWindowOf(def,node),
+        mt:(gen&&gen.maxTokens)!=null?gen.maxTokens:null,
+        msgs:(msgs.messages||[]).map(m=>`[${m.role}] ${String(m.content==null?"":m.content)}`).join("\n")});
+      BB.tok=0;if(BB.slotAt)delete BB.slotAt.gen;
       /* ch（送った文の字数）と mt は、終わった記録にも残す。
          回を追うごとに ch が伸びていないか＝文脈が積もっていないかを、あとから読めるようにする。 */
       bbCall={n:node.id,i:BB.calls,mdl:model,
@@ -1991,12 +2076,18 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
       bbOpen("call",Object.assign({},bbCall,{heap:bbHeap()}));
       res=await adapter.invoke({
         input:msgs,model,generation:gen,schema,signal,handle,providerDef:def,node,inputs,ex,
-        onToken:t=>{attempt.partialOutput=(attempt.partialOutput||"")+t;ctl&&ctl.onToken&&ctl.onToken(node.id,t);}
+        onToken:t=>{attempt.partialOutput=(attempt.partialOutput||"")+t;ctl&&ctl.onToken&&ctl.onToken(node.id,t);
+          BB.tok=(BB.tok||0)+1;
+          bbSlotThrottled("gen",{n:node.id,i:BB.calls,tok:BB.tok,
+            ch:(attempt.partialOutput||"").length,ms:Date.now()-bbCT0});}
       });
-      bbInCall=false;bbClose("call",Object.assign({},bbCall,{ms:Date.now()-bbCT0,heap:bbHeap()}));
+      bbInCall=false;
+      {const ms=Date.now()-bbCT0;
+       bbClose("call",Object.assign({},bbCall,{ms,tok:BB.tok||null,
+         tps:(BB.tok&&ms>0)?Math.round(BB.tok*1000/ms):null,heap:bbHeap()}));}
     }catch(err){
       if(bbInCall){bbInCall=false;bbClose("call",Object.assign({},bbCall,{ms:Date.now()-bbCT0,
-        err:String((err&&(err.code||err.message))||err).slice(0,80),heap:bbHeap()}));}
+        tok:BB.tok||null,err:String((err&&(err.code||err.message))||err).slice(0,80),heap:bbHeap()}));}
       // Provider が「リセットが要る」と言ってきたら、その場で engine を捨てる。
       // 捨てずに次を呼ぶと壊れた状態のまま呼び直すことになり、端末ごと落ちやすい。
       if(err&&err.providerState==="needs_reset"&&adapter.ensureLoaded){
@@ -7255,7 +7346,7 @@ function openExpSheet(){
     const inputs=expInputs($("#expIn").value,specs[0].spec);
     const total=specs.length*inputs.length*nEach;
     EXP.running=true;EXP.cancel=false;$("#expRun").disabled=true;$("#expStop").disabled=false;
-    await bbRunStart(specs[0].spec,"experiment");    // くらべる（何回も回すので落ちやすい）
+    await bbRunStart(specs[0].spec,"experiment",inputs[0]);   // くらべる（何回も回すので落ちやすい）
     let done=0;
     for(const v of specs){
       for(const inp of inputs){
@@ -7709,7 +7800,8 @@ async function modelAction(act,id,btn){
       vram:WEBLLM_VRAM[id]||null,heap:bbHeap()});
     try{
       await ModelManager.ensureLoaded(Object.assign({},def,{adapter:"webllm"}),WebLLMProvider,mdlCtl.signal,
-        st=>{pct=Math.round((st.progress||0)*100);phase=st.text||phase;setMdlBar(st.progress);});
+        st=>{pct=Math.round((st.progress||0)*100);phase=st.text||phase;setMdlBar(st.progress);
+          bbSlotThrottled("lprg",{m:id,pct,text:String(phase||"").slice(0,90),ms:Date.now()-bbMT0});});
       loadSec=stopTick();
       bbClose("load",{n:"（モデルの帯）",m:id,ms:Date.now()-bbMT0,heap:bbHeap()});
     }catch(e){stopTick();
@@ -7985,25 +8077,25 @@ function noteBlocked(){
 }
 async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec){noteBlocked();return;}
   log("cp",`▶ 実行するハーネス: ${(spec.metadata&&spec.metadata.name)||"名前なし"}（ノード${(spec.nodes||[]).length}・線${(spec.edges||[]).length}）`);
-  await bbRunStart(spec,"run");           // 落ちても残る記録をここから始める
+  await bbRunStart(spec,"run",inputForRun());   // 落ちても残る記録をここから始める（入れた値も残す）
   store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
   setRunUI(true);setState("running");
   try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}
   report();}
 async function stepOne(){const spec=parseSpec();if(!spec){noteBlocked();return;}
   if(!cur||cur.status!=="running"){clearLog();clearStream();store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
-    await bbRunStart(spec,"step");}                 // 1手ずつでも記録は残す
-  else await bbEnsureRun(spec,"step");
+    await bbRunStart(spec,"step",inputForRun());}   // 1手ずつでも記録は残す
+  else await bbEnsureRun(spec,"step",inputForRun());
   const r=await processOneWorkItem(spec,cur,store,log,ctl);log("cp",`  ▸ work: ${r.kind}`);report();}
 async function doResume(){clearLog();const cp=store.load();if(!cp){log("err","Checkpointなし");return;}if(cp.status==="success"){log("err","terminal success はResume不可");return;}
   const spec=parseSpec();if(!spec)return;if(canonSpec(spec)!==cp.specCanon){log("err","Spec変更のためResume拒否（自動移行しない）");return;}
   cur=cp;ctl=newCtl();log("cp",`▣ Resume: status=${cp.status} queue先頭=${JSON.stringify(cp.workQueue[0])}`);
-  await bbRunStart(spec,"resume");
+  await bbRunStart(spec,"resume",cp&&cp.input);
   setRunUI(true);try{await resumeRun(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}report();}
 async function doRetry(){const spec=parseSpec();if(!spec||!cur)return;
   const failed=Object.values(cur.executions).find(e=>e.status==="failed");if(!failed){log("err","failedなExecutionが無い");return;}
   log("cp",`▣ Retry: ${failed.execId}（iteration不変・attempt+1）`);ctl=newCtl();setRunUI(true);
-  await bbEnsureRun(spec,"retry");                  // 開き直してからの Retry でも記録が残るように
+  await bbEnsureRun(spec,"retry",cur&&cur.input);   // 開き直してからの Retry でも記録が残るように
   try{await retryExecution(spec,cur,failed.execId,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}report();}
 $("#run").onclick=runAll;$("#runTop").onclick=runAll;$("#step").onclick=stepOne;$("#resume").onclick=doResume;$("#retry").onclick=doRetry;
 const doCancel=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要求（decodeへ協調停止を伝えた）");}};
@@ -8018,6 +8110,7 @@ checkVersion();                                             // 古い版を握�
    iOS Safari はタブを捨てるとき unload を出さないことがあるので pagehide を使う。
    端末ごと落ちる（プロセスが殺される）場合はどのイベントも来ない。
    そのときは hbb.open が残っているので「始めたのに終わっていない」から場所が分かる。 */
+bbTapConsole();          // WebGPU が壊れたことを console から拾う（iPhone では他に見る場所が無い）
 addEventListener("pagehide",()=>{bbPush("left",{heap:bbHeap()});});
 addEventListener("visibilitychange",()=>{bbPush("vis",{h:document.hidden?1:0,heap:bbHeap()});});
 addEventListener("error",e=>{bbPush("err",{msg:String((e&&e.message)||e||"").slice(0,160),
@@ -8314,8 +8407,20 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - **モデルの読み込み中に消えた** … モデル名・**文脈の窓（指定なしならそう書く）**・必要メモリの目安。
   この場合は知らせにそのまま「**省メモリで試す（文脈1024）**」が出るので、押してもう一度実行できる
 
+記録には**そのとき何を入力していたか**も入る:
+
+- **入れた値** … その実行に入れた質問（1件だけ残す）
+- **最後にモデルへ送った文** … 落ちた瞬間に送っていた文そのもの（system も含めて長めに残す）
+- **生成の途中** … 何トークンまで出ていたか
+- **読み込みの途中** … 何%・どの段階まで読めていたか
+
 そのままコピーして相談先に貼れる（「まとめてコピー」にも入る）。
 実行ボタンだけでなく、**1 Work Item・Retry・くらべる・モデルの帯から手で読み込むとき**も記録している。
+
+**この端末のメモリ使用量は読めない。** iPhone の Safari には「いまメモリをどれだけ使っているか」を
+読む口が無い（\`performance.memory\` は Chrome だけ）。タスクマネージャーのような数字は出せないので、
+代わりに**要求した量と進み方**を残している（モデルの必要メモリの目安・文脈の窓・送った文の字数・
+1秒あたりのトークン数・読み込みの%）。速さが落ちていく・同じ所で止まる、が読み取れる。
 
 **このハーネスの設定** … 名前・版・**vars（どこからでも読める値）**・図の流れる向きを決める。
 \`vars\` は式から \`vars.名前\`、本文テンプレから \`{{{vars.名前}}}\` で読める。
@@ -10225,6 +10330,10 @@ Checkpoint（28章）は Run 全体を書くので、落ちる瞬間には間に
 | \`hbb.h\` | 輪の先頭・件数・実行ID・版 | 1件足すたびに書き替え |
 | \`hbb.cur\` | いま通っている Work Item | 1件を上書きし続ける（だから軽い） |
 | \`hbb.open\` | **始めたのに終わっていない危ない所** | 始める前に書き、終わったら消す |
+| \`hbb.in\` | その実行に入れた値 | 実行の始まりに1回 |
+| \`hbb.last\` | **いま送っている文**（system込み・長めに残す） | 推論1回ごとに上書き |
+| \`hbb.gen\` | 生成の途中（何トークン・何字・何ms） | 500msに1回まで上書き |
+| \`hbb.lprg\` | 読み込みの途中（%・段階） | %が動いたら上書き |
 
 **落ちた場所が分かる仕掛けが \`hbb.open\`。**
 モデルの読み込みと推論1回は、始める前に \`open\` を書き、終わったら消して流れに1件足す。
@@ -10246,6 +10355,31 @@ Checkpoint（28章）は Run 全体を書くので、落ちる瞬間には間に
 
 \`call\` は **open と閉じた記録の両方に字数（\`ch\`）を入れてある**。
 回を追うごとに \`ch\` が伸びていれば、文脈が積もっている（39.7 の話）と読める。
+閉じた記録には出たトークン数（\`tok\`）と1秒あたりのトークン数（\`tps\`）も入る。
+
+**メモリの数字は出せない（出せないことを書いておく）**
+
+iPhone の Safari には「いまメモリをどれだけ使っているか」を読む口が無い。
+\`performance.memory\` は Chrome だけのもので、Safari では \`undefined\`。
+\`navigator.deviceMemory\` も同じ。だから \`heap\` は Safari では必ず null になる
+（記録の \`dev\` に「この端末ではメモリ使用量を読めない」と明記する）。
+
+代わりに残しているのは**要求した量と進み方**:
+
+| 残すもの | どこ | 何が読めるか |
+|---|---|---|
+| モデルの必要メモリの目安（\`vram\`） | \`load\` | どれだけ要求して落ちたか |
+| 文脈の窓（\`ctx\`。null は指定なし） | \`load\` / \`last\` | KVの置き場の大きさ |
+| 送った文の字数（\`ch\`） | \`call\` | 文脈が積もっていないか |
+| 1秒あたりのトークン数（\`tps\`） | \`call\` | 回を追って遅くなっていないか＝苦しくなっていないか |
+| 読み込みの%（\`lprg\`） | \`hbb.lprg\` | 重みのどこまで読めたか |
+| 置き場の使用量（\`disk\`） | \`dev\` | 重みが端末に取り置けているか（RAMではない） |
+
+**console.error も拾う。** WebGPU が壊れたこと（\`device.lost\` / uncaptured error）は
+WebLLM の中の runtime が気づいているが、\`console.error\` に出すだけでアプリには渡ってこない。
+iPhone では console を見る手段が無いので、\`console.error\` を通して記録に入れている
+（\`console.warn\` はメモリ・GPU に関係する文だけ。読み込み中に大量に出るため）。
+console そのものの動きは変えていない。
 
 **「途中で消えた」の決め方**（最後の1件だけでは決めない）
 
@@ -12805,6 +12939,55 @@ export async function CreateMLCEngine(model,opt){
   if(!okAll)out.push(`<span class="fail">↳</span>  open=${foundOpen} dirty=${notClean}`
     +` pagehideでも汚れたまま=${stillDirty} 閉じたら綺麗=${nowClean} 文=${txtOk}`
     +` 輪=${ringOk}(${ring.rows.length}) 大きさ=${cutOk}`);}
+ // 89 落ちても残る記録: 入れた値・最後に送った文・生成の途中・読み込みの途中が1件ずつ残る
+ {BB.mute=false;
+  const sp={version:"0.1",metadata:{name:"bb2"},nodes:[
+    {id:"IN",type:"input"},
+    {id:"A",type:"llm",provider:"p1",model:"m9",generation:{maxTokens:33},
+     prompt:{template:{syntax:"mustache",mode:"interpolation_only",
+       value:"これを読んで答えて: {{{in}}}"}}},
+    {id:"OUT",type:"output"}],
+   edges:[{from:{node:"IN"},to:{node:"A"}},{from:{node:"A"},to:{node:"OUT"}}],
+   providers:{p1:{adapter:"__t2",model:"m9"}}};
+  // ensureLoaded で進み方を出し、1文字ずつ返す adapter（本物と同じ形）
+  PROVIDERS.__t2=Object.assign({},MockProvider,{id:"__t2",singleton:true,
+    async ensureLoaded(def,onProgress){
+      onProgress&&onProgress({progress:0.5,text:"重みを読んでいる[5/10]"});
+      onProgress&&onProgress({progress:1,text:"できた"});return{h:1};},
+    async release(){},
+    async invoke(req){
+      const text="こたえ";
+      for(const c of text)req.onToken&&req.onToken(c);
+      return{output:{type:"text",value:text},raw:text,
+        usage:{apiCalls:1,inputTokens:5,outputTokens:3,cost:null}};}});
+  bbClear();
+  await bbRunStart(sp,"selftest",{IN:"雨の日に家でできること"});
+  const r=await fullRun(sp,{IN:"雨の日に家でできること"},memStore(),null);
+  const b=bbRead();
+  const inOk=!!b.input&&/雨の日に家でできること/.test(b.input.v||"");
+  const lastOk=!!b.last&&b.last.n==="A"&&b.last.m==="m9"&&b.last.mt===33
+    &&/これを読んで答えて/.test(b.last.msgs||"")&&/雨の日に家でできること/.test(b.last.msgs||"");
+  const genOk=!!b.gen&&b.gen.n==="A"&&b.gen.tok>=1;
+  const lprgOk=!!b.lprg&&b.lprg.pct===100&&/できた/.test(b.lprg.text||"");
+  const call=b.rows.filter(x=>x.e==="call")[0]||{};
+  const tokOk=call.tok===3;                        // 出たトークン数が記録に入る
+  const txt=bbText(b);
+  const txtOk=/## 入力/.test(txt)&&/## 最後にモデルへ送った文/.test(txt)&&/これを読んで答えて/.test(txt);
+  // console.error は記録に入る（WebGPU が壊れたことは console にしか出ない）
+  bbClear();bbTapConsole();
+  // console に本当に出す（仕掛けを通すため）。分かるように印を付けておく
+  console.error("[自己テスト] Device lost（テスト用の偽メッセージ）");
+  console.warn("[自己テスト] これはメモリと関係ない警告なので残らない");
+  console.warn("[自己テスト] Out of memory: failed to allocate buffer（テスト用の偽メッセージ）");
+  const er=bbRead().rows.filter(x=>x.e==="err");
+  const tapOk=er.length===2&&/Device lost/.test(er[0].msg)&&er[0].kind==="error"
+    &&/Out of memory/.test(er[1].msg)&&er[1].kind==="warn";
+  bbClear();delete PROVIDERS.__t2;ModelManager.reset();BB.mute=true;
+  const okAll=r.status==="success"&&inOk&&lastOk&&genOk&&lprgOk&&tokOk&&txtOk&&tapOk;
+  ok("89 落ちても残る記録: 入れた値・最後に送った文・生成の途中・読み込みの途中・console の悲鳴も残る",okAll);
+  if(!okAll)out.push(`<span class="fail">↳</span>  status=${r.status} in=${inOk} last=${lastOk}`
+    +` gen=${JSON.stringify(b.gen)} lprg=${JSON.stringify(b.lprg)} tok=${call.tok} 文=${txtOk}`
+    +` console=${tapOk}(${JSON.stringify(er)})`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  BB.mute=false;bbClear();          // 自己テストの分は輪に残さない（本物の実行の記録を守る）

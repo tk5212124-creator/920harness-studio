@@ -37,10 +37,11 @@ const paste = async p => {
 //    ここが埋まると、本物の実行の記録が押し出されて消える（v0.34.0 の実機で起きた）
 let p = await newPage();
 R['⓪ 開いた直後'] = await p.evaluate(() => { const r = window.__bb.read();
-  return { 自己テストの記録: r ? r.rows.length : 0, 自己テストは88件通る: window.__selfTest.pass,
+  return { 自己テストの記録: r ? r.rows.length : 0,
+    自己テスト: window.__selfTest.pass + '/' + window.__selfTest.total,
+    全部通る: window.__selfTest.pass === window.__selfTest.total,
     mute: window.__bb.state().mute }; });
-ok.noSelfTestNoise = R['⓪ 開いた直後'].自己テストの記録 === 0
-  && R['⓪ 開いた直後'].自己テストは88件通る === 88;
+ok.noSelfTestNoise = R['⓪ 開いた直後'].自己テストの記録 === 0 && R['⓪ 開いた直後'].全部通る;
 
 // ① ふつうに最後まで走らせると、記録は「きれいに終わった」で閉じる
 await paste(p);
@@ -100,6 +101,18 @@ R['④ 開き直した'] = await p.evaluate(() => { const r = window.__bb.prev()
     clean: r && r.clean, open: r && r.open, 最後に通った: r && r.cur,
     種類: r ? [...new Set(r.rows.map(x => x.e))] : null,
     端末: r ? (r.rows.find(x => x.e === 'dev') || null) : null }; });
+// 落ちた回の「入れた値」と「最後に送った文」がそのまま読める（何を入力して落ちたかが分かる）
+R['④ 入力と送った文'] = await p.evaluate(() => { const r = window.__bb.prev() || {};
+  return { 入力: (r.input || {}).v || null,
+    送った文: ((r.last || {}).msgs || '').slice(0, 90),
+    送った先: { n: (r.last || {}).n, i: (r.last || {}).i, m: (r.last || {}).m,
+      ctx: (r.last || {}).ctx, mt: (r.last || {}).mt },
+    生成の途中: r.gen || null, 読み込みの途中: r.lprg || null }; });
+ok.slots = /雨の日/.test(R['④ 入力と送った文'].入力 || '')
+  && R['④ 入力と送った文'].送った文.length > 20
+  && R['④ 入力と送った文'].送った先.i === 3
+  && R['④ 入力と送った文'].送った先.n === R['④ 開き直した'].open.n
+  && !!R['④ 入力と送った文'].読み込みの途中;
 ok.notice = R['④ 開き直した'].知らせ === true && R['④ 開き直した'].clean === false
   && R['④ 開き直した'].open.e === 'call' && R['④ 開き直した'].open.i === 3
   && R['④ 開き直した'].open.n === 落ちる直前.n
@@ -115,6 +128,9 @@ R['⑤ 記録を開く'] = await p.evaluate(() => ({
 await tap(p, '#bbCopyBtn');
 const 貼れた = await p.evaluate(() => navigator.clipboard.readText().catch(() => ''));
 R['⑤ コピーした文'] = 貼れた.slice(0, 200);
+ok.sheetSlots = /## 入力/.test(R['⑤ 記録を開く'].中身)
+  && /## 最後にモデルへ送った文/.test(R['⑤ 記録を開く'].中身)
+  && /雨の日/.test(R['⑤ 記録を開く'].中身);
 ok.sheet = /途中で消えた/.test(R['⑤ 記録を開く'].中身)
   && /ここで消えた/.test(R['⑤ 記録を開く'].中身)
   && R['⑤ 記録を開く'].中身.includes(落ちる直前.n)
