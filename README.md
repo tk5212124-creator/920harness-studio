@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.36.2 落ちても記録が残るようにする
+## 1. 現状 — v0.37.0 HSL も貼れる・状態の食い違いを直す
 
 | 段階 | 状態 |
 |---|---|
@@ -67,7 +67,8 @@ iPhone でもPCでも同じ操作。
 | 何を入力して落ちたかを残す v0.35.0（入れた値・落ちた瞬間に送っていた文そのもの・生成の途中のトークン数・読み込みの途中の%を1件ずつ上書きで残す／推論ごとの tokens/秒／WebGPUが壊れたことを console.error から拾う（iPhoneでは他に見る場所が無い）／Safariではメモリ使用量が読めないことを記録に明記） | 実装済み |
 | ログと同じものを残す v0.36.0（画面の実行ログを1行も欠けずそのまま輪に流す＝本物のクラッシュ後に「画面に出ていた42行」と記録の42行が一致／輪 300→800枠・1行400字／置き場がいっぱいなら古い方を捨てて書き続ける／記録あり・なしの差は約70ms（1.58→1.65秒）／書いた量を使用量に出す） | 実装済み |
 | 落ちた記録を消さない v0.36.1（実機で「記録なし」と出た3つの原因を塞ぐ: 常設ボタンが今回の空の記録を読んでいた／開くたびに前回の記録を置き場から消していたので読み込み直しで証拠が消えた／開いてすぐの実行は自己テストに黙らされて0件だった → 落ちた回は取り置き（hbb.keep.crash）に移して捨てるまで残す・開いた履歴10回・知らせは画面のいちばん上・実行は自己テストの後で始める） | 実装済み |
-| **2本同時に走らせない v0.36.2（実機の記録で、実行が2本同時に走り、2本目の推論で消えていた。押してから押せなくなるまでに待ちが2つあった。WebLLM の resetChat は推論のロックを取らずに KV を消すので、1本目の推論中に2本目が KV を消していた → 動かす操作は同時に1つだけ・同じ engine への推論は resetChat と組にして1本ずつ）** | **いまここ** |
+| 2本同時に走らせない v0.36.2（実機の記録で、実行が2本同時に走り、2本目の推論で消えていた。押してから押せなくなるまでに待ちが2つあった。WebLLM の resetChat は推論のロックを取らずに KV を消すので、1本目の推論中に2本目が KV を消していた → 動かす操作は同時に1つだけ・同じ engine への推論は resetChat と組にして1本ずつ） | 実装済み |
+| **HSL も貼れる・状態の食い違いを直す v0.37.0（JSON タブの欄に HSL を貼っても取り込める＝LLM の返事をコードブロックごと貼ってよい／終わった Run に output の attempt・branch・branchGroup が running のまま残っていた（ChatGPT の報告）→ output の経路でも attempt を閉じる・枝は root を映す・グループは activation の execution が全部終わったら completed / cancelled に確定。10通り＋実ハーネスで「動いていないのに running」が0件）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -1171,7 +1172,7 @@ runtime が気づいているが、`console.error` に出すだけでアプリ�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト92件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ）
+node tests/harness-runtime.mjs      # 自己テスト93件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
@@ -1192,6 +1193,8 @@ node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱�
 node tests/harness-parity.mjs       # 画面とJSONの対応（JSONの全キーに画面の欄があるか・画面の操作がJSONに入るか）
 node tests/harness-realspec.mjs     # 実際に使う大きいハーネス（23ノード/21回推論）を JSON 無改変で画面から実行
 node tests/harness-blackbox.mjs     # 推論の途中でレンダラを本当にクラッシュさせ、落ちた場所が残って読めるか
+node tests/harness-invariants.mjs   # 終わった Run に「動いていないのに running」が残らない（10通り＋Retry＋実ハーネス）
+node tests/harness-hslbox.mjs       # JSON タブの欄に HSL を貼る（貼り付け・打つ途中・LLM の返事・欄を離れる・壊れた文）
 MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
 

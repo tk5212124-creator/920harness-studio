@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 落ちても記録が残るようにする v0.36.2</title>
+<title>Harness Studio — 落ちても記録が残るようにする v0.37.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.36.2 · 落ちても記録が残る</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.37.0 · HSLも貼れる・状態の食い違いを直す</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -1500,7 +1500,7 @@ function bbRead(){
 function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));
   ["h","open","cur","in","last","gen","lprg"].forEach(bbDel);
   BB.head=0;BB.n=0;BB.slotAt={};BB.slotPct={};}
-const HARNESS_BUILD="0.36.2";
+const HARNESS_BUILD="0.37.0";
 /* ---- 取り置き（前の回の記録を、消える前に別の置き場へ移す）----
    v0.36.0 まで: 開いたときに前回の記録を**メモリへ**移し、置き場からは消していた。
    そのため (1) もう一度読み込まれると（iOS の自動再読み込み・版の読み込み直し）証拠が消え、
@@ -3489,6 +3489,38 @@ function findBranchGroupId(run,ex){
   if(ex.activationId&&run.branchGroups[ex.activationId])return ex.activationId;
   return null;}
 
+/* ---- 分岐グループの確定 ----
+   これまで branch と branchGroup を終わりの状態にするのは、失敗（fail_fast）と cancel だけだった。
+   正常に終わったときに書き換える処理が無く、作られたときの running のまま Run が終わっていた。
+   ここで確定する。規則:
+     - branch は root の execution の状態をそのまま映す（もともと branch は root だけを指している）
+     - group は「その activation の execution が全部終わった」ときだけ確定する
+       （root が終わっても下流がまだ動いていれば running のまま。途中で確定すると、
+        あとで下流が失敗したときに completed → failed と書き換わってしまう）
+         失敗があった → failed（fail_fast がもうそうしている）
+         ユーザーの cancel などで止まった branch がある → cancelled
+         それ以外 → completed（先着が決まって止めた候補 race_decided は、仕事を終えた扱い）
+   確定済み（failed / cancelled / completed）には触らない。Retry は従来どおり running に戻す。 */
+function settleBranchGroup(run,gid){                 // 何か書き換えたら true
+  const g=gid&&run.branchGroups&&run.branchGroups[gid];if(!g)return false;
+  let changed=false;
+  for(const b of Object.values(g.branches||{})){
+    const re=run.executions[b.rootExecId];
+    if(b.status==="running"&&re&&EX_TERMINAL.includes(re.status)){b.status=re.status;changed=true;}}
+  if(g.status!=="running")return changed;
+  // 待ち行列（ふつうはここで分かる）→ 念のため全部の execution（先着の待ちなど）
+  if(run.workQueue.some(w=>{const e=run.executions[w.execId];return e&&findBranchGroupId(run,e)===gid;}))return changed;
+  if(Object.values(g.branches||{}).some(b=>b.status==="running"))return changed;
+  if(Object.values(run.executions).some(e=>findBranchGroupId(run,e)===gid&&!EX_TERMINAL.includes(e.status)))return changed;
+  const roots=Object.values(g.branches||{}).map(b=>run.executions[b.rootExecId]).filter(Boolean);
+  if(g.failures&&g.failures.length)g.status="failed";
+  else if(roots.some(e=>e.status==="cancelled"&&e.cancelReason!=="race_decided"))g.status="cancelled";
+  else g.status="completed";
+  return true;
+}
+/* Run が止まったとき（success / failed / cancelled / paused）に全部の group を見直す。
+   途中で確定できなかったもの（root の後に下流が続いていたもの・cancel で止めたもの）をここで拾う。 */
+function settleAllBranchGroups(run){let n=0;for(const gid of Object.keys(run.branchGroups||{}))if(settleBranchGroup(run,gid))n++;return n;}
 function applyBranchFailurePolicy(run,spec,group,failedEx,err,store,log){
   const policy=group.failurePolicy;
   if(policy==="fail_fast"){
@@ -3590,8 +3622,13 @@ async function processOneWorkItem(spec,run,store,log,ctl){
       if(node.type==="output"){const k=Object.keys(inputs)[0];let rvOut=(k!==undefined&&inputs[k]!==undefined)?inputs[k]:null;
         if(Array.isArray(rvOut))rvOut=mergeToRV(rvOut,node.merge);      // 複数の線が入っているとき
         run.result=rvOut;
-        (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rvOut,raw:JSON.stringify(rvOut),usage:{apiCalls:0,inputTokens:0,outputTokens:0,cost:null},meta:metaOf(rvOut,null),status:"success"});
-        ex.status="completed";run.workQueue.splice(at,1);log&&log("data",`● OUTPUT(${node.id}) ← ${JSON.stringify(rvOut)}`);if(store)store.save(run);return{kind:"completed"};}
+        /* output はここで return するので、下の「通常の終わり方」を通らない。
+           attempt もここで閉じる（閉じないと execution は completed なのに attempt は running のまま残る）。 */
+        {const oa=ex.attempts[ex.attempts.length-1];oa.status="completed";oa.endedAt=Date.now();}
+        (run.nodeRuns[node.id]=run.nodeRuns[node.id]||[]).push(Object.assign({execId:ex.execId,loopInstanceId:ex.loopInstanceId,iteration:ex.iteration,out:rvOut,raw:JSON.stringify(rvOut),usage:{apiCalls:0,inputTokens:0,outputTokens:0,cost:null},meta:metaOf(rvOut,null),status:"success"},attemptTimes(ex)));
+        ex.status="completed";run.workQueue.splice(at,1);log&&log("data",`● OUTPUT(${node.id}) ← ${JSON.stringify(rvOut)}`);
+        settleBranchGroup(run,findBranchGroupId(run,ex));
+        if(store)store.save(run);return{kind:"completed"};}
       if(node.type==="input"){
         // 入力は「そのノードの名前のキー」を読む。無ければ入力全体を渡す（古いSpecのため）
         const has=run.input&&Object.prototype.hasOwnProperty.call(run.input,node.id);
@@ -3706,6 +3743,7 @@ async function processOneWorkItem(spec,run,store,log,ctl){
     failRun(run,ex.nodeId,err,store,false);return{kind:"failed"};}
   if(outcome.kind==="paused"){run.status="paused";if(store)store.save(run);return{kind:"paused"};}
   run.workQueue.splice(at,1);ex.status="completed";
+  settleBranchGroup(run,findBranchGroupId(run,ex));   // この実行で分岐グループの仕事が終わったなら確定する
   // 先着が決まったので、まだ動いていない候補を止める（待ち行列を触るのはここまで来てから）
   if(isRaceNode(node)&&ex._raceRec){
     const killed=cancelRaceLosers(run,spec,ex,node,log);
@@ -4132,6 +4170,48 @@ function whyNotRun(spec,run){
 /* 値を JSON にする。cap を渡すとそこで切る（「まとめてコピー」用）。 */
 function traceVal(v,cap){const t=v===undefined?null:v;let sT;try{sT=JSON.stringify(t);}catch(_){sT=String(t);}
   return cap&&sT&&[...sT].length>cap?capStr(sT,cap):sT;}
+/* ---- 状態の食い違いを数える（自己点検）----
+   終わった Run に「実際には動いていないのに running」が残っていないかを機械で調べる。
+   テストと自己テストで使う。Run を書き換えない（読むだけ）。
+     - 終わった execution（completed / failed / cancelled / stopped）に running の attempt が無い
+     - completed の execution の最後の attempt は completed
+       （onError=null/value で代わりの値を出した execution だけは、最後の attempt が failed でよい。
+        モデルの呼び出しは本当に失敗しているので、completed と書くのは事実と違う）
+     - root の execution が終わった branch は running でない
+     - 中の execution が全部終わった branchGroup は running / failing でない
+     - Run が success なら、running の attempt・branch・branchGroup が無く、待ち行列が空 */
+const EX_TERMINAL=["completed","failed","cancelled","stopped"];
+function stateViolations(run){
+  const bad=[];
+  const exs=Object.values(run.executions||{});
+  for(const e of exs){
+    const atts=e.attempts||[];const last=atts[atts.length-1];
+    if(EX_TERMINAL.includes(e.status)){
+      atts.forEach(a=>{if(a.status==="running")bad.push(`attempt running: ${e.execId}（execution は ${e.status}）#${a.attempt}`);});
+      atts.forEach(a=>{if(a.status!=="running"&&a.endedAt==null)bad.push(`attempt に終わりの時刻が無い: ${e.execId}#${a.attempt}`);});}
+    if(e.status==="completed"&&last){
+      const ok=last.status==="completed"||(e.recoveredFrom&&last.status==="failed");
+      if(!ok)bad.push(`completed なのに最後の attempt が ${last.status}: ${e.execId}`);}
+  }
+  for(const g of Object.values(run.branchGroups||{})){
+    for(const b of Object.values(g.branches||{})){
+      const re=run.executions[b.rootExecId];
+      if(b.status==="running"&&re&&EX_TERMINAL.includes(re.status))
+        bad.push(`branch running: ${g.activationId}/${b.rootExecId}（root は ${re.status}）`);}
+    if(g.status==="running"||g.status==="failing"){
+      const live=exs.some(e=>findBranchGroupId(run,e)===g.activationId&&!EX_TERMINAL.includes(e.status));
+      const liveB=Object.values(g.branches||{}).some(b=>b.status==="running");
+      if(!live&&!liveB)bad.push(`branchGroup ${g.status}: ${g.activationId}（中の execution は全部終わっている）`);}
+  }
+  if(run.status==="success"){
+    if((run.workQueue||[]).length)bad.push(`success なのに待ち行列が ${run.workQueue.length} 件`);
+    for(const e of exs)if(e.status==="running"||e.status==="ready")bad.push(`success なのに execution が ${e.status}: ${e.execId}`);
+    for(const g of Object.values(run.branchGroups||{})){
+      if(g.status==="running")bad.push(`success なのに branchGroup running: ${g.activationId}`);
+      for(const b of Object.values(g.branches||{}))if(b.status==="running")bad.push(`success なのに branch running: ${g.activationId}/${b.rootExecId}`);}
+  }
+  return bad;
+}
 function traceReport(spec,run,opt){
   opt=opt||{};const cap=opt.cap||0;
   const nodes=(spec.nodes||[]).map(n=>{
@@ -4245,6 +4325,7 @@ async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
   if(hitGuard&&run.status==="running"){
     run.status="paused";run.resumable=true;
     log&&log("err",`■ 安全装置: ${RUN_GUARD}回まわったので止めた（打ち切り条件が真にならないか、無限ループ）。Resume で続けられる`);
+    settleAllBranchGroups(run);          // 止めた時点で終わっている分岐グループだけ確定する
     if(store)store.save(run);bbPush("end",{st:run.status,g:guard,heap:bbHeap()});return run;}
   if(run.status==="running"){
     const anyWork=run.workQueue.length>0;const anyReady=Object.values(run.executions).some(e=>e.status==="ready");
@@ -4261,6 +4342,9 @@ async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
             ?`（${why.map(w=>w.node+": "+w.why).join(" / ")}）`:"")},store,false);}
     }
   }
+  // 途中で確定できなかった分岐グループを確定する。書き換えたときだけ保存し直す
+  // （ふつうは最後の実行が終わった時点で確定しているので、ここでは何も書かない）
+  if(settleAllBranchGroups(run)&&store)store.save(run,{force:true});
   bbPush("end",{st:run.status,g:guard,calls:(run.totals&&run.totals.apiCalls)||0,heap:bbHeap()});
   return run;}
 function startRun(spec,run){const start=(spec.nodes.find(n=>n.type==="input")||spec.nodes[0]);const act=`act#${++run.actSeq}`;
@@ -4288,7 +4372,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,runSummary,whyNotRun,LOGOPT,expandModules,startRun,resumeRun,modulePorts,remapNodeIds,remapLoopIds,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={stateViolations,fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,runSummary,whyNotRun,LOGOPT,expandModules,startRun,resumeRun,modulePorts,remapNodeIds,remapLoopIds,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -4420,7 +4504,7 @@ $("#probe").onclick=async()=>{
   finally{$("#probe").disabled=false;renderProvState();}
 };
 $("#writeSpec").onclick=()=>{
-  let spec;try{spec=JSON.parse($("#spec").value);}catch(e){log("err","JSON: "+e.message);return;}
+  let spec;try{spec=readSpecText($("#spec").value).spec;}catch(e){log("err",specReadError(e));return;}
   spec.providers=spec.providers||{};
   spec.providers.local=Object.assign({},spec.providers.local||{},providerDefFromForm());
   setSpecObj(spec);
@@ -7531,14 +7615,43 @@ async function loadFromHash(){
 }
 /* JSONタブの内容は、書いた（貼った）その場で図に反映する。
    反映できたかどうかを必ず言う（黙って古いまま動く、を作らない） */
-function applySpecText(why){
-  let o;try{o=JSON.parse($("#spec").value);}
-  catch(e){$("#vErr").textContent="⚠ JSON: "+e.message+"（直すまで図は前のまま）";return false;}
-  setSpecObj(o,{keepText:true});
-  setHint(`JSONを読み込んだ: ${(o.metadata&&o.metadata.name)||"名前なし"}（ノード${(o.nodes||[]).length}・線${(o.edges||[]).length}）`);
+/* JSON タブの欄は JSON でも HSL でも読む（「取り込む」シートと同じ読み方）。
+   まず JSON として読み、読めなければ HSL として読む（外部の LLM の返事のようにコードブロックに包まれていても読む）。
+   どちらでも読めなければ、それらしい方の理由を出す（「{」で始まるなら JSON の、そうでなければ HSL の何行目か）。 */
+function readSpecText(raw){
+  const t=String(raw==null?"":raw);
+  try{return{kind:"json",spec:JSON.parse(t)};}
+  catch(eJ){
+    try{return parseHarnessText(t);}
+    catch(eH){throw{looksJson:/^\s*[\[{]/.test(t),json:eJ,hsl:eH};}
+  }
+}
+function specReadError(e){
+  if(e&&e.looksJson)return "JSON: "+((e.json&&e.json.message)||"読めない");
+  const h=e&&e.hsl;
+  return "HSL: "+(h&&h.line?h.line+"行目 ":"")+errText(h)+"（JSON としても HSL としても読めない）";
+}
+let specPasted=false;
+function applySpecText(why,ev){
+  const pasted=specPasted;specPasted=false;          // 貼り付けの印はこの1回だけに使う（残すと次に打った文字でも直してしまう）
+  let got;try{got=readSpecText($("#spec").value);}
+  catch(e){$("#vErr").textContent="⚠ "+specReadError(e)+"（直すまで図は前のまま）";return false;}
+  const o=got.spec;
+  const tag=`${(o.metadata&&o.metadata.name)||"名前なし"}（ノード${(o.nodes||[]).length}・線${(o.edges||[]).length}）`;
+  if(got.kind==="json"){
+    setSpecObj(o,{keepText:true});
+    setHint(`JSONを読み込んだ: ${tag}`);
+    return true;}
+  /* HSL: 貼り付けたとき・欄から離れたときは、欄を JSON に直す（ハーネスの正本は JSON）。
+     打っている途中は欄を書き換えない（1文字ごとに JSON に化けると書けない）。図だけ変える。 */
+  const commit=why==="change"||pasted||(ev&&ev.inputType==="insertFromPaste");
+  if(commit){setSpecObj(o);setHint(`HSL を読み込んで JSON に直した: ${tag}`);}
+  else{setSpecObj(o,{keepText:true});
+    setHint(`HSL として読めた: ${tag}（欄から離れるか貼り付けると JSON に直す。このままでも実行できる）`);}
   return true;
 }
-$("#spec").addEventListener("input",()=>applySpecText("input"));
+$("#spec").addEventListener("paste",()=>{specPasted=true;});
+$("#spec").addEventListener("input",ev=>applySpecText("input",ev));
 $("#spec").addEventListener("change",()=>applySpecText("change"));   // 貼り付けでinputが出ない端末向け
 
 
@@ -7549,7 +7662,10 @@ function setRunUI(running){
   const es=$("#estop");if(es)es.classList.toggle("show",!!running);   // 無限ループでも押せる場所に出す
 }
 let cur=null,ctl=null;
-function parseSpec(){let spec;try{spec=JSON.parse($("#spec").value);}catch(e){log("err","JSON: "+e.message);return null;}
+function parseSpec(){let spec;
+  try{const got=readSpecText($("#spec").value);spec=got.spec;
+    if(got.kind!=="json")log("dim","欄の中身を HSL として読んだ（JSON に直さずにそのまま実行する）");}
+  catch(e){log("err",specReadError(e));return null;}
   if(normalizeSpec(spec))log("dim","入口の順番と出口の流し方を決めてから実行する（順番はノード編集の「入力の順番」、流し方は「出口の扱い」で変えられる）");
   const mods=(spec.nodes||[]).filter(n=>n.type==="module");
   if(mods.length){
@@ -8153,7 +8269,7 @@ function reportText(){
   L.push(bbAllText().trim().replace(/^# /,"## "));
   L.push("");
   L.push("## 実行の記録（機械が読む用・値は800字で切ってある。全文は「実行の記録をコピー」）");
-  if(cur){let sp=Ed.spec;try{sp=JSON.parse($("#spec").value);}catch(_){}
+  if(cur){let sp=Ed.spec;try{sp=readSpecText($("#spec").value).spec;}catch(_){}
     try{L.push(traceText(sp,cur,{cap:800}));}catch(e){L.push("（作れない: "+errText(e)+"）");}}
   else L.push("（まだ実行していない）");
   return L.join("\n")+"\n";
@@ -8184,7 +8300,7 @@ $("#repCopy").onclick=()=>copyOut(reportText(),"調査用メモ");
 $("#repSave").onclick=()=>saveOut(reportText(),"harness-report-"+stamp()+".txt");
 function traceOut(){
   if(!cur)return "（まだ実行していない。一度「実行」してから押す）";
-  let sp=Ed.spec;try{sp=JSON.parse($("#spec").value);}catch(_){}
+  let sp=Ed.spec;try{sp=readSpecText($("#spec").value).spec;}catch(_){}
   try{return traceText(sp,cur,{});}catch(e){return "（記録を作れない: "+errText(e)+"）";}
 }
 /* ---- 落ちても残る記録を見せる ----
@@ -8220,7 +8336,7 @@ $("#logVerbose").onchange=()=>{LOGOPT.verbose=$("#logVerbose").checked;
 
 /* 実行できない理由を、押した場所のすぐそばに出す（「押しても動かない」を作らない） */
 function noteBlocked(){
-  let errs=[];try{errs=validate(JSON.parse($("#spec").value));}catch(e){errs=["JSONとして読めない: "+errText(e)];}
+  let errs=[];try{errs=validate(readSpecText($("#spec").value).spec);}catch(e){errs=[specReadError(e)];}
   const msg="実行できない — 先に直すところがある: "+(errs[0]||"検証エラー")+(errs.length>1?`（他${errs.length-1}件）`:"");
   // 前の実行の結果が残っていると「成功しているのにエラー？」に見えるので、状態行も置き換える
   $("#stateline").textContent="state: 実行していない（直すところが残っている。下の⚠のボタンで直せる）";
@@ -8313,7 +8429,7 @@ window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
     expandModules,modulePorts,remapNodeIds,remapLoopIds,reviewSpec,
     processOneWorkItem,resumeRun,startRun,makeRun,memStore,
     // Provider を差し替えて画面ごと試せるようにする（自動テスト用。JSONは触らずに済む）
-    PROVIDERS,ModelManager,ABSENT,CP_STAT,estTokensMin,contextWindowOf}};
+    PROVIDERS,ModelManager,ABSENT,CP_STAT,estTokensMin,contextWindowOf,stateViolations,retryExecution}};
 
 /* ---- 使い方（？ボタン） ---- */
 const HELP_TEXT=`# Harness Studio の使い方
@@ -8612,6 +8728,8 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - **書き出す**: HSL（人が読める1枚のテキスト）か JSON。共有リンクも作れる（中身はURLに入る・サーバには送らない）。
 - **外部のLLMに直させる**: 「書き出す」→ 説明付きの1枚を渡し、返ってきた文を「取り込む」に貼ると、**差分を見てから**適用できる。
 - **取り込む**: HSL / JSON / 共有リンクのどれでも。読めないときは行番号付きで理由が出る。
+- **JSON タブの欄にも HSL を貼れる**。貼ると JSON に直して取り込む（外部の LLM の返事を前置きやコードブロックごと貼ってもよい）。
+  手で打っている途中は欄を書き換えず、図だけ変える（欄から離れると JSON に直る。HSL のままでも実行できる）。
 - **JSONで直に書く**: このシートの上の「**JSONで書く**」タブに、ノードと線に書ける設定が全部載っている。そこも全文コピーできるので、外部のLLMに渡す説明としてそのまま使える。
 
 ## 14.3 画面で決められることと JSON で書けることは同じ
@@ -8678,6 +8796,7 @@ const HELP_JSON=`# JSONで書く（設定の全部）
 
 画面のノード編集で触れる設定は、ぜんぶ JSON にも書ける。
 「エディタ / JSON」の JSON タブに貼れば、その場で図になる。
+**同じ欄に HSL を貼ってもよい**（JSON として読めなければ HSL として読み、JSON に直して取り込む）。
 ここに載っていないキーは Runtime が読まない（書いても何も起きない）。
 
 ## 1. 全体の形
@@ -9807,6 +9926,26 @@ LLM の \`schema\` の確認には関係しない（あちらは値が返って�
 - **まだ動いていない兄弟**（C・D）は \`cancelled\`（理由 \`sibling_failed\`）になり、待ち行列から外れる
 - **もう動き終わった兄弟**はそのまま（\`success\` のまま、使用量も残る）
 - Run は \`failed\`・\`resumable:true\`
+
+**分岐グループ（branchGroup）と枝（branch）の状態**
+
+| | いつ | 状態 |
+|---|---|---|
+| 枝 | root の execution が終わったとき | root と同じ（\`completed\` / \`failed\` / \`cancelled\` / \`stopped\`） |
+| グループ | 作られたとき・Retry したとき | \`running\` |
+| グループ | 中の失敗で fail_fast が働いたとき | \`failed\` |
+| グループ | **その activation の execution が全部終わったとき**（失敗が無い） | 止められた枝がある → \`cancelled\`、それ以外 → \`completed\` |
+
+枝は root の execution だけを指す（下流は同じ activation で見分ける）。
+グループは root が終わっても、下流がまだ動いていれば \`running\` のまま（途中で確定すると、あとで下流が
+失敗したときに \`completed\` → \`failed\` と書き換わるため）。先着が決まって止めた候補（\`race_decided\`）は、
+仕事を終えた扱いで \`cancelled\` にはしない。確定は、実行が終わるたびと Run が止まったとき（success / failed /
+cancelled / paused）に行う。
+
+v0.36.2 までは、正常に終わった枝とグループを書き換える処理が無く、作られたときの \`running\` のまま Run が
+終わっていた（fail_fast で失敗したときだけ正しかった）。また **output ノードだけ attempt を閉じずに抜けていた**
+（execution は \`completed\`、attempt は \`running\`・終わりの時刻なし）。どちらも実行の記録にそのまま出ていた。
+直したうえで、終わった Run に「動いていないのに running」が残らないことを自己テストで毎回確かめている。
 
 \`failurePolicy\` は **いま使えるのは \`fail_fast\` だけ**。
 \`wait_all\` / \`isolate\` は**予約済みで未実装**。書くと検証で
@@ -13336,6 +13475,38 @@ export async function CreateMLCEngine(model,opt){
     &&seq2==="reset,start:4,end:4,reset,start:5,end:5"&&rs.every(r=>r&&r.output);
   ok("92 同じ engine への推論は1本ずつ通す（resetChat が他の推論の最中に KV を消さない）",okAll);
   if(!okAll)out.push(`<span class="fail">↳</span>  overlap=${overlap} seq=${seq} ずれて来た=${seq2}`);}
+ // 93 終わった Run に「動いていないのに running」を残さない（output の attempt・branch・branchGroup）
+ {const PAR={mode:"parallel",failurePolicy:"fail_fast"};
+  const ed=(a,b,x)=>Object.assign({from:{node:a,port:"out"},to:{node:b,port:"in"}},x||{});
+  const cl=(id,code,x)=>Object.assign({id,type:"calc",lang:"js",code},x||{});
+  const J=id=>({id,type:"join",op:"json_array",inputs:{items:{type:"any",cardinality:"many"}}});
+  const B=(nodes,edges)=>({metadata:{name:"t",version:"1"},providers:{m:{adapter:"mock"}},nodes,edges});
+  const specs={
+   "出力だけ":B([{id:"in",type:"input"},cl("c","return 1;"),{id:"out",type:"output"}],[ed("in","c"),ed("c","out")]),
+   "最後から点検と出力へ並列":B([{id:"in",type:"input"},cl("評価","return {score:9};",{routing:PAR}),
+     {id:"点検",type:"assert",lang:"expr",onFail:"continue",asserts:[{name:"8以上",expr:"評価.out.score >= 8",severity:"fail"}]},
+     {id:"out",type:"output"}],[ed("in","評価"),ed("評価","点検"),ed("評価","out")]),
+   "Map の中で並列":B([{id:"in",type:"input"},cl("列",'return ["a","bb"];'),{id:"各件",type:"map",map:{id:"各件"}},
+     cl("分ける","return value;",{routing:PAR}),cl("P1","return 1;"),cl("P2","return 2;"),J("合わせ"),{id:"out",type:"output"}],
+     [ed("in","列"),ed("列","各件",{position:0}),ed("各件","分ける",{mapRole:"body"}),ed("分ける","P1"),ed("分ける","P2"),
+      {from:{node:"P1",port:"out"},to:{node:"合わせ",port:"items"},position:0},
+      {from:{node:"P2",port:"out"},to:{node:"合わせ",port:"items"},position:1},
+      ed("合わせ","各件",{map:{id:"各件"},position:1}),ed("各件","out",{mapRole:"done"})]),
+   "fail_fast で片方失敗":B([{id:"in",type:"input",routing:PAR},cl("A",'throw new Error("x");'),cl("B","return 1;"),cl("B2","return 2;"),
+     J("jn"),{id:"out",type:"output"}],[ed("in","A"),ed("in","B"),ed("B","B2"),
+     {from:{node:"A",port:"out"},to:{node:"jn",port:"items"},position:0},
+     {from:{node:"B2",port:"out"},to:{node:"jn",port:"items"},position:1},ed("jn","out")])};
+  const res={};let allOk=true;
+  for(const[k,sp]of Object.entries(specs)){
+    const r=await fullRun(sp,{in:"q"},memStore(),null);
+    const v=stateViolations(r);
+    const want=k==="fail_fast で片方失敗"?"failed":"success";
+    const gs=Object.values(r.branchGroups).map(g=>g.status);
+    const expectG=k==="fail_fast で片方失敗"?gs.every(x=>x==="failed"):gs.every(x=>x==="completed");
+    res[k]={status:r.status,v:v.length,groups:gs.join(",")};
+    if(r.status!==want||v.length||!expectG)allOk=false;}
+  ok("93 終わった Run に running を残さない（output の attempt・branch・分岐グループ／Map の中の並列／fail_fast）",allOk);
+  if(!allOk)out.push(`<span class="fail">↳</span>  ${JSON.stringify(res)}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  BB.mute=false;bbClear();          // 自己テストの分は輪に残さない（本物の実行の記録を守る）
