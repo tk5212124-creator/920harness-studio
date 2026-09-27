@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 落ちても記録が残るようにする v0.35.0</title>
+<title>Harness Studio — 落ちても記録が残るようにする v0.36.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.35.0 · 落ちても記録が残る</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.36.0 · 落ちても記録が残る</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -1357,13 +1357,31 @@ function mapWebLLMError(e,def){
    - 流れ     … hbb.0 .. hbb.<CAP-1> の輪（古いものから上書き）
    1回の書き込みは数百バイト。全部足しても数十KB にしかならない。
    ================================================================== */
-const BB_CAP=300,BB_P="hbb.";
+/* 輪の大きさは実測で決めた。実ハーネス（23ノード・21回推論）1回の実行で
+   ログは291行・合計21KB（「詳しく」を入れると378行・96KB）。
+   800枠あれば、ふつうの実行1回ぶんのログが丸ごと入る。
+   1行は400字で切る（ふつうの行は平均72字。400字を超えるのは1行だけだった）。
+   Checkpoint は1回の書き込みが486KB なので、こちらの方が桁違いに軽い。 */
+const BB_CAP=800,BB_P="hbb.",BB_LINE=400;
+const BB_STAT={writes:0,bytes:0,dropped:0,failed:0,lastError:null};
 /* mute は「記録しない」。自己テストは1回開くだけで200件以上の実行を回すので、
    これを輪に入れると**本物の実行の記録が押し出されて消える**（実測: 300枠のうち282枠を自己テストが埋めた）。
    ユーザーの実行の記録を守るために、自己テストの間は黙らせる。 */
 const BB={t0:Date.now(),runId:null,n:0,head:0,on:true,mute:false};
-const bbSet=(k,v)=>{try{localStorage.setItem(BB_P+k,v);return true;}
-  catch(e){BB.on=false;BB.err=String((e&&e.name)||e).slice(0,40);return false;}};
+/* 置き場がいっぱいになったら、**古い記録を捨ててもう一度書く**。
+   ここで諦めると、いちばん知りたい「落ちる直前」が残らない。 */
+const bbSet=(k,v)=>{
+  try{localStorage.setItem(BB_P+k,v);BB_STAT.writes++;BB_STAT.bytes+=v.length;return true;}
+  catch(e){
+    BB_STAT.failed++;BB_STAT.lastError=String((e&&e.name)||e).slice(0,40);
+    // 古い方から100枠ぶん捨てて、もう一度だけ試す
+    try{
+      const start=(BB.head-BB.n+BB_CAP*2)%BB_CAP;
+      for(let i=0;i<100;i++){bbDel(String((start+i)%BB_CAP));BB_STAT.dropped++;}
+      BB.n=Math.max(0,BB.n-100);
+      localStorage.setItem(BB_P+k,v);BB_STAT.writes++;BB_STAT.bytes+=v.length;return true;
+    }catch(e2){BB.on=false;BB.err=BB_STAT.lastError;return false;}
+  }};
 const bbDel=k=>{try{localStorage.removeItem(BB_P+k);}catch(e){}}
 const bbGet=k=>{try{return localStorage.getItem(BB_P+k);}catch(e){return null;}};
 /* 1件が大きくなりすぎないように切る。
@@ -1380,12 +1398,20 @@ function bbCut(o,cap,strCap){
   return s.length<=cap?s:JSON.stringify({t:o.t,e:o.e,_cut:2});
 }
 /* 輪に1件足す（これが「流れ」になる） */
-function bbPush(e,x){
+function bbPush(e,x,cap,strCap){
   if(!BB.on||BB.mute)return;
   const o=Object.assign({t:Date.now()-BB.t0,e},x||{});
-  bbSet(String(BB.head),bbCut(o));
+  bbSet(String(BB.head),bbCut(o,cap,strCap));
   BB.head=(BB.head+1)%BB_CAP;BB.n=Math.min(BB.n+1,BB_CAP);
   bbSet("h",BB.head+"|"+BB.n+"|"+(BB.runId||"")+"|"+HARNESS_BUILD);
+}
+/* 画面のログをそのまま輪に流す。
+   「落ちてもログが取れる」ようにするのがこの仕掛けの目的なので、
+   **別に選んだ出来事だけを残すのではなく、ログと同じものを残す**のが素直。
+   ログには無いもの（open / cur / in / last / gen / lprg / dev）だけを別に足している。 */
+function bbLog(cls,msg){
+  if(!BB.on||BB.mute)return;
+  bbPush("log",{k:String(cls||""),m:String(msg==null?"":msg)},BB_LINE+160,BB_LINE);
 }
 /* いまどこを通っているか（1件だけ上書きするので書き込みが軽い） */
 function bbCur(x){if(BB.on&&!BB.mute)bbSet("cur",bbCut(Object.assign({t:Date.now()-BB.t0},x||{})));}
@@ -1474,7 +1500,7 @@ function bbRead(){
 function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));
   ["h","open","cur","in","last","gen","lprg"].forEach(bbDel);
   BB.head=0;BB.n=0;BB.slotAt={};BB.slotPct={};}
-const HARNESS_BUILD="0.35.0";
+const HARNESS_BUILD="0.36.0";
 /* 前回の記録は、今回書き始める前に読み出しておく（輪は古いものから上書きするので、後からでは遅い）。
    読み出したら捨てる。こうすると輪の先頭（BB.head=0）から今回の分だけを書ける。 */
 const BB_PREV=bbRead();
@@ -1484,7 +1510,7 @@ function bbHeap(){try{return(typeof performance!=="undefined"&&performance.memor
 /* 1回の実行の始まり。ここで時計を0に戻し、端末の限界も記録する
    （落ちた原因が「端末の上限」なのかを後から切り分けるのに要る）。 */
 async function bbRunStart(spec,tag,input){
-  /* 輪を空にしてから始める。1回の実行に300枠を全部使えるようにするため
+  /* 輪を空にしてから始める。1回の実行に輪（800枠）を全部使えるようにするため
      （前の実行の記録を残すと、長い実行の頭が押し出されて肝心なところが消える）。 */
   bbClear();
   BB.t0=Date.now();BB.runId="r"+Date.now().toString(36);BB.calls=0;
@@ -1536,7 +1562,9 @@ function bbText(r){
   if(!r)return "（記録なし。まだ一度も実行していないか、この端末で localStorage が使えない）\n";
   const L=[];
   L.push("# 落ちる前の記録（ブラックボックス）");
+  const nLog=r.rows.filter(x=>x.e==="log").length;
   L.push("版: "+(r.build||"?")+" / 実行: "+(r.runId||"(実行前)")+" / 件数: "+r.rows.length
+    +"（うち画面のログと同じ行: "+nLog+"）"
     +(r.rows.length>=BB_CAP?"（これより古いものは上書きで消えている）":""));
   L.push("終わり方: "+(r.clean?"最後まで行った（end か left で終わっている）"
     :"**途中で消えた**（端末が落ちたか、いきなり閉じられた）"));
@@ -1554,12 +1582,15 @@ function bbText(r){
     L.push(String(r.last.msgs==null?"":r.last.msgs));
     if(r.last._cut)L.push("（長いので切ってある）");L.push("");}
   L.push("## 流れ（古い順・t は実行の始まりからのミリ秒）");
-  L.push("  e の意味: run=実行開始 / dev=端末の限界 / load=モデルの読み込み / call=推論1回"
-    +" / vis=表に出た・裏に回った / err=例外 / end=実行の終わり / left=ページを離れた");
+  L.push("  e の意味: log=画面のログと同じ行 / run=実行開始 / dev=端末の限界 / load=モデルの読み込み"
+    +" / call=推論1回 / exp=くらべるの1回 / vis=表に出た・裏に回った / err=例外(console含む)"
+    +" / end=実行の終わり / left=ページを離れた");
   for(const o of r.rows){
+    const head=("       "+(o.t==null?"?":String(o.t))).slice(-8)+"ms  "+String(o.e||"?").padEnd(5," ")+"  ";
+    if(o.e==="log"){              // ログ行はそのままの文で出す（読むのは人なので）
+      L.push(head+"["+(o.k||"")+"] "+String(o.m==null?"":o.m).replace(/\n/g," ⏎ "));continue;}
     const rest=Object.assign({},o);delete rest.t;delete rest.e;
-    L.push(("       "+(o.t==null?"?":String(o.t))).slice(-8)+"ms  "+String(o.e||"?").padEnd(5," ")
-      +"  "+JSON.stringify(rest));}
+    L.push(head+JSON.stringify(rest));}
   return L.join("\n")+"\n";
 }
 const LOADING_KEY="harness_loading_v1";
@@ -4092,7 +4123,10 @@ const traceText=(spec,run,opt)=>JSON.stringify(traceReport(spec,run,opt),null,1)
 const RUN_GUARD=20000;      // 安全装置。ここまで回ったら止めて Resume に任せる（勝手に諦めない）
 /* Runtime に渡される log を包んで、画面に出すのと同時に記録にも残す */
 function tapLog(run,log){
-  return (cls,msg)=>{keepLog(run,cls,msg);if(log)log(cls,msg);};
+  /* ログは3つに配る: 実行の記録（keepLog）・落ちても残る記録（bbLog）・画面（log）。
+     画面の log もそれ自身で bbLog を呼ぶので、二重にならないよう印を立てる。 */
+  return (cls,msg)=>{keepLog(run,cls,msg);bbLog(cls,msg);
+    if(log){BB.inTee=true;try{log(cls,msg);}finally{BB.inTee=false;}}};
 }
 async function runUntilIdle(spec,run,store,log,ctl){let guard=0,hitGuard=false;
   log=tapLog(run,log);
@@ -4187,7 +4221,9 @@ function localStore(){
     clear(){try{localStorage.removeItem(CP_KEY);}catch(e){}}};
 }
 const $=s=>document.querySelector(s);const logEl=$("#log");const store=localStore();
-function log(cls,msg){const sp=document.createElement("span");sp.className="l-"+({node:"node",ok:"ok",err:"err",loop:"loop",route:"route",dim:"dim",data:"data",cp:"cp",prov:"prov"}[cls]||"dim");sp.textContent=msg+"\n";logEl.appendChild(sp);logEl.scrollTop=logEl.scrollHeight;}
+function log(cls,msg){
+  if(!BB.inTee)bbLog(cls,msg);        // engine 経由でないログ（UIが直に出すもの）もここで拾う
+  const sp=document.createElement("span");sp.className="l-"+({node:"node",ok:"ok",err:"err",loop:"loop",route:"route",dim:"dim",data:"data",cp:"cp",prov:"prov"}[cls]||"dim");sp.textContent=msg+"\n";logEl.appendChild(sp);logEl.scrollTop=logEl.scrollHeight;}
 const clearLog=()=>logEl.innerHTML="";
 const streamEl=$("#stream");let streamNode=null;
 function clearStream(){streamEl.innerHTML="";streamNode=null;}
@@ -7434,6 +7470,10 @@ function renderTotals(){
     `1回の最大 <b>${Math.round(CP_STAT.peak/1024)}</b>KB`,
     `書いた合計 <b>${(CP_STAT.bytes/1048576).toFixed(2)}</b>MB`,
     CP_STAT.failed?`<span style="color:var(--err)">保存できなかった <b>${CP_STAT.failed}</b>回（${esc(String(CP_STAT.lastError||"").slice(0,60))}）</span>`:"",
+    // 落ちても残る記録の書き込み（ログと同じものを流しているので、量が見えるようにする）
+    `落ちても残る記録 <b>${BB_STAT.writes}</b>回 / <b>${Math.round(BB_STAT.bytes/1024)}</b>KB`,
+    BB_STAT.dropped?`古い記録を捨てた <b>${BB_STAT.dropped}</b>件`:"",
+    BB_STAT.failed?`<span style="color:var(--err)">記録できなかった <b>${BB_STAT.failed}</b>回（${esc(String(BB_STAT.lastError||""))}）</span>`:"",
     t.contextOverflows?`<span style="color:var(--err)">文脈の窓に入らず送らなかった <b>${t.contextOverflows}</b>回</span>`:"",
   ].filter(Boolean).map(x=>"<span>"+x+"</span>").join("");
   if(CP_STAT.peak>2*1024*1024&&!report._cpWarned){report._cpWarned=true;
@@ -8076,8 +8116,9 @@ function noteBlocked(){
   const box=$("#vErr");if(box&&box.textContent.trim())box.scrollIntoView({block:"center"});
 }
 async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec){noteBlocked();return;}
-  log("cp",`▶ 実行するハーネス: ${(spec.metadata&&spec.metadata.name)||"名前なし"}（ノード${(spec.nodes||[]).length}・線${(spec.edges||[]).length}）`);
+  // 記録を先に始める（輪を空にするので、ログを出してからだと1行目が消える）
   await bbRunStart(spec,"run",inputForRun());   // 落ちても残る記録をここから始める（入れた値も残す）
+  log("cp",`▶ 実行するハーネス: ${(spec.metadata&&spec.metadata.name)||"名前なし"}（ノード${(spec.nodes||[]).length}・線${(spec.edges||[]).length}）`);
   store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
   setRunUI(true);setState("running");
   try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}
@@ -8089,8 +8130,9 @@ async function stepOne(){const spec=parseSpec();if(!spec){noteBlocked();return;}
   const r=await processOneWorkItem(spec,cur,store,log,ctl);log("cp",`  ▸ work: ${r.kind}`);report();}
 async function doResume(){clearLog();const cp=store.load();if(!cp){log("err","Checkpointなし");return;}if(cp.status==="success"){log("err","terminal success はResume不可");return;}
   const spec=parseSpec();if(!spec)return;if(canonSpec(spec)!==cp.specCanon){log("err","Spec変更のためResume拒否（自動移行しない）");return;}
-  cur=cp;ctl=newCtl();log("cp",`▣ Resume: status=${cp.status} queue先頭=${JSON.stringify(cp.workQueue[0])}`);
-  await bbRunStart(spec,"resume",cp&&cp.input);
+  cur=cp;ctl=newCtl();
+  await bbRunStart(spec,"resume",cp&&cp.input);   // 先に始める（ログを出してからだと1行目が消える）
+  log("cp",`▣ Resume: status=${cp.status} queue先頭=${JSON.stringify(cp.workQueue[0])}`);
   setRunUI(true);try{await resumeRun(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}report();}
 async function doRetry(){const spec=parseSpec();if(!spec||!cur)return;
   const failed=Object.values(cur.executions).find(e=>e.status==="failed");if(!failed){log("err","failedなExecutionが無い");return;}
@@ -8124,7 +8166,8 @@ setHint("ノードをタップすると中身を編集。○ → ● の順に�
 window.__ui={openNodeSheet,openEdgeSheet,openSpecSheet,openProvidersSheet,openModulesSheet,openBBSheet,closeSheet};
 // 落ちても残る記録の口（自動テスト用。落ちた状態を作って読めるようにする）
 window.__bb={read:bbRead,text:bbText,push:bbPush,open:bbOpen,close:bbClose,cur:bbCur,
-  clear:bbClear,device:bbDevice,prev:()=>BB_PREV,state:()=>BB,CAP:BB_CAP,P:BB_P};
+  log:bbLog,clear:bbClear,device:bbDevice,prev:()=>BB_PREV,state:()=>BB,stat:()=>BB_STAT,
+  CAP:BB_CAP,LINE:BB_LINE,P:BB_P};
 window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
   nodeOut:id=>{const h=((cur&&cur.nodeRuns)||{})[id]||[];const l=h.filter(x=>x.status==="success").slice(-1)[0];return l?l.out:null;},
   // Runtime をそのまま呼べる口（自動テスト用。画面を触らずに走らせて中身を見る）
@@ -8407,7 +8450,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - **モデルの読み込み中に消えた** … モデル名・**文脈の窓（指定なしならそう書く）**・必要メモリの目安。
   この場合は知らせにそのまま「**省メモリで試す（文脈1024）**」が出るので、押してもう一度実行できる
 
-記録には**そのとき何を入力していたか**も入る:
+**中身は画面の実行ログと同じもの**（1行も欠けず、同じ順番で）。そこに、ログには出ないものを足してある:
 
 - **入れた値** … その実行に入れた質問（1件だけ残す）
 - **最後にモデルへ送った文** … 落ちた瞬間に送っていた文そのもの（system も含めて長めに残す）
@@ -10322,11 +10365,33 @@ Checkpoint（28章）は Run 全体を書くので、落ちる瞬間には間に
 **なぜ残るのか** … localStorage は**同期**で、\`setItem\` が返った時点でもう置かれている。
 だから「書けたところまで」は落ちても消えない。非同期の置き場（IndexedDB）では間に合わないことがある。
 
+**ログと同じものを残す**
+
+別に選んだ出来事だけを残すのではなく、**画面の実行ログに出る行を全部そのまま輪に流している**。
+ログは \`tapLog\`（engine のログの出口）で3つに配られる: 実行の記録（\`keepLog\`）・落ちても残る記録（\`bbLog\`）・画面。
+engine を通らずに画面が直に出す行も拾う（二重にならないよう、engine 経由のときは印を立てている）。
+
+その上で、**ログでは言えないこと**だけを別に足している:
+
+| 足しているもの | ログで言えない理由 |
+|---|---|
+| \`hbb.open\`（始めたのに終わっていない） | ログは「起きたこと」を後から書く。**終わったら消える印**でないと、どこで死んだかを指せない |
+| \`hbb.last\`（いま送っている文） | ログは「詳しく」を入れないと送った文を出さない。落ちた瞬間の文は常に要る |
+| \`hbb.gen\` / \`hbb.lprg\`（生成・読み込みの途中） | ログはトークンごと・%ごとには出さない（出すと画面が埋まる） |
+| \`dev\`（端末の限界） | ログには出していない |
+| \`console.error\` の横取り | WebLLM の中が出す文で、ログを通らない |
+
+**量は実測で決めた。** 実ハーネス（23ノード・21回推論）1回で、ログは291行・21KB
+（「詳しく」を入れると378行・96KB）。輪は800枠、1行は400字で切る（ふつうの行は平均72字）。
+画面から走らせて、**記録ありと記録なしの差は約70ms**（1.58秒 → 1.65秒・mock の速さで測ったので、
+本物の推論が1回数秒かかる実機では比べものにならないほど小さい）。
+使用量に「落ちても残る記録 N回 / N KB」が出る。
+
 **何をどこに置くか**（localStorage のキー。頭は \`hbb.\`）
 
 | キー | 中身 | 書き方 |
 |---|---|---|
-| \`hbb.0\` … \`hbb.299\` | 流れ（1件ずつ） | 輪。300件を超えたら古いものから上書き |
+| \`hbb.0\` … \`hbb.799\` | 流れ（ログの行＋出来事） | 輪。800件を超えたら古いものから上書き |
 | \`hbb.h\` | 輪の先頭・件数・実行ID・版 | 1件足すたびに書き替え |
 | \`hbb.cur\` | いま通っている Work Item | 1件を上書きし続ける（だから軽い） |
 | \`hbb.open\` | **始めたのに終わっていない危ない所** | 始める前に書き、終わったら消す |
@@ -10344,6 +10409,7 @@ Checkpoint（28章）は Run 全体を書くので、落ちる瞬間には間に
 
 | e | いつ | 主な中身 |
 |---|---|---|
+| \`log\` | **画面のログに1行出るたび** | 種類（\`k\`）と文（\`m\`。400字で切る） |
 | \`run\` | 実行の始まり | ハーネス名・ノード数・線の数・版 |
 | \`dev\` | 実行の始まり（続けて） | UA・端末のメモリ・JSヒープの上限・**WebGPU の限界値**（maxBufferSize など） |
 | \`load\` | モデルの読み込み | ノード・モデル・**文脈の窓（\`ctx\`。null は「指定なし＝モデルの既定」）**・**必要メモリの目安（\`vram\`）**・掛かった時間 |
@@ -10389,11 +10455,12 @@ console そのものの動きは変えていない。
 ※ ページを離れるときは \`left\` のあとに \`vis\` が付くので、「最後が \`left\` か」では判定できない。
 
 **大きさ** … 1件は400字で切る（切るときは**中の文字列を短くする**ので、JSON として読める形は崩さない。
-\`_cut\` がその印）。全部で数十KB。Checkpoint（数MB）とは桁が違うので、書き込みが重くならない。
-localStorage に書けなくなったら（いっぱい・書き込み禁止）そこで記録は止まり、
-読み出した文に「途中で書けなくなった」と出る（**黙って止めない**）。
+\`_cut\` がその印）。全部で百数十KB。Checkpoint（1回の書き込みで約0.5MB）より軽い。
+localStorage がいっぱいで書けないときは、**輪の古い方から100件を捨ててもう一度書く**
+（いちばん知りたいのは落ちる直前なので、古い方を捨てる）。捨てた数は使用量に出る。
+それでも書けないときだけ記録を止め、読み出した文に「途中で書けなくなった」と出す（**黙って止めない**）。
 
-**1回の実行に300枠を全部使う**
+**1回の実行に輪（800枠）を全部使う**
 
 実行の始まりで**輪を空にする**。前の実行の記録を残すと、長い実行の頭から押し出されて
 肝心なところが消えるため。開いたときに自己テストが回るが、**自己テストは記録しない**
@@ -12988,6 +13055,49 @@ export async function CreateMLCEngine(model,opt){
   if(!okAll)out.push(`<span class="fail">↳</span>  status=${r.status} in=${inOk} last=${lastOk}`
     +` gen=${JSON.stringify(b.gen)} lprg=${JSON.stringify(b.lprg)} tok=${call.tok} 文=${txtOk}`
     +` console=${tapOk}(${JSON.stringify(er)})`);}
+ // 90 落ちても残る記録＝ログと同じもの: 実行のログが1行も欠けず・二重にならずに輪へ入る
+ {BB.mute=false;
+  const sp={version:"0.1",metadata:{name:"bb3"},nodes:[
+    {id:"IN",type:"input"},
+    {id:"A",type:"llm",mock:{contents:["a1"]}},
+    {id:"B",type:"llm",mock:{contents:["b1"]}},
+    {id:"OUT",type:"output"}],
+   edges:[{from:{node:"IN"},to:{node:"A"}},{from:{node:"A"},to:{node:"B"}},{from:{node:"B"},to:{node:"OUT"}}]};
+  // 画面の log と同じ形: engine 経由でないときだけ自分で輪に入れる
+  const screen=[];
+  const uiLog=(c,m)=>{if(!BB.inTee)bbLog(c,m);screen.push(m);};
+  bbClear();BB.t0=Date.now();
+  uiLog("cp","▶ 画面が直に出した行");                  // engine を通らない行
+  const run=makeRun(sp,{IN:"Q"});startRun(sp,run);
+  await runUntilIdle(sp,run,memStore(),uiLog,null);
+  const rows=bbRead().rows.filter(x=>x.e==="log").map(x=>x.m);
+  // 画面に出た行と、輪に入った行が同じ（数も順番も）
+  const same=rows.length===screen.length&&rows.every((m,i)=>m===screen[i]);
+  const engineLines=(run.log||[]).length;
+  const covers=engineLines>0&&rows.length===engineLines+1;   // engine のぶん＋画面が直に出した1行
+  // 1行の上限（長い行は切るが、JSON としては読める）
+  bbClear();bbLog("dim","あ".repeat(2000));
+  const one=bbRead().rows[0]||{};
+  const capOk=one.e==="log"&&typeof one.m==="string"&&one.m.length<=BB_LINE+1&&one._cut===1;
+  // 置き場がいっぱいになっても、古いものを捨てて書き続ける（黙って止まらない）
+  bbClear();for(let i=0;i<200;i++)bbPush("x",{i});
+  const st0=Object.assign({},BB_STAT);
+  const realSet=Storage.prototype.setItem;let thrown=0;
+  Storage.prototype.setItem=function(k,v){
+    if(!thrown&&String(k).startsWith(BB_P)){thrown++;
+      const e=new Error("quota");e.name="QuotaExceededError";throw e;}
+    return realSet.call(this,k,v);};
+  try{bbPush("after",{ok:1});}finally{Storage.prototype.setItem=realSet;}
+  const q=bbRead();
+  const quotaOk=BB.on===true&&thrown===1
+    &&BB_STAT.dropped-st0.dropped===100&&BB_STAT.failed-st0.failed===1
+    &&q.rows[q.rows.length-1].e==="after"&&q.rows.length===101;
+  bbClear();BB.mute=true;
+  const okAll=same&&covers&&capOk&&quotaOk;
+  ok("90 落ちても残る記録＝ログと同じもの（欠けない・二重にならない・長い行は切る・いっぱいでも古い方を捨てて書き続ける）",okAll);
+  if(!okAll)out.push(`<span class="fail">↳</span>  same=${same}(${rows.length}/${screen.length})`
+    +` covers=${covers}(engine=${engineLines}) cap=${capOk}(${String(one.m||"").length})`
+    +` quota=${quotaOk}(on=${BB.on} thrown=${thrown} dropped=${BB_STAT.dropped-st0.dropped} rows=${q.rows.length})`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  BB.mute=false;bbClear();          // 自己テストの分は輪に残さない（本物の実行の記録を守る）

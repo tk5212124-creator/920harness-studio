@@ -56,6 +56,10 @@ R['① ふつうの実行'] = await p.evaluate(() => { const r = window.__bb.rea
     件数: r.rows.length, 種類: [...new Set(k)], 最初: k.slice(0, 3), 最後: k[k.length - 1],
     推論: c.length, 字数がある: c.every(x => x.ch > 0), 時間がある: c.every(x => x.ms != null),
     モデル名がある: c.every(x => !!x.mdl), clean: r.clean, open: r.open,
+    // ログも流しているので、end の後ろに結果のログ行が続く。end があって success なら良い
+    終わりの印: (r.rows.filter(x => x.e === 'end').pop() || {}).st || null,
+    ログ行: r.rows.filter(x => x.e === 'log').length,
+    画面のログ行: document.querySelectorAll('#log span').length,
     読み込み: r.rows.filter(x => x.e === 'load').length }; });
 // 読み込みの記録に「文脈の窓」と「必要メモリの目安」が入っている（落ちたときの切り分けに要る）
 R['① 読み込みの記録'] = await p.evaluate(() => {
@@ -65,7 +69,8 @@ ok.loadFields = R['① 読み込みの記録'].件数 >= 1
   && R['① 読み込みの記録'].一件目.m === 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';
 ok.normal = R['① ふつうの実行'].clean === true && R['① ふつうの実行'].open === null
   && R['① ふつうの実行'].最初[0] === 'run' && R['① ふつうの実行'].最初[1] === 'dev'
-  && R['① ふつうの実行'].最後 === 'end' && R['① ふつうの実行'].推論 === 21
+  && R['① ふつうの実行'].終わりの印 === 'success' && R['① ふつうの実行'].推論 === 21
+  && R['① ふつうの実行'].ログ行 === R['① ふつうの実行'].画面のログ行
   && R['① ふつうの実行'].字数がある && R['① ふつうの実行'].時間がある && R['① ふつうの実行'].モデル名がある
   && R['① ふつうの実行'].読み込み >= 1;
 
@@ -84,6 +89,9 @@ p.locator('#runTop').first().tap().catch(() => {});
 await p.waitForFunction(() => { const r = window.__bb.read();
   return r && r.open && r.open.e === 'call' && r.open.i === 3; }, null, { timeout: 60000 });
 const 落ちる直前 = await p.evaluate(() => window.__bb.read().open);
+// 落ちる瞬間に画面のログに出ていた行（これと同じものが記録に残っていてほしい）
+const 画面のログ = await p.evaluate(() =>
+  [...document.querySelectorAll('#log span')].map(x => x.textContent.replace(/\n$/, '')));
 let crashed = false;
 const cdp = await ctx.newCDPSession(p);
 // Page.crash は返事を返す相手が死ぬので await しない。死んだページに触るのも避ける
@@ -113,6 +121,15 @@ ok.slots = /雨の日/.test(R['④ 入力と送った文'].入力 || '')
   && R['④ 入力と送った文'].送った先.i === 3
   && R['④ 入力と送った文'].送った先.n === R['④ 開き直した'].open.n
   && !!R['④ 入力と送った文'].読み込みの途中;
+// 落ちたあとの記録に、画面のログと同じ行が同じ順番で全部入っている
+R['④ ログと同じか'] = await p.evaluate(screen => { const r = window.__bb.prev() || { rows: [] };
+  const rows = r.rows.filter(x => x.e === 'log').map(x => x.m);
+  const firstDiff = rows.findIndex((m, i) => m !== screen[i]);
+  return { 画面の行数: screen.length, 記録の行数: rows.length, 最初に違う行: firstDiff,
+    最後の行: rows[rows.length - 1] || null }; }, 画面のログ);
+ok.sameAsLog = R['④ ログと同じか'].画面の行数 > 0
+  && R['④ ログと同じか'].記録の行数 === R['④ ログと同じか'].画面の行数
+  && R['④ ログと同じか'].最初に違う行 === -1;
 ok.notice = R['④ 開き直した'].知らせ === true && R['④ 開き直した'].clean === false
   && R['④ 開き直した'].open.e === 'call' && R['④ 開き直した'].open.i === 3
   && R['④ 開き直した'].open.n === 落ちる直前.n
