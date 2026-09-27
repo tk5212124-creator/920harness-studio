@@ -21,6 +21,8 @@ node tests/harness-realspec.mjs     # 実ハーネスを JSON 無改変で画面
 node tests/harness-invariants.mjs   # 終わった Run に「動いていないのに running」が残らない
                                     #   （ChatGPT の10通り＋Retry＋実ハーネス v13.1 を画面から）
 node tests/harness-hslbox.mjs       # JSON タブの欄に HSL を貼る（貼り付け・打つ途中・LLM の返事・欄を離れる・壊れた文）
+node tests/harness-probe.mjs        # 落ちる原因の切り分け — 条件ごとに読み込み直し、落ちても続きから進む（stub）
+node tests/harness-gpuprobe.mjs     # Worker の中の GPU の見張り — 本物の WebGPU（swiftshader）とローカル HTTP で確かめる
 node tests/harness-blackbox.mjs     # 落ちても残る記録 — 推論の途中で**本当にレンダラをクラッシュさせ**、
                                     #   どこで消えたか・何を入力して何を送っていたか・画面のログと
                                     #   同じ行が全部残る／常設ボタンからも見える／2回読み込み直しても

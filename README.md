@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.37.0 HSL も貼れる・状態の食い違いを直す
+## 1. 現状 — v0.38.0 落ちる原因を端末で切り分ける
 
 | 段階 | 状態 |
 |---|---|
@@ -68,7 +68,8 @@ iPhone でもPCでも同じ操作。
 | ログと同じものを残す v0.36.0（画面の実行ログを1行も欠けずそのまま輪に流す＝本物のクラッシュ後に「画面に出ていた42行」と記録の42行が一致／輪 300→800枠・1行400字／置き場がいっぱいなら古い方を捨てて書き続ける／記録あり・なしの差は約70ms（1.58→1.65秒）／書いた量を使用量に出す） | 実装済み |
 | 落ちた記録を消さない v0.36.1（実機で「記録なし」と出た3つの原因を塞ぐ: 常設ボタンが今回の空の記録を読んでいた／開くたびに前回の記録を置き場から消していたので読み込み直しで証拠が消えた／開いてすぐの実行は自己テストに黙らされて0件だった → 落ちた回は取り置き（hbb.keep.crash）に移して捨てるまで残す・開いた履歴10回・知らせは画面のいちばん上・実行は自己テストの後で始める） | 実装済み |
 | 2本同時に走らせない v0.36.2（実機の記録で、実行が2本同時に走り、2本目の推論で消えていた。押してから押せなくなるまでに待ちが2つあった。WebLLM の resetChat は推論のロックを取らずに KV を消すので、1本目の推論中に2本目が KV を消していた → 動かす操作は同時に1つだけ・同じ engine への推論は resetChat と組にして1本ずつ） | 実装済み |
-| **HSL も貼れる・状態の食い違いを直す v0.37.0（JSON タブの欄に HSL を貼っても取り込める＝LLM の返事をコードブロックごと貼ってよい／終わった Run に output の attempt・branch・branchGroup が running のまま残っていた（ChatGPT の報告）→ output の経路でも attempt を閉じる・枝は root を映す・グループは activation の execution が全部終わったら completed / cancelled に確定。10通り＋実ハーネスで「動いていないのに running」が0件）** | **いまここ** |
+| HSL も貼れる・状態の食い違いを直す v0.37.0（JSON タブの欄に HSL を貼っても取り込める＝LLM の返事をコードブロックごと貼ってよい／終わった Run に output の attempt・branch・branchGroup が running のまま残っていた（ChatGPT の報告）→ output の経路でも attempt を閉じる・枝は root を映す・グループは activation の execution が全部終わったら completed / cancelled に確定。10通り＋実ハーネスで「動いていないのに running」が0件） | 実装済み |
+| **落ちる原因を端末で切り分ける v0.38.0（推論1回を12の境界に分けて記録／Worker の中の GPU の確保・device の喪失・WebGPU のエラー・console を別の口で記録＝これまで Worker の中の異常は見えていなかった／実行したハーネス（JSON）も記録に残す／開いている途中で消えた回を別に取り置く／端末で A〜J の条件を1つずつ、ページを読み込み直しながら試す「切り分け」＝落ちても続きから進む／モデル用 wasm の数字から「945MB」の中身を確認＝ふつうの推論の見積もりは約320MB）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -1111,7 +1112,11 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 | `hbb.lprg` | 読み込みの途中（%と段階・%が動いたら書く） |
 | `hbb.keep.crash` | **途中で消えた回の取り置き**（捨てるまで残る） |
 | `hbb.keep.last` | 最後にきれいに終わった回 |
-| `hbb.boots` | 開いた履歴（直近10回。前の回が「途中で消えた／きれい／開いただけ」のどれだったか） |
+| `hbb.boots` | 開いた履歴（直近10回。前の回が「途中で消えた／きれい／開いただけ／開いている途中で消えた」のどれだったか） |
+| `hbb.keep.bootcrash` | 開いている途中（自己テストが終わる前）に消えた回。落ちた回とは別に取り置く |
+| `hbb.step` | 推論1回の中で最後に通った境界（1 engine取得開始 〜 12 形の検査完了） |
+| `hbb.gpu` | GPU の確保量・最大量・個数（Worker の中の見張りから） |
+| `hbb.spec` | 実行したハーネスそのもの（JSON） |
 
 落ちると `hbb.open` が消えずに残る。これが**落ちた場所**そのものになる。
 流れに載るのは `run`（実行開始）/ `dev`（UA・メモリ・JSヒープ上限・**WebGPU の限界値**）/
@@ -1195,6 +1200,8 @@ node tests/harness-realspec.mjs     # 実際に使う大きいハーネス（23�
 node tests/harness-blackbox.mjs     # 推論の途中でレンダラを本当にクラッシュさせ、落ちた場所が残って読めるか
 node tests/harness-invariants.mjs   # 終わった Run に「動いていないのに running」が残らない（10通り＋Retry＋実ハーネス）
 node tests/harness-hslbox.mjs       # JSON タブの欄に HSL を貼る（貼り付け・打つ途中・LLM の返事・欄を離れる・壊れた文）
+node tests/harness-probe.mjs        # 落ちる原因の切り分け（A→E→F→J。E で本当にレンダラを落としても続きから進む・境界1〜12）
+node tests/harness-gpuprobe.mjs     # Worker の中の GPU の見張り（本物の WebGPU：確保・解放・検証エラー・device の喪失・console）
 MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
 
