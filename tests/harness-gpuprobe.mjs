@@ -67,6 +67,38 @@ R['② 同梱WebLLMのWorker'] = await p.evaluate(async () => {
 });
 ok.webllmWorker = ['setAppConfig', 'setLogLevel', 'reload'].every(k => R['② 同梱WebLLMのWorker'].届いた命令.includes(k));
 
+// ③ wasm のメモリ（WebLLM の本体・xgrammar・語彙表は wasm の中に置かれる。GPU とは別に数える）
+//    Worker の中で wasm を作り、メモリを増やし、わざと 1.2 秒詰まらせる。
+//    心拍（whb）が 250ms ごとに最後の値を1件上書きし、詰まった分（wlag）が輪に残ること。
+R['③ wasm と心拍'] = await p.evaluate(async () => {
+  window.__bb.clear(); window.__bb.push('run', { tag: 'wasm-probe' });
+  const src = window.__dbg.eng.workerProbeSrc() +
+    "self.onmessage=async e=>{const d=e.data;if(d&&d.__hsPort){__hsSetPort(e.ports[0]);return;}\n" +
+    " const bytes=new Uint8Array([0,97,115,109,1,0,0,0,5,3,1,0,1,7,7,1,3,109,101,109,2,0]);\n" +
+    " const {instance}=await WebAssembly.instantiate(bytes);\n" +
+    " instance.exports.mem.grow(256);\n" +
+    " const im=new WebAssembly.Memory({initial:32});\n" +
+    " setTimeout(()=>{const t=Date.now();while(Date.now()-t<1200){}},400);\n" +
+    " setTimeout(()=>self.postMessage('done'),2400);};\n";
+  const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { type: 'module' });
+  const ch = new MessageChannel(); ch.port1.onmessage = ev => window.__dbg.eng.bbWorkerEvent(ev.data);
+  w.postMessage({ __hsPort: 1 }, [ch.port2]);
+  await new Promise(r => { w.onmessage = ev => { if (ev.data === 'done') r(); }; w.postMessage('go'); });
+  await new Promise(r => setTimeout(r, 400));
+  w.terminate();
+  const rd = window.__bb.read();
+  return { 行: [...new Set(rd.rows.filter(x => x.e !== 'run').map(x => x.e))],
+    作った: rd.rows.filter(x => x.e === 'wasm').map(x => x.why + ':' + x.memMB),
+    増やす前: rd.rows.find(x => x.e === 'wgrow0') || null, 増やした: rd.rows.find(x => x.e === 'wgrow') || null,
+    詰まり: rd.rows.find(x => x.e === 'wlag') || null, 心拍: rd.whb || null,
+    文: (window.__bb.text(rd) || '').split('\n').filter(l => /Worker の最後の心拍/.test(l)) };
+});
+{ const c = R['③ wasm と心拍'];
+  ok.wasmSeen = c.作った.includes('instantiate:0.1') && c.作った.includes('Memory:2');
+  ok.wasmGrow = !!c.増やす前 && c.増やす前.addMB === 16 && !!c.増やした && c.増やした.memMB === 16.1;
+  ok.workerLag = !!c.詰まり && c.詰まり.ms >= 700;
+  ok.workerHeartbeat = !!c.心拍 && c.心拍.wasmMB === 18.1 && c.文.length === 1; }
+
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + JSON.stringify(v));
 console.log('pageerror: ' + JSON.stringify(errs));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

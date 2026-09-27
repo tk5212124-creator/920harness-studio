@@ -37,11 +37,14 @@ const paste = async p => {
 //    ここが埋まると、本物の実行の記録が押し出されて消える（v0.34.0 の実機で起きた）
 let p = await newPage();
 R['⓪ 開いた直後'] = await p.evaluate(() => { const r = window.__bb.read();
-  return { 自己テストの記録: r ? r.rows.length : 0,
+  return { 自己テストの記録: r ? r.rows.filter(x => x.e !== 'boot').length : 0,
+    開き終わった: r ? r.rows.filter(x => x.e === 'boot').map(x => x.st + ' ' + x.selftest) : [],
     自己テスト: window.__selfTest.pass + '/' + window.__selfTest.total,
     全部通る: window.__selfTest.pass === window.__selfTest.total,
     mute: window.__bb.state().mute }; });
-ok.noSelfTestNoise = R['⓪ 開いた直後'].自己テストの記録 === 0 && R['⓪ 開いた直後'].全部通る;
+// 輪はページを開いてからの全部を残す（v0.39.0）。自己テストの分は残さず、「開き終わった」の1行だけがある
+ok.noSelfTestNoise = R['⓪ 開いた直後'].自己テストの記録 === 0 && R['⓪ 開いた直後'].全部通る
+  && R['⓪ 開いた直後'].開き終わった.length === 1;
 
 // ① ふつうに最後まで走らせると、記録は「きれいに終わった」で閉じる
 await paste(p);
@@ -53,7 +56,7 @@ await tap(p, '#runTop');
 R['① ふつうの実行'] = await p.evaluate(() => { const r = window.__bb.read();
   const k = r.rows.map(x => x.e), c = r.rows.filter(x => x.e === 'call');
   return { state: document.querySelector('#stateline').textContent.slice(0, 40),
-    件数: r.rows.length, 種類: [...new Set(k)], 最初: k.slice(0, 3), 最後: k[k.length - 1],
+    件数: r.rows.length, 種類: [...new Set(k)], 最初: k.slice(k.indexOf('run'), k.indexOf('run') + 3), 前: k.slice(0, k.indexOf('run')), 最後: k[k.length - 1],
     推論: c.length, 字数がある: c.every(x => x.ch > 0), 時間がある: c.every(x => x.ms != null),
     モデル名がある: c.every(x => !!x.mdl), clean: r.clean, open: r.open,
     // ログも流しているので、end の後ろに結果のログ行が続く。end があって success なら良い
@@ -69,6 +72,7 @@ ok.loadFields = R['① 読み込みの記録'].件数 >= 1
   && R['① 読み込みの記録'].一件目.m === 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';
 ok.normal = R['① ふつうの実行'].clean === true && R['① ふつうの実行'].open === null
   && R['① ふつうの実行'].最初[0] === 'run' && R['① ふつうの実行'].最初[1] === 'dev'
+  && R['① ふつうの実行'].前.includes('boot')
   && R['① ふつうの実行'].終わりの印 === 'success' && R['① ふつうの実行'].推論 === 21
   && R['① ふつうの実行'].ログ行 === R['① ふつうの実行'].画面のログ行
   && R['① ふつうの実行'].字数がある && R['① ふつうの実行'].時間がある && R['① ふつうの実行'].モデル名がある
@@ -213,7 +217,8 @@ ok.crashKeptAfterClean = R['⑥.2 きれいに走った後'].落ちた回 && R['
   await p3.waitForFunction(() => { const r = window.__bb.read(); return r && r.open && r.open.i === 2; }, null, { timeout: 60000 });
   const 待った = await p3.evaluate(() => [...document.querySelectorAll('#log span')].some(x => /自己テストが終わるのを待って/.test(x.textContent)));
   const 記録 = await p3.evaluate(() => { const r = window.__bb.read();
-    return { run: r.rows[0] && r.rows[0].e, 件数: r.rows.length, open: r.open && r.open.n }; });
+    const k = r.rows.map(x => x.e).filter(e => e !== 'boot');
+    return { run: k[0], 件数: r.rows.length, open: r.open && r.open.n }; });
   (await ctx.newCDPSession(p3)).send('Page.crash').catch(() => {});
   await new Promise(r => setTimeout(r, 1500));
   const p4 = await ctx.newPage(); await p4.goto(FILE);

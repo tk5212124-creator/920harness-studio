@@ -121,6 +121,48 @@ await p.fill('#spec', JSON.stringify(貼る));
 await p.waitForTimeout(200);
 await tap('#viewSeg button[data-v="editor"]');
 
+// ⑨ 開き直しても（読み込み直し・落ちたあと・切り分けの読み込み直し）、作っていたハーネスのまま
+//    v0.38.0 までは開き直すと必ず例に戻していて、実機で「勝手に初期化された」になった
+await p.waitForTimeout(500);
+await p.reload();
+await p.waitForFunction(() => window.__selfTest, null, { timeout: 30000 });
+R['⑨ 開き直した'] = { JSONの名前: (await spec()).metadata.name, 図: await canvasIds(),
+  お知らせ: (await p.textContent('#hint')).replace(/\s+/g, ' ').slice(0, 60),
+  いま: (await p.textContent('#nowSpec')).replace(/\s+/g, ' ') };
+ok.keptAfterReload = R['⑨ 開き直した'].JSONの名前 === '貼ったハーネス'
+  && JSON.stringify(R['⑨ 開き直した'].図) === JSON.stringify(['in', 'a', 'res'])
+  && R['⑨ 開き直した'].お知らせ.includes('前に開いていたハーネスを戻した')
+  && R['⑨ 開き直した'].いま.includes('貼ったハーネス');
+
+// ⑨-2 図で足したノードも残る（JSONタブを通らない変更）
+await tap('#viewSeg button[data-v="json"]');
+const 足した = JSON.parse(JSON.stringify(貼る)); 足した.metadata.name = '足したハーネス';
+足した.nodes.splice(2, 0, { id: 'b', type: 'llm', provider: 'm', mock: { text: 'b' } });
+足した.edges = [{ from: { node: 'in' }, to: { node: 'a' } }, { from: { node: 'a' }, to: { node: 'b' } }, { from: { node: 'b' }, to: { node: 'res' } }];
+await p.fill('#spec', JSON.stringify(足した));
+await p.waitForTimeout(200);
+await tap('#viewSeg button[data-v="editor"]');
+// 落ちたときと同じく、何のイベントも出さずに消す（pagehide で書く分に頼らない）
+await p.waitForTimeout(500);
+const cdp = await ctx.newCDPSession(p); cdp.send('Page.crash').catch(() => {});
+await new Promise(r => setTimeout(r, 1200));
+const p2 = await ctx.newPage(); p2.on('pageerror', e => errs.push(String(e)));
+await p2.goto(FILE);
+await p2.waitForFunction(() => window.__selfTest, null, { timeout: 30000 });
+R['⑨-2 落ちたあと開いた'] = await p2.evaluate(() => ({ 名前: JSON.parse(document.querySelector('#spec').value).metadata.name,
+  図: [...document.querySelectorAll('.nd')].map(x => x.dataset.id) }));
+ok.keptAfterCrash = R['⑨-2 落ちたあと開いた'].名前 === '足したハーネス'
+  && JSON.stringify(R['⑨-2 落ちたあと開いた'].図) === JSON.stringify(['in', 'a', 'b', 'res']);
+
+// ⑩ 例のボタンを押せば例に戻り、開き直しても例のまま
+await p2.locator('#exSeg button, #exSeg2 button').first().tap().catch(() => {});
+await p2.evaluate(() => { const b = document.querySelector('#exSeg button[data-ex="exW1"],#exSeg2 button[data-ex="exW1"]'); if (b) b.click(); });
+await p2.waitForTimeout(600);
+await p2.reload();
+await p2.waitForFunction(() => window.__selfTest, null, { timeout: 30000 });
+R['⑩ 例に戻して開き直した'] = await p2.evaluate(() => JSON.parse(document.querySelector('#spec').value).metadata.name);
+ok.exampleKept = R['⑩ 例に戻して開き直した'] === '内蔵LLM直列';
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

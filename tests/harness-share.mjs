@@ -98,6 +98,18 @@ const diag = await p.textContent('#sheetBody');
 R['⑦ 診断'] = diag.replace(/\s+/g, ' ').slice(0, 220);
 ok.review = diag.includes('孤島') && diag.includes('unknownNode');
 
+// ⑧ 診断結果をコピーできる・保存できる（画面に出た行がそのまま入る）
+const 画面の行 = await p.$$eval('#sheetBody .diag > div', e => e.map(x => x.textContent.replace(/^[✗⚠·]\s*/, '')));
+await tap('#rvCopy');
+const copied = await p.evaluate(() => navigator.clipboard.readText());
+const dl8 = p.waitForEvent('download', { timeout: 10000 });
+await tap('#rvSave');
+const f8 = await dl8; const saved8 = (await import('node:fs')).readFileSync(await f8.path(), 'utf8');
+R['⑧ 診断のコピー'] = { ボタン: await p.textContent('#rvCopy'), 先頭: copied.split('\n').slice(0, 3),
+  行数: 画面の行.length, 全部入っている: 画面の行.every(l => copied.includes(l)), 保存と同じ: saved8 === copied, 名前: f8.suggestedFilename() };
+ok.reviewCopy = R['⑧ 診断のコピー'].ボタン === 'コピーした' && R['⑧ 診断のコピー'].全部入っている
+  && 画面の行.length >= 2 && copied.includes('ハーネス: 壊れた') && R['⑧ 診断のコピー'].保存と同じ;
+
 R['pageerror'] = errs;
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 const all = Object.values(ok).every(Boolean) && errs.length === 0;

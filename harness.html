@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 落ちても記録が残るようにする v0.38.0</title>
+<title>Harness Studio — 落ちる前の記録だけで追えるようにする v0.39.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.38.0 · 落ちる原因を端末で切り分ける</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.39.0 · 落ちる前の記録だけで追える・開き直しても消えない</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -188,7 +188,11 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="mini" id="nowSpec"></div>
 <div class="hintbar" id="hint"></div>
 <div class="row"><button id="btnSpec">このハーネスの設定</button><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button><button id="btnExp">くらべる</button></div>
-<input type="file" id="fileIn" accept=".hsl,.json,.txt,text/plain,application/json" style="display:none">
+<!-- accept は付けない。v0.38.0 の実機（iPhone）で「ファイルから」を押しても、書き出したファイルが出てこなかった。
+     そのとき付けていた accept（.hsl,.json,.txt と MIME）で iOS が選べるファイルを絞っていたのが疑わしいので外し、
+     何のファイルでも選べるようにして中身で判断する（iPhone で直ったかは未確認）。
+     display:none も使わない（古い iOS では display:none の input を click() しても開かない）。 -->
+<input type="file" id="fileIn" style="position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0" tabindex="-1" aria-hidden="true">
 </div>
 <div class="row"><div class="seg" id="exSeg">
 <button data-ex="exW1">内蔵LLM直列</button><button data-ex="exL1">ローカル直列</button><button data-ex="exL2">ローカル並列+Join</button><button data-ex="exL3">JSON契約+文字数分岐</button><button data-ex="exL4">ローカル改稿ループ</button>
@@ -720,6 +724,13 @@ function extractHarnessText(raw){
   const fences=[...text.matchAll(/```[a-zA-Z]*\s*\n([\s\S]*?)```/g)].map(m=>m[1]);
   const looksHSL=t=>/^\s*(harness|node|provider|var)\b/m.test(t)||/^\s*\S+\s*->\s*\S+/m.test(t);
   const looksJSON=t=>/^\s*\{/.test(t)&&/"nodes"\s*:/.test(t);
+  /* 「書き出す」の「.txt で保存」（AIに渡す1枚）をそのまま取り込んだとき。
+     その文には書き方の説明（例の node や -> の行）が先に入っているので、
+     「=== いまのハーネス ===」から次の「=== … ===」までを読む（``` で囲まれた返事があればそちらが先）。 */
+  if(!fences.length){const mk=/^=== いまのハーネス ===[ \t]*$/m.exec(text);
+    if(mk){const rest=text.slice(mk.index+mk[0].length);const end=rest.search(/^=== .+ ===[ \t]*$/m);
+      const sec=(end>=0?rest.slice(0,end):rest).trim();
+      if(sec&&(looksJSON(sec)||looksHSL(sec)))return looksJSON(sec)?{kind:"json",text:sec}:{kind:"hsl",text:sec};}}
   const cands=[...fences,text].filter(t=>looksHSL(t)||looksJSON(t));
   if(!cands.length)throw{code:"HSL_PARSE_ERROR",line:0,message:"ハーネスらしき記述が見つからない（harness/node/-> のどれも無い）"};
   let best=cands[0];
@@ -1360,15 +1371,16 @@ function mapWebLLMError(e,def){
    ================================================================== */
 /* 輪の大きさは実測で決めた。実ハーネス（23ノード・21回推論）1回の実行で
    ログは291行・合計21KB（「詳しく」を入れると378行・96KB）。
-   800枠あれば、ふつうの実行1回ぶんのログが丸ごと入る。
+   800枠あれば、ふつうの実行1回ぶんのログが丸ごと入る。v0.39.0 からはページを開いてからの全部を残すので 2000枠。
    1行は400字で切る（ふつうの行は平均72字。400字を超えるのは1行だけだった）。
    Checkpoint は1回の書き込みが486KB なので、こちらの方が桁違いに軽い。 */
-const BB_CAP=800,BB_P="hbb.",BB_LINE=400;
+const BB_CAP=2000,BB_P="hbb.",BB_LINE=400;
 const BB_STAT={writes:0,bytes:0,dropped:0,failed:0,lastError:null};
 /* mute は「記録しない」。自己テストは1回開くだけで200件以上の実行を回すので、
    これを輪に入れると**本物の実行の記録が押し出されて消える**（実測: 300枠のうち282枠を自己テストが埋めた）。
    ユーザーの実行の記録を守るために、自己テストの間は黙らせる。 */
 const BB={t0:Date.now(),runId:null,n:0,head:0,on:true,mute:false};
+const BB_PAGE_T0=BB.t0;   // 記録の t は「このページを開いてから何ms」で揃える（自己テストが t0 をいじっても戻す）
 /* 置き場がいっぱいになったら、**古い記録を捨ててもう一度書く**。
    ここで諦めると、いちばん知りたい「落ちる直前」が残らない。 */
 const bbSet=(k,v)=>{
@@ -1423,7 +1435,7 @@ let ENG_SEQ=0;                          // engine を作った回数（同じモ
 function bbStep(name,x){
   if(!BB.on||BB.mute)return;
   const o=Object.assign({s:name},BB.stepCtx||{},x||{},
-    {ms:BB.stepT0?Date.now()-BB.stepT0:null,gMB:BB_GPU.liveMB,gPeakMB:BB_GPU.peakMB});
+    {ms:BB.stepT0?Date.now()-BB.stepT0:null,gMB:BB_GPU.liveMB,gPeakMB:BB_GPU.peakMB,wMB:BB_GPU.wasmMB,gSrc:BB_GPU.src});
   bbSlot("step",o);bbPush("step",o);
 }
 /* 落ちる前に書いたものを、次の重い処理に入る前に localStorage の向こうへ渡しておく。
@@ -1437,7 +1449,7 @@ function bbCur(x){if(BB.on&&!BB.mute)bbSet("cur",bbCut(Object.assign({t:Date.now
    - gen  … 生成の途中（何トークンまで出たか。500msに1回まで）
    - lprg … 読み込みの途中（何%・どの段階か。500msに1回まで）
    落ちる直前の状態を知るには、流れ（輪）よりこの4つのほうが効く。 */
-const BB_SLOT_CAP={in:1200,last:2000,gen:300,lprg:300,step:500,gpu:300};
+const BB_SLOT_CAP={in:1200,last:2000,gen:300,lprg:300,step:560,gpu:300,hb:300,whb:300};
 function bbSlot(k,x){
   if(!BB.on||BB.mute)return;
   bbSet(k,bbCut(Object.assign({t:Date.now()-BB.t0},x||{}),BB_SLOT_CAP[k]||400,
@@ -1501,7 +1513,8 @@ function bbRead(){
   try{const o=bbGet("open");if(o)open=JSON.parse(o);}catch(_){}
   try{const c=bbGet("cur");if(c)cur=JSON.parse(c);}catch(_){}
   const slot=k=>{try{const v=bbGet(k);return v?JSON.parse(v):null;}catch(_){return null;}};
-  const input=slot("in"),last=slot("last"),gen=slot("gen"),lprg=slot("lprg"),step=slot("step"),gpu=slot("gpu");
+  const input=slot("in"),last=slot("last"),gen=slot("gen"),lprg=slot("lprg"),step=slot("step"),gpu=slot("gpu"),
+    hb=slot("hb"),whb=slot("whb");
   /* 「途中で消えた」の判定。最後の1件だけで決めてはいけない
      （ページを離れる時は left のあとに vis が来るなど、後ろに別の記録が付く）。
      いちばん新しい「実行の始まり（run）」より後ろに、
@@ -1512,12 +1525,12 @@ function bbRead(){
   let iRun=-1;for(let i=rows.length-1;i>=0;i--)if(rows[i].e==="run"){iRun=i;break;}
   const closed=iRun<0?true:rows.slice(iRun).some(x=>x.e==="end"||x.e==="left");
   const spec=bbGet("spec");
-  return{runId,build,rows,open,cur,input,last,gen,lprg,step,gpu,spec,closed,startedRun:iRun>=0,clean:!open&&closed};
+  return{runId,build,rows,open,cur,input,last,gen,lprg,step,gpu,hb,whb,spec,closed,startedRun:iRun>=0,clean:!open&&closed};
 }
 function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));
-  ["h","open","cur","in","last","gen","lprg","step","gpu","spec"].forEach(bbDel);
+  ["h","open","cur","in","last","gen","lprg","step","gpu","spec","hb","whb"].forEach(bbDel);
   BB.head=0;BB.n=0;BB.slotAt={};BB.slotPct={};}
-const HARNESS_BUILD="0.38.0";
+const HARNESS_BUILD="0.39.0";
 /* ---- 取り置き（前の回の記録を、消える前に別の置き場へ移す）----
    v0.36.0 まで: 開いたときに前回の記録を**メモリへ**移し、置き場からは消していた。
    そのため (1) もう一度読み込まれると（iOS の自動再読み込み・版の読み込み直し）証拠が消え、
@@ -1597,11 +1610,13 @@ function bbHeap(){try{return(typeof performance!=="undefined"&&performance.memor
 /* 1回の実行の始まり。ここで時計を0に戻し、端末の限界も記録する
    （落ちた原因が「端末の上限」なのかを後から切り分けるのに要る）。 */
 async function bbRunStart(spec,tag,input){
-  /* 輪を空にしてから始める。1回の実行に輪（800枠）を全部使えるようにするため
-     （前の実行の記録を残すと、長い実行の頭が押し出されて肝心なところが消える）。 */
-  bbClear();
-  BB.t0=Date.now();BB.runId="r"+Date.now().toString(36);BB.calls=0;
-  bbPush("run",{tag:tag||"run",v:HARNESS_BUILD,
+  /* v0.38.0 までは、ここで輪を空にしていた。そのため「実行の前に同じページで何があったか」
+     （engine を作った・GPU を確保した・モデルの帯で読み込んだ…）が消えて、
+     実機の記録に出どころの分からない値が残った。いまは**ページを開いてからの全部**を残す
+     （輪は 2000 件。時刻 t はページを開いてからの ms）。実行ごとの1件ものだけ入れ替える。 */
+  ["cur","in","last","gen","lprg","step","spec"].forEach(bbDel);
+  BB.runId="r"+Date.now().toString(36);BB.calls=0;BB.runT0=Date.now();
+  bbPush("run",{tag:tag||"run",v:HARNESS_BUILD,at:new Date().toISOString(),
     name:(spec&&spec.metadata&&spec.metadata.name)||null,
     nodes:((spec&&spec.nodes)||[]).length,edges:((spec&&spec.edges)||[]).length,heap:bbHeap()});
   try{bbPush("dev",await bbDevice());}
@@ -1671,8 +1686,12 @@ function installGpuProbe(send,where,opt){
   const G={live:0,peak:0,n:0,lastSent:0};g.__hsGpuProbe=G;
   const BIG=8*1024*1024;
   const mb=x=>Math.round(x/1048576*10)/10;
-  const stat=force=>{const now=Date.now();if(force||now-G.lastSent>=500){G.lastSent=now;
-    send({k:"gstat",w:where,liveMB:mb(G.live),peakMB:mb(G.peak),n:G.n});}};
+  /* 間引いて送るが、最後の値は必ず送る（間引いただけだと、確保が止まったときの値が届かない。
+     v0.38.0 の実機の記録では 73MB のまま残り、重み 266MB を読み込んだあとの値が分からなかった） */
+  let trail=null;
+  const stat=force=>{const now=Date.now();
+    const go=()=>{trail=null;G.lastSent=Date.now();send({k:"gstat",w:where,liveMB:mb(G.live),peakMB:mb(G.peak),n:G.n});};
+    if(force||now-G.lastSent>=500)go();else if(!trail)trail=setTimeout(go,300);};
   try{
     if(g.GPUDevice&&g.GPUDevice.prototype&&g.GPUDevice.prototype.createBuffer){
       const sizes=new WeakMap();const cb=g.GPUDevice.prototype.createBuffer;
@@ -1719,6 +1738,49 @@ function installGpuProbe(send,where,opt){
   }
   return G;
 }
+/* WebAssembly のメモリの見張り。WebLLM は Worker の中で wasm を3つ動かす
+   （tvmjs の実行系・tokenizer・xgrammar）。これらのメモリは JS からは見えないが、
+   WebAssembly.Memory の大きさは読める。増える（grow）ときは**増やす前に**知らせる。
+   あわせて心拍を打つ。心拍が遅れたら、その間この Worker が1つの処理で詰まっていた（例: 文法のコンパイル）。
+   この関数も外の変数を使わない（Worker の中へ文字列で入れるため）。 */
+function installWasmProbe(send,where,hbMs){
+  const g=(typeof self!=="undefined"?self:globalThis);
+  if(g.__hsWasmProbe)return g.__hsWasmProbe;
+  const W={mems:new Set(),peak:0};g.__hsWasmProbe=W;
+  const mb=x=>Math.round(x/1048576*10)/10;
+  const total=()=>{let t=0;for(const m of W.mems){try{t+=m.buffer.byteLength;}catch(_){}}if(t>W.peak)W.peak=t;return t;};
+  const note=(m,why)=>{if(m&&!W.mems.has(m)){W.mems.add(m);
+    send({k:"wasm",w:where,why,memMB:mb(m.buffer.byteLength),totalMB:mb(total()),n:W.mems.size});}};
+  const fromInst=(i,why)=>{try{for(const v of Object.values((i&&i.exports)||{}))
+    if(v instanceof WebAssembly.Memory)note(v,why);}catch(_){}};
+  try{
+    const oI=WebAssembly.instantiate;
+    WebAssembly.instantiate=async function(){const r=await oI.apply(this,arguments);fromInst(r&&(r.instance||r),"instantiate");return r;};
+    if(WebAssembly.instantiateStreaming){const oS=WebAssembly.instantiateStreaming;
+      WebAssembly.instantiateStreaming=async function(){const r=await oS.apply(this,arguments);fromInst(r&&r.instance,"streaming");return r;};}
+    const OInst=WebAssembly.Instance;
+    const NInst=function(m,imp){const i=new OInst(m,imp);fromInst(i,"Instance");return i;};
+    NInst.prototype=OInst.prototype;WebAssembly.Instance=NInst;
+    // 外で作って wasm に渡す（import する）メモリも数える
+    const OMem=WebAssembly.Memory;
+    const NMem=function(d){const m=new OMem(d);note(m,"Memory");return m;};
+    NMem.prototype=OMem.prototype;WebAssembly.Memory=NMem;
+    const og=OMem.prototype.grow;
+    OMem.prototype.grow=function(pages){
+      note(this,"grow");
+      send({k:"wgrow0",w:where,addMB:mb(pages*65536),memMB:mb(this.buffer.byteLength),totalMB:mb(total())});   // 増やす前
+      const r=og.call(this,pages);
+      send({k:"wgrow",w:where,memMB:mb(this.buffer.byteLength),totalMB:mb(total()),peakMB:mb(W.peak)});
+      return r;};
+  }catch(e){send({k:"probeerr",w:where,msg:"wasm: "+String((e&&e.message)||e).slice(0,100)});}
+  // 心拍（hbMs ごと）。遅れた分だけ「詰まっていた」と送る
+  if(hbMs){let last=Date.now();
+    setInterval(()=>{const now=Date.now();const lag=now-last-hbMs;last=now;
+      const G=g.__hsGpuProbe;
+      send({k:"whb",w:where,wasmMB:mb(total()),gMB:G?mb(G.live):null});
+      if(lag>=700)send({k:"wlag",w:where,ms:lag});},hbMs);}
+  return W;
+}
 /* Worker の頭に入れる文。WebLLM の口（self.onmessage）の手前で、こちらの口の受け取りと、
    届いたメッセージの種類（推論の始まり・1つ目の chunk の要求など）の記録だけをする。 */
 function workerProbeSrc(){
@@ -1729,17 +1791,27 @@ function workerProbeSrc(){
     +"function __hsSeen(d){if(!d||!d.kind)return;"
     +"if(d.kind==='completionStreamNextChunk'){if(__hsNext++===0)__hsSend({k:'wmsg',kind:d.kind,first:1});return;}"
     +"__hsNext=0;__hsSend({k:'wmsg',kind:d.kind});}\n"
-    +"("+installGpuProbe.toString()+")(__hsSend,'worker',{console:true});\n";
+    +"("+installGpuProbe.toString()+")(__hsSend,'worker',{console:true});\n"
+    +"("+installWasmProbe.toString()+")(__hsSend,'worker',250);\n";
 }
 /* Worker（またはメインスレッド）から届いた出来事を、落ちても残る記録に入れる */
-const BB_GPU={liveMB:null,peakMB:null,n:null};
+const BB_GPU={liveMB:null,peakMB:null,n:null,wasmMB:null,src:null};
 function bbWorkerEvent(m){
   if(!m||!m.k)return;
   const x=Object.assign({},m);delete x.k;delete x.t;
-  if(m.liveMB!=null){BB_GPU.liveMB=m.liveMB;}
+  // どこの値かも持つ（v0.38.0 では出どころの分からない 804MB が残った）
+  if(m.liveMB!=null){BB_GPU.liveMB=m.liveMB;BB_GPU.src=m.w||null;}
   if(m.peakMB!=null){BB_GPU.peakMB=m.peakMB;}
   if(m.n!=null)BB_GPU.n=m.n;
-  if(m.k==="gstat"){bbSlot("gpu",x);return;}                  // 1件を上書きするだけ（軽い）
+  if(m.totalMB!=null)BB_GPU.wasmMB=m.totalMB;
+  if(m.k==="whb"){if(m.wasmMB!=null)BB_GPU.wasmMB=m.wasmMB;
+    // 何かが動いている間は毎回、止まっている間は値が変わったときだけ書く（待っている間に書き続けない）
+    const key=m.wasmMB+"|"+m.gMB;
+    let busy=false;try{busy=!!BUSY;}catch(_){}
+    if(busy||key!==BB_GPU.whbKey){BB_GPU.whbKey=key;
+      bbSlot("whb",Object.assign({},x,{at:Date.now()-BB.t0}));}
+    return;}   // Worker の心拍（1件上書き）
+  if(m.k==="gstat"){bbSlot("gpu",x);bbPush("gstat",x);return;}   // 1件を上書き＋流れにも残す（500msに1回まで）
   if(m.k==="galloc"){bbSlot("gpu",Object.assign({st:"確保する直前"},x));bbPush("gpu",Object.assign({st:"確保前"},x));return;}
   if(m.k==="gallocd"){bbSlot("gpu",Object.assign({st:"確保した"},x));bbPush("gpu",Object.assign({st:"確保後"},x));return;}
   bbPush(m.k,x);                                              // gdev / glost / gerr / wlog / wmsg / werr / wrej
@@ -1784,11 +1856,16 @@ function bbText(r,opt){
   if(r.open)L.push("**始めたのに終わっていない＝ここで消えた: "+JSON.stringify(r.open)+"**");
   if(r.cur)L.push("最後に通った Work Item: "+JSON.stringify(r.cur));
   if(r.step)L.push("**推論の中で最後に通った境界: "+JSON.stringify(r.step)+"**");
+  if(r.hb)L.push("メインスレッドの最後の心拍（ここまでは生きていた）: "+JSON.stringify(r.hb));
+  if(r.whb)L.push("Worker の最後の心拍（ここまでは Worker が動いていた）: "+JSON.stringify(r.whb));
   if(r.gpu)L.push("GPU の確保（最後に分かった値）: "+JSON.stringify(r.gpu));
   if(r.lprg)L.push("読み込みの途中: "+JSON.stringify(r.lprg));
   if(r.gen)L.push("生成の途中: "+JSON.stringify(r.gen));
   if(!BB.on)L.push("注意: 途中で localStorage へ書けなくなった（いっぱいか、書き込み禁止）。記録はそこまで。");
   L.push("");
+  /* 記録から機械的に出せる数だけを並べる（推測は書かない）。
+     「どこまで生きていたか」「どちらの心拍が先に止まったか」「メモリの最大」を、行を追わずに読めるようにする。 */
+  {const S=bbSummary(r);if(S.length){L.push("## 記録から数えたこと（推測は入れていない）");S.forEach(x=>L.push("- "+x));L.push("");}}
   if(r.input){L.push("## 入力（この実行に入れた値）");L.push(String(r.input.v==null?"":r.input.v));
     if(r.input._cut)L.push("（長いので切ってある）");L.push("");}
   if(r.last){L.push("## 最後にモデルへ送った文"
@@ -1796,10 +1873,13 @@ function bbText(r,opt){
       +` / 文脈の窓 ${r.last.ctx||"未指定"} / maxTokens ${r.last.mt==null?"未指定":r.last.mt}）`);
     L.push(String(r.last.msgs==null?"":r.last.msgs));
     if(r.last._cut)L.push("（長いので切ってある）");L.push("");}
-  L.push("## 流れ（古い順・t は実行の始まりからのミリ秒）");
-  L.push("  e の意味: log=画面のログと同じ行 / run=実行開始 / dev=端末の限界 / load=モデルの読み込み"
-    +" / call=推論1回 / exp=くらべるの1回 / vis=表に出た・裏に回った / err=例外(console含む)"
-    +" / end=実行の終わり / left=ページを離れた");
+  L.push("## 流れ（古い順・t はこのページを開いてからのミリ秒）");
+  L.push("  e の意味: log=画面のログと同じ行 / boot=開いた・自己テスト / run=実行開始（at=端末の時計） / dev=端末の限界"
+    +" / engine=engine を作った / release=engine を捨てた / load=モデルの読み込み"
+    +" / call=推論1回 / step=推論の中の境界 / exp=くらべるの1回 / vis=表に出た・裏に回った / err=例外(console含む)"
+    +" / gdevreq,gdev=GPU の device / gpu,galloc=GPU の確保 / gstat=GPU の確保量 / gerr=GPU のエラー / glost=device の喪失"
+    +" / wasm=wasm のメモリを見つけた / wgrow0,wgrow=wasm のメモリを増やす前・後 / wlag=Worker が詰まっていた時間"
+    +" / wmsg=Worker に届いた命令 / wlog=Worker の console / end=実行の終わり / left=ページを離れた");
   let rows=r.rows;
   if(r.trimmed>0)L.push(`（置き場が足りず、古い ${r.trimmed} 行を削って取り置いた）`);
   if(opt.tail&&rows.length>opt.tail){L.push(`（古い ${rows.length-opt.tail} 行は略。最後の ${opt.tail} 行）`);rows=rows.slice(-opt.tail);}
@@ -1810,6 +1890,33 @@ function bbText(r,opt){
     const rest=Object.assign({},o);delete rest.t;delete rest.e;
     L.push(head+JSON.stringify(rest));}
   return L.join("\n")+"\n";
+}
+function bbSummary(r){
+  const S=[],rows=(r&&r.rows)||[];if(!rows.length&&!r.hb&&!r.whb)return S;
+  const last=rows[rows.length-1];
+  if(last)S.push("最後の行: t="+last.t+"ms（"+last.e+"）");
+  if(r.hb)S.push("メインスレッドの心拍が最後に書かれた時刻: t="+r.hb.at+"ms");
+  if(r.whb)S.push("Worker の心拍が最後に書かれた時刻: t="+r.whb.at+"ms（止まっている間は値が変わったときだけ書くので、これより後も生きていたことはありうる）");
+  if(r.hb&&r.whb&&r.hb.at!=null&&r.whb.at!=null&&r.open)
+    S.push("2つの心拍の差: メイン − Worker = "+(r.hb.at-r.whb.at)+"ms");
+  if(r.open&&r.open.t!=null){const end=Math.max(last?last.t:0,r.hb&&r.hb.at||0,r.whb&&r.whb.at||0);
+    S.push("終わっていない印（"+r.open.e+(r.open.st?" "+r.open.st:"")+(r.open.n?" "+r.open.n:"")+"）を書いてから、最後に生きていた記録まで: "+(end-r.open.t)+"ms");}
+  if(r.step&&r.step.t!=null)S.push("最後に通った推論の境界: "+(r.step.s||"?")+(r.step.n?"（ノード "+r.step.n+"）":"")+" / 時刻 t="+r.step.t+"ms");
+  const nums=(ks,f)=>rows.filter(x=>ks.includes(x.e)).map(f).filter(v=>typeof v==="number");
+  const wm=nums(["wasm","wgrow","wgrow0"],x=>x.totalMB).concat(nums(["wgrow"],x=>x.peakMB));
+  if(r.whb&&typeof r.whb.wasmMB==="number")wm.push(r.whb.wasmMB);
+  if(wm.length)S.push("wasm のメモリ（Worker とメインの分かった値）の最大: "+Math.max(...wm)+"MB");
+  const gm=nums(["gstat","gpu","galloc","glost"],x=>x.peakMB);
+  if(r.gpu&&typeof r.gpu.peakMB==="number")gm.push(r.gpu.peakMB);
+  if(gm.length)S.push("GPU の確保の最大: "+Math.max(...gm)+"MB");
+  const lag=rows.filter(x=>x.e==="wlag");
+  if(lag.length)S.push("Worker が 0.7秒以上詰まっていた回数: "+lag.length+"（最長 "+Math.max(...lag.map(x=>x.ms||0))+"ms）");
+  const ge=rows.filter(x=>x.e==="gerr"||x.e==="glost");
+  if(ge.length)S.push("GPU のエラー・device の喪失: "+ge.length+"件（最初 t="+ge[0].t+"ms "+ge[0].e+"）");
+  const ne=rows.filter(x=>x.e==="engine").length,nr=rows.filter(x=>x.e==="release").length;
+  if(ne||nr)S.push("このページで engine を作った回数: "+ne+" / 捨てた回数: "+nr);
+  const nc=rows.filter(x=>x.e==="call").length;if(nc)S.push("推論の回数（輪に残っている分）: "+nc);
+  return S;
 }
 const LOADING_KEY="harness_loading_v1";
 function markLoading(model,def){try{localStorage.setItem(LOADING_KEY,JSON.stringify({model,at:Date.now(),
@@ -1829,8 +1936,10 @@ function buildAppConfig(m,def){
 const WebLLMProvider={
   singleton:true,   // 端末の中で同時に持てるのは1つだけ（2つ載せると落ちる端末がある）
   async release(handle){
+    bbPush("release",{eng:handle&&handle.hsId||null});
     try{if(handle&&handle.engine&&handle.engine.unload)await handle.engine.unload();}catch(_){}
     try{if(handle&&handle.worker)handle.worker.terminate();}catch(_){}
+    if(handle&&handle.inWorker){BB_GPU.liveMB=0;BB_GPU.wasmMB=null;BB_GPU.src="released";}   // Worker ごと消えた
   },
   id:"webllm",label:"WebLLM（アプリ内蔵・WebGPU）",models:WEBLLM_MODELS,
   async ensureLoaded(def,onProgress,signal){
@@ -1888,10 +1997,12 @@ const WebLLMProvider={
       if(!useWorker){
         // 同じスレッドで動かすときは、ここで同じ見張りを付ける（console はもう横取りしている）
         installGpuProbe(bbWorkerEvent,"main",{console:false});
+        installWasmProbe(bbWorkerEvent,"main",0);
         const engine=await Promise.race([m.CreateMLCEngine(def.model,opts),stall]);
       clearLoading();
         clearInterval(stallIv);
-        return{engine,mod:m,appConfig,worker:null,moduleUrl:url,hsId:"eng"+(++ENG_SEQ),inWorker:false};
+        ++ENG_SEQ;bbPush("engine",{eng:"eng"+ENG_SEQ,m:def.model,w:0});
+        return{engine,mod:m,appConfig,worker:null,moduleUrl:url,hsId:"eng"+ENG_SEQ,inWorker:false};
       }
       // Worker で動かす（iOSで画面が固まらないように）。失敗時に黙って同スレッドへ落とさない
       const src=`import * as webllm from ${JSON.stringify(url)};\n`+workerProbeSrc()+
@@ -1926,7 +2037,8 @@ const WebLLMProvider={
       const engine=await Promise.race([m.CreateWebWorkerMLCEngine(worker,def.model,opts),failed,stall]);
       clearLoading();
       clearInterval(stallIv);
-      return{engine,mod:m,appConfig,worker,moduleUrl:url,hsId:"eng"+(++ENG_SEQ),inWorker:true};
+      ++ENG_SEQ;bbPush("engine",{eng:"eng"+ENG_SEQ,m:def.model,w:1,ctx:(def.overrides&&def.overrides.context_window_size)||null});
+      return{engine,mod:m,appConfig,worker,moduleUrl:url,hsId:"eng"+ENG_SEQ,inWorker:true};
     }catch(e){
       clearInterval(stallIv);clearLoading();
       if(worker)try{worker.terminate();}catch(_){}
@@ -4886,8 +4998,29 @@ function setSpecObj(spec,opt){
   showNow();
 }
 function syncFromCanvas(){normalizeSpec(Ed.spec);$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();showNow();}
+/* いま開いているハーネスを端末（localStorage）に置いておく。
+   v0.38.0 までは、開き直すと必ず例「内蔵LLM直列」に戻していた。そのため
+   「落ちる原因を切り分ける」（条件ごとに読み込み直す）や、落ちたあとに開き直したときに、
+   作っていたハーネスが消えたように見えた（実機で起きた）。
+   いまは図・JSON が変わるたびに置いておき、開いたときに戻す。実行の途中経過（Checkpoint）は戻さない。
+   例に戻したいときは例のボタンか「はじめから（例に戻す）」。 */
+const ED_KEY="harness_editor_v1";
+let edSaveT=null,edSaveOn=false;        // 開いた直後に例を載せる分は置かない（戻すものを上書きしない）
+function edAutosave(){if(!edSaveOn)return;clearTimeout(edSaveT);edSaveT=setTimeout(edSaveNow,300);}
+function edSaveNow(){clearTimeout(edSaveT);edSaveT=null;if(!edSaveOn||!Ed.spec)return;
+  try{localStorage.setItem(ED_KEY,JSON.stringify({at:Date.now(),v:HARNESS_BUILD,spec:Ed.spec}));}
+  catch(e){console.warn("ハーネスを端末に置けなかった: "+errText(e));}}
+function edRestore(){
+  let o=null;try{o=JSON.parse(localStorage.getItem(ED_KEY)||"null");}catch(_){o=null;}
+  if(!o||!o.spec||!Array.isArray(o.spec.nodes))return null;
+  try{setSpecObj(o.spec);}catch(e){return null;}
+  document.querySelectorAll("#exSeg button,#exSeg2 button").forEach(b=>b.classList.remove("on"));
+  return o;
+}
+addEventListener("pagehide",()=>{if(edSaveT)edSaveNow();});
 /* いま図に載っているハーネスを、常に見える場所に書く（「反映されていない？」を作らない） */
 function showNow(){
+  edAutosave();
   const el=$("#nowSpec");if(!el)return;
   const sp=Ed.spec||{};
   el.textContent=`いま開いているハーネス: ${(sp.metadata&&sp.metadata.name)||"名前なし"}`
@@ -7509,10 +7642,22 @@ function openImportSheet(){
 }
 $("#fileIn").onchange=async ev=>{
   const f=ev.target.files&&ev.target.files[0];if(!f)return;
-  const text=await f.text();
+  ev.target.value="";                      // 同じファイルをもう一度選んでも動くように
   if(!$("#imResult"))openImportSheet();
+  let text="";
+  try{text=await f.text();}
+  catch(e){$("#imResult").innerHTML=`<div class="vErr">⚠ ${esc(f.name)} を読めない: ${esc(errText(e))}</div>`;return;}
+  text=text.replace(/^\uFEFF/,"");        // 先頭の BOM（メモ帳などで保存した UTF-8）は落とす
+  if(/\u0000/.test(text.slice(0,4096))){
+    $("#imResult").innerHTML=`<div class="vErr">⚠ ${esc(f.name)}（${f.size} バイト）は文字のファイルではない。`
+      +`「書き出す」で保存した .json / .hsl / .txt か、ハーネスの文が入ったファイルを選ぶ。</div>`;return;}
+  // 共有リンクだけが入ったファイルも、貼り付けと同じように開ける
+  const m=/#s=([A-Za-z0-9\-_]+)/.exec(text);
+  if(m&&!/"nodes"\s*:/.test(text)&&!/^\s*node\b/m.test(text)){
+    try{const sp=await decodeShare(m[1]);$("#imText").value=text;imCandidate=null;
+      setSpecObj(sp);fitView();closeSheet();setHint(`共有リンクから取り込んだ（${f.name}）`);return;}
+    catch(e){$("#imResult").innerHTML=`<div class="vErr">⚠ リンクを復元できない: ${esc(errText(e))}</div>`;return;}}
   $("#imText").value=text;previewImport(text,f.name);
-  ev.target.value="";
 };
 /* --- 診断（機械チェック → 必要ならAIにも見せる） --- */
 function openReviewSheet(){
@@ -7525,8 +7670,22 @@ function openReviewSheet(){
   h+=`<div class="tot" style="margin:8px 0"><span>問題 <b>${n.error}</b></span><span>注意 <b>${n.warn}</b></span><span>参考 <b>${n.info}</b></span></div>`;
   h+=F.length?`<div class="diag">`+F.map(f=>`<div style="color:${col[f.level]}">${mark[f.level]} ${f.node?esc(f.node)+": ":""}${esc(f.message)}</div>`).join("")+`</div>`
     :`<div class="diag">機械チェックでは問題なし</div>`;
+  h+=`<div class="row"><button class="primary" id="rvCopy">診断結果をコピー</button><button id="rvSave">.txt で保存</button></div>`;
   h+=`<div class="mini" style="margin-top:10px">直すときは「書き出す」で外部のLLMに渡す1枚を作り、返ってきた文を「取り込む」に入れる。</div>`;
   openSheet(h);bindClose();
+  const text=reviewText(Ed.spec,F);
+  $("#rvCopy").onclick=async()=>{$("#rvCopy").textContent=(await copyText(text))?"コピーした":"コピーできない（.txt で保存を使う）";};
+  $("#rvSave").onclick=()=>saveOut(text,"harness-diagnosis-"+stamp()+".txt");
+}
+/* 診断結果を、そのまま貼れる文にする（画面に出したものと同じ行・同じ順番） */
+function reviewText(spec,F){
+  const sp=spec||{},mark={error:"✗ 問題",warn:"⚠ 注意",info:"· 参考"};
+  const n=l=>F.filter(x=>x.level===l).length;
+  return ["# 診断（Harness Studio v"+HARNESS_BUILD+"）",
+    "ハーネス: "+((sp.metadata&&sp.metadata.name)||"名前なし")+"（ノード"+(sp.nodes||[]).length+"・線"+(sp.edges||[]).length+"）",
+    "問題 "+n("error")+" / 注意 "+n("warn")+" / 参考 "+n("info"),"",
+    ...(F.length?F.map(f=>`${mark[f.level]||f.level}  ${f.node?f.node+": ":""}${f.message}`):["機械チェックでは問題なし"])
+  ].join("\n")+"\n";
 }
 /* --- くらべる（実験）: 同じ／別のハーネスを、同じ／別の入力で何回も回して並べる ---
    iPhone で一度に何本も動かすとメモリが持たないので、必ず1本ずつ順番に回す。
@@ -8683,7 +8842,7 @@ async function exclusive(what,fn){
 const runAll=()=>exclusive("実行",runAllBody);
 async function runAllBody(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec){noteBlocked();return;}
   await waitSelfTest(log,"実行する");
-  // 記録を先に始める（輪を空にするので、ログを出してからだと1行目が消える）
+  // 記録を先に始める（run の行より前にログを出すと、どの実行の行か分からなくなる）
   await bbRunStart(spec,"run",inputForRun());   // 落ちても残る記録をここから始める（入れた値も残す）
   log("cp",`▶ 実行するハーネス: ${(spec.metadata&&spec.metadata.name)||"名前なし"}（ノード${(spec.nodes||[]).length}・線${(spec.edges||[]).length}）`);
   store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
@@ -8717,7 +8876,9 @@ const doCancel=()=>{if(cur){requestCancel(cur,store,ctl);log("cp","■ Cancel要
 $("#cancel").onclick=doCancel;$("#cancelTop").onclick=doCancel;$("#estop").onclick=doCancel;
 $("#reset").onclick=()=>{cur=null;Ed.run=null;edClearPreview();store.clear();clearLog();clearStream();setState("idle");$("#resume").disabled=true;$("#retry").disabled=true;$("#resumeBanner").classList.remove("show");renderTotals();};
 
-setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("webllm");loadEx("exW1");loadFromHash();fitView();renderTotals();renderIO();renderSamples();renderModels();renderGguf();updateStorageInfo();
+setDir(($("#cv").clientWidth||360)<560?"tb":"lr");setAdapter("webllm");
+const ED_RESTORED=edRestore();if(!ED_RESTORED)loadEx("exW1");edSaveOn=true;
+loadFromHash();fitView();renderTotals();renderIO();renderSamples();renderModels();renderGguf();updateStorageInfo();
 loadSiteModels().then(scanModels);        // 何が端末にあるかを最初に調べる（押さなくても分かるように）
 webgpuDiagnostics().then(d=>{lastDiag=d;}).catch(()=>{});   // 端末の対応状況（調査用メモに載せる）
 checkVersion();                                             // 古い版を握っていないか
@@ -8726,13 +8887,26 @@ checkVersion();                                             // 古い版を握�
    端末ごと落ちる（プロセスが殺される）場合はどのイベントも来ない。
    そのときは hbb.open が残っているので「始めたのに終わっていない」から場所が分かる。 */
 bbTapConsole();          // WebGPU が壊れたことを console から拾う（iPhone では他に見る場所が無い）
+/* メインスレッドの心拍。動かしている間（実行・切り分け・モデルの操作）と開いている途中だけ、250ms ごとに1件を上書きする。
+   落ちたあとに「メインはいつまで生きていたか」が分かる（最後の出来事から何秒後に消えたか）。
+   自己テストの間は記録を止めているが、心拍だけは止めずに書く。 */
+setInterval(()=>{
+  if(!BB.on)return;
+  const booting=!!bbGet("open")&&/"boot"/.test(bbGet("open")||"");
+  if(!(BUSY||booting))return;
+  bbSet("hb",JSON.stringify({at:Date.now()-BB.t0,busy:BUSY||(booting?"開いている途中":null),
+    step:BB.stepCtx&&BB.stepCtx.n?BB.stepCtx.n+" / "+((bbGet("step")||"").match(/"s":"([^"]*)"/)||[])[1]:null,
+    gMB:BB_GPU.liveMB,wMB:BB_GPU.wasmMB}));
+},250);
 addEventListener("pagehide",()=>{bbPush("left",{heap:bbHeap()});});
 addEventListener("visibilitychange",()=>{bbPush("vis",{h:document.hidden?1:0,heap:bbHeap()});});
 addEventListener("error",e=>{bbPush("err",{msg:String((e&&e.message)||e||"").slice(0,160),
   src:String((e&&e.filename)||"").slice(-40),ln:(e&&e.lineno)||null});});
 addEventListener("unhandledrejection",e=>{const r=e&&e.reason;
   bbPush("err",{kind:"reject",msg:String((r&&(r.message||r.code))||r||"").slice(0,160)});});
-setHint("ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
+setHint(ED_RESTORED?"前に開いていたハーネスを戻した: "+((Ed.spec.metadata&&Ed.spec.metadata.name)||"名前なし")
+  +"（"+new Date(ED_RESTORED.at).toLocaleString()+" の分。例に戻すときは例のボタン）"
+  :"ノードをタップすると中身を編集。○ → ● の順にタップでつなぐ。");
 /* 調査用の覗き口。画面から見えない中身（いまの実行・いまのSpec）を読むだけ。
    不具合調べと自動テストで使う（ここから書き換えはできない） */
 // 画面の編集シートを直接開く口（自動テスト用。図をタップしなくても開ける）
@@ -9008,6 +9182,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 赤い ⚠ は**実行前に分かった直すところ**。その場で直せるものはボタンが出る（「schema を付ける」「出口の流し方を決める」「条件の見る先を変える」など）。
 - 「診断する」で、機械で確実に分かることだけを一覧にする（LLMの意見ではない）。
   **書いたのに Runtime が読まないキー**（綴りちがい）もここで名指しする。
+  結果は「**診断結果をコピー**」「.txt で保存」でそのまま渡せる。
 - 「実行ログ」→ **まとめてコピー**（Spec・ログ・失敗の理由・端末の対応状況・実行の記録が1つに入る）。そのまま相談先に貼れる。
 - 「**実行の記録をコピー**」は機械が読む用の全部入り。**画面のログに出た行もそのまま入っている**ので、記録だけ渡せば足りる（どのノードが何を受け取って何を返したか・掛かった時間・トークン・どの枝の何周目か・モデルへ送った文・動かなかったノードが何を待っていたか）。直させたいLLMにはこれを渡すのがいちばん早い。
 - ログの「**詳しく**」に印を付けると、次の実行からモデルへ送った文と値の全文もログに出る。
@@ -9038,6 +9213,9 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 常設の「落ちる前の記録」ボタンを押せば、いつでもいちばん上に出る。
 記録には、**実行したハーネスそのもの（JSON）・端末の情報・推論1回の中のどこまで通ったか（12の境界）・
 GPU をどれだけ確保していたか・WebGPU の異常（device の喪失など）**も入る。
+v0.39.0 からは、**ページを開いてからの全部**（実行より前にしたことも）・**wasm のメモリ**（モデルの本体や文法の準備が使う）・
+**メインと Worker の心拍**（どちらがいつまで生きていたか）・Worker が詰まっていた時間も入り、
+文の頭に「記録から数えたこと」（最後に生きていた時刻・メモリの最大など）が並ぶ。
 
 **落ちる原因を切り分ける** … 「落ちる原因を切り分ける（端末で試す）」を押すと、同じモデル・同じ文脈の窓で、
 条件を1つずつ変えて推論する（読み込みだけ／短い文章／resetChat あり・なし／JSONの形あり・なし／maxTokens を変える など）。
@@ -9058,6 +9236,12 @@ GPU をどれだけ確保していたか・WebGPU の異常（device の喪失�
 - **書き出す**: HSL（人が読める1枚のテキスト）か JSON。共有リンクも作れる（中身はURLに入る・サーバには送らない）。
 - **外部のLLMに直させる**: 「書き出す」→ 説明付きの1枚を渡し、返ってきた文を「取り込む」に貼ると、**差分を見てから**適用できる。
 - **取り込む**: HSL / JSON / 共有リンクのどれでも。読めないときは行番号付きで理由が出る。
+- **ファイルから**: 「書き出す」で保存した **.json / .hsl / .txt（AIに渡す1枚）のどれでも**戻せる。
+  拡張子では選ばず中身で読むので、名前が変わったファイル・拡張子の無いファイル・共有リンクだけを書いたファイルも読める。
+  （v0.38.0 では iPhone で書き出したファイルが出てこなかった。選ぶファイルを絞るのをやめた。.txt はそれまで読めなかった）
+- **開き直しても消えない**: いま開いているハーネスは、変えるたびにこの端末に置いておき、開いたときに戻す
+  （読み込み直し・落ちたあと・「落ちる原因を切り分ける」の読み込み直しでも同じ）。例に戻すときは例のボタン。
+  実行の途中経過は戻さない（それは「前回の続き」）。
 - **JSON タブの欄にも HSL を貼れる**。貼ると JSON に直して取り込む（外部の LLM の返事を前置きやコードブロックごと貼ってもよい）。
   手で打っている途中は欄を書き換えず、図だけ変える（欄から離れると JSON に直る。HSL のままでも実行できる）。
 - **JSONで直に書く**: このシートの上の「**JSONで書く**」タブに、ノードと線に書ける設定が全部載っている。そこも全文コピーできるので、外部のLLMに渡す説明としてそのまま使える。
@@ -11020,7 +11204,7 @@ engine を通らずに画面が直に出す行も拾う（二重にならない�
 | \`console.error\` の横取り | WebLLM の中が出す文で、ログを通らない |
 
 **量は実測で決めた。** 実ハーネス（23ノード・21回推論）1回で、ログは291行・21KB
-（「詳しく」を入れると378行・96KB）。輪は800枠、1行は400字で切る（ふつうの行は平均72字）。
+（「詳しく」を入れると378行・96KB）。輪は2000枠（v0.38.0 までは800枠）、1行は400字で切る（ふつうの行は平均72字）。
 画面から走らせて、**記録ありと記録なしの差は約70ms**（1.58秒 → 1.65秒・mock の速さで測ったので、
 本物の推論が1回数秒かかる実機では比べものにならないほど小さい）。
 使用量に「落ちても残る記録 N回 / N KB」が出る。
@@ -11029,7 +11213,7 @@ engine を通らずに画面が直に出す行も拾う（二重にならない�
 
 | キー | 中身 | 書き方 |
 |---|---|---|
-| \`hbb.0\` … \`hbb.799\` | 流れ（ログの行＋出来事） | 輪。800件を超えたら古いものから上書き |
+| \`hbb.0\` … \`hbb.1999\` | 流れ（ログの行＋出来事）。**ページを開いてからの全部** | 輪。2000件を超えたら古いものから上書き |
 | \`hbb.h\` | 輪の先頭・件数・実行ID・版 | 1件足すたびに書き替え |
 | \`hbb.cur\` | いま通っている Work Item | 1件を上書きし続ける（だから軽い） |
 | \`hbb.open\` | **始めたのに終わっていない危ない所** | 始める前に書き、終わったら消す |
@@ -11037,6 +11221,8 @@ engine を通らずに画面が直に出す行も拾う（二重にならない�
 | \`hbb.last\` | **いま送っている文**（system込み・長めに残す） | 推論1回ごとに上書き |
 | \`hbb.gen\` | 生成の途中（何トークン・何字・何ms） | 500msに1回まで上書き |
 | \`hbb.lprg\` | 読み込みの途中（%・段階） | %が動いたら上書き |
+| \`hbb.hb\` | **メインスレッドの心拍**（時刻・何を動かしていたか・どの境界か・GPU と wasm の量） | 動かしている間と開いている途中だけ、250ms ごとに上書き |
+| \`hbb.whb\` | **Worker の心拍**（時刻・wasm のメモリ・GPU の確保量） | 動かしている間は 250ms ごと、止まっている間は値が変わったときだけ上書き |
 
 **落ちた場所が分かる仕掛けが \`hbb.open\`。**
 モデルの読み込みと推論1回は、始める前に \`open\` を書き、終わったら消して流れに1件足す。
@@ -11048,7 +11234,9 @@ engine を通らずに画面が直に出す行も拾う（二重にならない�
 | e | いつ | 主な中身 |
 |---|---|---|
 | \`log\` | **画面のログに1行出るたび** | 種類（\`k\`）と文（\`m\`。400字で切る） |
-| \`run\` | 実行の始まり | ハーネス名・ノード数・線の数・版 |
+| \`boot\` | 開き終わった | 自己テストの通った数・開くのに掛かった時間 |
+| \`run\` | 実行の始まり | ハーネス名・ノード数・線の数・版・**端末の時計（\`at\`）** |
+| \`engine\` / \`release\` | engine を作った / 捨てた | engine の番号・モデル・どこで動くか（Worker）・文脈の窓 |
 | \`dev\` | 実行の始まり（続けて） | UA・端末のメモリ・JSヒープの上限・**WebGPU の限界値**（maxBufferSize など） |
 | \`load\` | モデルの読み込み | ノード・モデル・**文脈の窓（\`ctx\`。null は「指定なし＝モデルの既定」）**・**必要メモリの目安（\`vram\`）**・掛かった時間 |
 | \`call\` | 推論1回 | ノード・何回目・**送った文の字数**・maxTokens・掛かった時間・そのときのヒープ |
@@ -11098,18 +11286,22 @@ localStorage がいっぱいで書けないときは、**輪の古い方から10
 （いちばん知りたいのは落ちる直前なので、古い方を捨てる）。捨てた数は使用量に出る。
 それでも書けないときだけ記録を止め、読み出した文に「途中で書けなくなった」と出す（**黙って止めない**）。
 
-**1回の実行に輪（800枠）を全部使う**
+**ページを開いてからの全部を残す（v0.39.0）**
 
-実行の始まりで**輪を空にする**。前の実行の記録を残すと、長い実行の頭から押し出されて
-肝心なところが消えるため。開いたときに自己テストが回るが、**自己テストは記録しない**
+v0.38.0 までは実行の始まりで輪を空にしていた。そのため実機の記録で、実行より前に同じページで
+起きたこと（engine を作った・モデルの帯で読み込んだ・GPU を確保した）が消え、
+**出どころの分からない値**（GPU 804MB）が残った。いまは輪を空にせず、ページを開いてからの全部を
+2000枠に残す。実行ごとに入れ替えるのは1件もの（\`cur\` \`in\` \`last\` \`gen\` \`lprg\` \`step\` \`spec\`）だけ。
+時刻 \`t\` は**ページを開いてからのミリ秒**にそろえ、\`run\` には端末の時計（\`at\`）も入れる。
+開いたときに自己テストが回るが、**自己テストは記録しない**
 （開くだけで200件以上の実行を回すので、入れると本物の実行が押し出される。v0.34.0 の実機で
-300枠のうち282枠が自己テストで埋まった）。
+300枠のうち282枠が自己テストで埋まった）。自己テストのあとに「開き終わった」（\`boot\`）を1行だけ書く。
 
 **記録する入口**
 
 | 入口 | 記録 |
 |---|---|
-| 実行 | \`bbRunStart\`（輪を空にして run と dev を書く） |
+| 実行 | \`bbRunStart\`（run と dev を書く。輪は空にしない） |
 | 1 Work Item | 同じ（続きのときは足すだけ） |
 | Retry | 足すだけ（開き直してからなら run から） |
 | くらべる（実験） | run のあと1回ごとに \`exp\` |
@@ -11182,6 +11374,25 @@ WebLLM の engine は Web Worker の中で動く。WebLLM（tvmjs）は GPU の�
 | \`gerr\` | 拾われなかった WebGPU エラー（種類・文） |
 | \`wlog\` | Worker の console（error / warn は全部、info は手掛かりになる行だけ。WebLLM の INFO ログも出させている） |
 | \`wmsg\` | Worker に届いた WebLLM への命令（\`reload\`・\`resetChat\`・推論の始まり など） |
+
+| \`wasm\` | wasm のメモリを見つけた（作った・渡された。そのときの量と合計） |
+| \`wgrow0\` / \`wgrow\` | wasm のメモリを**増やす前**（いくつ増やすか）/ 増やした後（合計・最大） |
+| \`wlag\` | Worker が 0.7秒以上詰まっていた（心拍が遅れた分の ms） |
+
+**wasm のメモリと心拍（v0.39.0）** … WebLLM の本体（tvmjs）・文法を作る xgrammar・語彙表は
+**wasm のメモリ**に置かれ、GPU の確保とは別に数える。Worker とメインの両方で
+\`WebAssembly.instantiate\` / \`Instance\` / \`Memory\` と \`Memory.grow\` を見張り、量を記録に入れる
+（増やす**前**にも書くので、増やす途中で消えたら「いくつ増やそうとしていたか」が残る）。
+Worker は 250ms ごとに心拍を送り、メインスレッドも動かしている間は 250ms ごとに心拍を書く。
+落ちたあとに「**メインと Worker のどちらがいつまで生きていたか**」「**最後に分かった wasm と GPU の量**」が読める。
+この環境（Chromium）で、本物の Qwen2.5 の語彙表（151,665語）から文法の準備を実測すると、
+語彙表の読み込みで JS が約37MB、TokenizerInfo で wasm が約16MB＋JS 約17MB、
+最初の \`compileJSONSchema\` は約2秒（メモリは増えない）だった。iPhone での値は未確認。
+
+**記録から数えたこと** … 読み出した文の頭に、記録から機械的に出せる数だけを並べる
+（最後の行の時刻・2つの心拍の最後の時刻とその差・終わっていない印を書いてから最後に生きていた記録までの時間・
+最後に通った境界・wasm と GPU の最大・Worker が詰まった回数・GPU のエラー・engine を作った/捨てた回数・推論の回数）。
+推測は入れていない。
 
 **取れないもの**: iOS Safari の「いま使っているメモリ」（\`performance.memory\` が無い）、
 プロセスが強制終了されたこと自体（その瞬間に JavaScript は動かない）、WebGPU の中の本当の使用量（見えるのは確保の要求だけ）。
@@ -11894,7 +12105,10 @@ const localSpec=(over,nodeOver)=>({metadata:{version:"1"},
 (async function selfTests(){
  bbBootStage("自己テスト");
  BB.mute=true;          // 自己テストの実行は輪に残さない（本物の実行の記録を押し出さないため）
- const out=[];const ok=(n,c)=>out.push(`<span class="${c?'pass':'fail'}">${c?'PASS':'FAIL'}</span>  ${n}`);
+ const stT0=Date.now();
+ // 開いている途中で消えたとき、どの自己テストまで通っていたかが分かるように、1件ごとに印を書き換える
+ const out=[];const ok=(n,c)=>{out.push(`<span class="${c?'pass':'fail'}">${c?'PASS':'FAIL'}</span>  ${n}`);
+   bbBootStage("自己テスト "+String(n).split(" ")[0]+" まで通った");};
  const skip=(n,why)=>out.push(`<span style="color:#7a828c">SKIP</span>  ${n} — ${why}`);
  const render=()=>{const passN=out.filter(x=>x.includes(">PASS<")).length;const skipN=out.filter(x=>x.includes(">SKIP<")).length;
    $("#tests").innerHTML=`<b>${passN}/${out.length} PASS${skipN?` (${skipN} SKIP)`:""}</b>\n`+out.join("\n");};
@@ -13914,7 +14128,9 @@ export async function CreateMLCEngine(model,opt){
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  BB.mute=false;bbClear();          // 自己テストの分は輪に残さない（本物の実行の記録を守る）
+ BB.t0=BB_PAGE_T0;
  bbDel("open");                      // 開き終わった（「開いている途中」の印を消す）
+ bbPush("boot",{st:"開き終わった",selftest:out.filter(x=>x.includes(">PASS<")).length+"/"+out.length,ms:Date.now()-stT0});
  // 自己テストはわざと書き込みを失敗させる（90番）。その数を使用量に出さないよう数え直す
  Object.assign(BB_STAT,{writes:0,bytes:0,dropped:0,failed:0,lastError:null,lastKey:null,lastLen:null});
  SELFTEST.finished=true;SELFTEST.done();     // 人の実行を通してよい

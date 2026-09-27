@@ -15,6 +15,14 @@ const ctx = await b.newContext({ viewport: { width: 390, height: 844 }, hasTouch
 const errs = [], R = {}, ok = {};
 let p = await ctx.newPage(); p.on('pageerror', e => errs.push(String(e).slice(0, 200)));
 await p.goto(FILE); await p.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
+// 自分のハーネスを開いておく。切り分けは何度も読み込み直すが、終わったあとも同じハーネスのままであること
+// （v0.38.0 の実機で「始めるを押したらハーネスが初期化された」）
+const mine = { metadata: { name: '切り分けの前に開いていたハーネス' }, providers: { m: { adapter: 'mock' } },
+  nodes: [{ id: 'in', type: 'input' }, { id: 'x', type: 'llm', provider: 'm', mock: { text: 'x' } }, { id: 'out', type: 'output' }],
+  edges: [{ from: { node: 'in' }, to: { node: 'x' } }, { from: { node: 'x' }, to: { node: 'out' } }] };
+await p.locator('#viewSeg button[data-v="json"]').first().tap();
+await p.fill('#spec', JSON.stringify(mine)); await p.waitForTimeout(700);
+await p.locator('#viewSeg button[data-v="editor"]').first().tap();
 
 // 始める（A, E, F, J だけ選ぶ）
 await p.locator('#probeOpen').first().tap(); await p.waitForTimeout(200);
@@ -61,6 +69,8 @@ R['シート'] = await p.evaluate(() => (document.querySelector('#sheetBody pre'
 await p.locator('#prCopy').first().tap();
 const copied = await p.evaluate(() => navigator.clipboard.readText().catch(() => ''));
 
+R['終わったあとのハーネス'] = await p.evaluate(() => JSON.parse(document.querySelector('#spec').value).metadata.name);
+ok.keepHarness = R['終わったあとのハーネス'] === mine.metadata.name;
 const res = R['結果'];
 ok.order = JSON.stringify(seen) === JSON.stringify(['A', 'E', 'F', 'J']);
 ok.crashRecorded = res.E.status === 'crashed' && /7 create直前/.test(res.E.lastStep || '');
