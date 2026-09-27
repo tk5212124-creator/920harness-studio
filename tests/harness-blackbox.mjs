@@ -225,6 +225,36 @@ ok.crashKeptAfterClean = R['⑥.2 きれいに走った後'].落ちた回 && R['
     && !!後.取り置き && 後.取り置き.i === 2 && 後.知らせ;
   await p4.close(); }
 
+// ⑥.35 実行を二度押ししても、2本目は走らない（v0.36.1 の実機で2本同時に走って落ちた）
+{ const p5 = await ctx.newPage();
+  p5.on('pageerror', e => errs.push(String(e).slice(0, 200)));
+  await p5.goto(FILE);
+  await p5.waitForFunction(() => window.__bb && window.__dbg && window.__dbg.eng, null, { timeout: 30000 });
+  await p5.locator('#viewSeg button[data-v="json"]').first().tap();
+  await p5.evaluate(s => { const t = document.querySelector('#spec'); t.value = s; t.dispatchEvent(new Event('input')); }, spec);
+  await p5.evaluate(stub);
+  await p5.evaluate(() => { window.__bb.selftestDone().then(() => { window.__installStub(); }); });
+  const 押した時に自己テスト中 = await p5.evaluate(() => !window.__selfTest);
+  // 自己テストを待っている間に連打する。1回目で実行ボタンは即座に押せなくなる（await の前）。
+  // 押せるまま残る別の入口（1 Work Item）は、印を見て断る（ログに出す）
+  const 直後 = await p5.evaluate(() => { const b = document.querySelector('#runTop');
+    b.click(); const off = b.disabled; b.click(); document.querySelector('#step').click(); return off; });
+  const t0 = Date.now();
+  for (;;) { const st = await p5.evaluate(() => document.querySelector('#stateline').textContent);
+    if (/^state: (success|failed)/.test(st) || Date.now() - t0 > 90000) break;
+    await p5.waitForTimeout(300); }
+  R['⑥.35 二度押し'] = await p5.evaluate(() => { const lines = [...document.querySelectorAll('#log span')].map(x => x.textContent);
+    return { 実行の見出し: lines.filter(x => /▶ 実行するハーネス/.test(x)).length,
+      断った: lines.filter(x => /受け付けなかった/.test(x)).length,
+      推論の回数: window.__stub.calls, 状態: document.querySelector('#stateline').textContent.slice(0, 30),
+      押せる: !document.querySelector('#runTop').disabled }; });
+  R['⑥.35 二度押し'].押した時に自己テスト中 = 押した時に自己テスト中;
+  R['⑥.35 二度押し'].押した直後に押せない = 直後;
+  ok.noDoubleRun = 押した時に自己テスト中 && 直後 === true && R['⑥.35 二度押し'].実行の見出し === 1
+    && R['⑥.35 二度押し'].断った === 1 && R['⑥.35 二度押し'].推論の回数 === 21
+    && /success/.test(R['⑥.35 二度押し'].状態) && R['⑥.35 二度押し'].押せる;
+  await p5.close(); }
+
 // ⑥.4 「モデルの読み込み中に消えた」記録なら、知らせから省メモリにできる
 { const p2 = await ctx.newPage();
   p2.on('pageerror', e => errs.push(String(e).slice(0, 200)));

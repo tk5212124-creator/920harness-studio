@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 落ちても記録が残るようにする v0.36.1</title>
+<title>Harness Studio — 落ちても記録が残るようにする v0.36.2</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.36.1 · 落ちても記録が残る</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.36.2 · 落ちても記録が残る</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -1500,7 +1500,7 @@ function bbRead(){
 function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));
   ["h","open","cur","in","last","gen","lprg"].forEach(bbDel);
   BB.head=0;BB.n=0;BB.slotAt={};BB.slotPct={};}
-const HARNESS_BUILD="0.36.1";
+const HARNESS_BUILD="0.36.2";
 /* ---- 取り置き（前の回の記録を、消える前に別の置き場へ移す）----
    v0.36.0 まで: 開いたときに前回の記録を**メモリへ**移し、置き場からは消していた。
    そのため (1) もう一度読み込まれると（iOS の自動再読み込み・版の読み込み直し）証拠が消え、
@@ -1801,7 +1801,21 @@ const WebLLMProvider={
       throw mapWebLLMError(e,def);
     }
   },
+  /* 同じ engine への推論は1本ずつ通す。
+     WebLLM は推論の間モデルごとのロックを持つが、engine.resetChat() はそのロックを取らずに
+     KV キャッシュを消す（vendor/web-llm/index.js の resetChat）。2本が重なると、
+     片方の推論の最中にもう片方の resetChat が KV を消してしまう。実機の記録で、
+     実行が2本同時に走り、2本目の推論で消えていた。ここで「resetChat＋推論」をひと組にして順に通す。 */
   async invoke(req){
+    const engine=req.handle&&req.handle.engine;
+    if(!engine)return WebLLMProvider._invoke(req);
+    const prev=engine.__hsQueue||Promise.resolve();
+    let done;const mine=new Promise(r=>{done=r;});
+    engine.__hsQueue=prev.then(()=>mine);
+    await prev;                                   // 前の推論が終わるまで待つ
+    try{return await WebLLMProvider._invoke(req);}finally{done();}
+  },
+  async _invoke(req){
     const h=req.handle;const engine=h&&h.engine;
     if(!engine)throw{code:"MODEL_LOAD_FAILED",stage:"model_load",retryable:true,message:"engine未ロード"};
     /* この道具は毎回まっさらな会話で呼ぶ（前のやり取りは持ち越さない）。
@@ -7455,7 +7469,7 @@ function openExpSheet(){
           return m?[m.mean,m.median,m.min,m.max,m.stddev]:["","","","",""];})).map(q).join(",")));}
     copyOut(lines.join("\n"),"実験の結果（CSV）");};
   $("#expStop").onclick=()=>{EXP.cancel=true;EXP.note="止めるところ…";expRender();};
-  $("#expRun").onclick=async()=>{
+  $("#expRun").onclick=()=>exclusive("くらべる",async()=>{      // 実行と同時には動かさない
     if(EXP.running)return;
     const nEach=Math.max(1,Number(($("#sheetBody").querySelector('[data-f="__expN"]')||{}).value||1));
     const picks=String((($("#sheetBody").querySelector('[data-f="__expPick"]')||{}).value)||"")
@@ -7497,7 +7511,7 @@ function openExpSheet(){
     EXP.note=`終わり（${EXP.rows.length}行）。`
       +`同じ組み合わせの中でばらつくのは、モデルの temperature とループの回り方のせい。`;
     expSave();expRender();
-  };
+  });
 }
 let reviewCtl=null;
 $("#btnSpec").onclick=openSpecSheet;
@@ -7811,9 +7825,14 @@ function renderGguf(){
   }
   box.querySelectorAll("button[data-gact]").forEach(b=>b.onclick=()=>ggufAction(b.dataset.gact,b.dataset.id));
 }
-async function ggufAction(act,id){
-  const def=wllamaDef(id);
+/* モデルの帯の操作も、実行と同時にはしない。端末に載せられるモデルは1つなので、
+   実行中に別のモデルを読むと、実行が使っているモデルを片付けてしまう。止めるだけは別。 */
+function ggufAction(act,id){
   if(act==="stop"){if(mdlActive&&mdlActive.ctl)mdlActive.ctl.abort();return;}
+  return exclusive("モデルの操作",()=>ggufActionBody(act,id));
+}
+async function ggufActionBody(act,id){
+  const def=wllamaDef(id);
   await waitSelfTest(log,"モデルを扱う");
   if(act==="del"){
     try{await WllamaProvider.deleteCache(def);mdlCache[id]=false;setMdlMsg(id+" を端末から消した");}
@@ -7899,9 +7918,13 @@ function startTicker(id,getText){
   paint();clearInterval(mdlTick);mdlTick=setInterval(paint,1000);
   return ()=>{clearInterval(mdlTick);mdlTick=null;return Math.round((Date.now()-t0)/1000);};
 }
-async function modelAction(act,id,btn){
-  const def=webllmDef(id);
+function modelAction(act,id,btn){
   if(act==="stop"){if(mdlCtl)mdlCtl.abort();setRowStat(id,"中止を要求した…");return;}
+  if(act==="use")return modelActionBody(act,id,btn);     // ノードのモデルを選ぶだけ（読み込まない）
+  return exclusive("モデルの操作",()=>modelActionBody(act,id,btn));
+}
+async function modelActionBody(act,id,btn){
+  const def=webllmDef(id);
   await waitSelfTest(log,"モデルを扱う");
   if(mdlActive&&act!=="use")return setMdlMsg("いま別のモデルを用意中。中止するか、終わるまで待つ");
   try{
@@ -8206,7 +8229,22 @@ function noteBlocked(){
   setHint("実行できない: "+(errs[0]||"検証エラー"));
   const box=$("#vErr");if(box&&box.textContent.trim())box.scrollIntoView({block:"center"});
 }
-async function runAll(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec){noteBlocked();return;}
+/* ---- 動かす操作は同時に1つだけ ----
+   実機の記録で、実行が2本同時に走っていた（押してからボタンが押せなくなるまでに await が2つあり、
+   その間にもう一度押せた）。2本は同じモデルを取り合う（同時に推論する・片方が resetChat する）。
+   押した瞬間に（await の前に）印を立てて、2本目は断る。断ったことはログに出す。 */
+let BUSY=null;
+async function exclusive(what,fn){
+  if(BUSY){log("err",`■ いま「${BUSY}」の途中なので、「${what}」は受け付けなかった`
+    +`（2つ同時に動かすと同じモデルを取り合う）`);return;}
+  BUSY=what;
+  const btns=["#run","#runTop"].map(id=>$(id)).filter(Boolean);
+  const was=btns.map(b=>b.disabled);btns.forEach(b=>{b.disabled=true;});
+  try{return await fn();}
+  finally{BUSY=null;btns.forEach((b,i)=>{b.disabled=was[i];});}     // 押す前の状態に戻す
+}
+const runAll=()=>exclusive("実行",runAllBody);
+async function runAllBody(){clearLog();clearStream();edClearPreview();const spec=parseSpec();if(!spec){noteBlocked();return;}
   await waitSelfTest(log,"実行する");
   // 記録を先に始める（輪を空にするので、ログを出してからだと1行目が消える）
   await bbRunStart(spec,"run",inputForRun());   // 落ちても残る記録をここから始める（入れた値も残す）
@@ -8215,20 +8253,23 @@ async function runAll(){clearLog();clearStream();edClearPreview();const spec=par
   setRunUI(true);setState("running");
   try{await runUntilIdle(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}
   report();}
-async function stepOne(){const spec=parseSpec();if(!spec){noteBlocked();return;}
+const stepOne=()=>exclusive("1 Work Item",stepOneBody);
+async function stepOneBody(){const spec=parseSpec();if(!spec){noteBlocked();return;}
   await waitSelfTest(log,"1手進める");
   if(!cur||cur.status!=="running"){clearLog();clearStream();store.clear();cur=makeRun(spec,inputForRun());startRun(spec,cur);ctl=newCtl();
     await bbRunStart(spec,"step",inputForRun());}   // 1手ずつでも記録は残す
   else await bbEnsureRun(spec,"step",inputForRun());
   const r=await processOneWorkItem(spec,cur,store,log,ctl);log("cp",`  ▸ work: ${r.kind}`);report();}
-async function doResume(){clearLog();await waitSelfTest(log,"続きから動かす");
+const doResume=()=>exclusive("Resume",doResumeBody);
+async function doResumeBody(){clearLog();await waitSelfTest(log,"続きから動かす");
   const cp=store.load();if(!cp){log("err","Checkpointなし");return;}if(cp.status==="success"){log("err","terminal success はResume不可");return;}
   const spec=parseSpec();if(!spec)return;if(canonSpec(spec)!==cp.specCanon){log("err","Spec変更のためResume拒否（自動移行しない）");return;}
   cur=cp;ctl=newCtl();
   await bbRunStart(spec,"resume",cp&&cp.input);   // 先に始める（ログを出してからだと1行目が消える）
   log("cp",`▣ Resume: status=${cp.status} queue先頭=${JSON.stringify(cp.workQueue[0])}`);
   setRunUI(true);try{await resumeRun(spec,cur,store,log,ctl);}catch(e){log("err","例外: "+errText(e));}report();}
-async function doRetry(){const spec=parseSpec();if(!spec||!cur)return;
+const doRetry=()=>exclusive("Retry",doRetryBody);
+async function doRetryBody(){const spec=parseSpec();if(!spec||!cur)return;
   await waitSelfTest(log,"やり直す");
   const failed=Object.values(cur.executions).find(e=>e.status==="failed");if(!failed){log("err","failedなExecutionが無い");return;}
   log("cp",`▣ Retry: ${failed.execId}（iteration不変・attempt+1）`);ctl=newCtl();setRunUI(true);
@@ -10436,6 +10477,18 @@ Runtime 側でやっていることは次の3つ。
 - 回数は使用量の \`providerResets\`。
 - そのあとは**ふつうのノードのエラー**として扱うので、\`onError\` がそのまま効く
   （\`value\` にしておけば、捨てて読み直したうえで先へ進める）。
+
+**④ 動かす操作は同時に1つだけ・同じ engine への推論は1本ずつ**
+
+実機の記録で、**実行が2本同時に走っていた**（ボタンを押してから押せなくなるまでに待ちが2つあり、
+その間にもう一度押せた）。2本は同じモデルを取り合う。WebLLM は推論の間モデルごとのロックを持つが、
+\`engine.resetChat()\` はそのロックを取らずに KV キャッシュを消す（同梱の \`vendor/web-llm/index.js\` の \`resetChat\`）。
+そのため**1本目の推論の最中に、2本目の resetChat が KV を消す**ことが起きる。記録で消えた場所は2本目の推論だった。
+
+- 実行・1 Work Item・Resume・Retry・くらべる・モデルの帯（読み込み・試す・消す）は**同時に1つだけ**。
+  押した瞬間（待ちに入る前）に実行ボタンを押せなくし、ほかの入口は「いま○○の途中なので受け付けなかった」とログに出して断る。
+- さらに \`WebLLMProvider.invoke\` で、**同じ engine への「resetChat＋推論」をひと組にして1本ずつ**通す。
+  1回の実行の中の推論はもともと1つずつなので、ふだんの速さは変わらない。
 
 **③ 前回の続きの保存をまとめる**
 
@@ -13255,6 +13308,34 @@ export async function CreateMLCEngine(model,opt){
    if(!okAll)out.push(`<span class="fail">↳</span>  kinds=${kinds} keep=${keepOk} txt=${txtOk} drop=${dropOk}`
      +` boots=${JSON.stringify(boots)}`);
   }finally{bbDropKept();BB.keepNS=realNS;bbClear();BB.mute=true;}}
+ // 92 同じ engine への推論は1本ずつ: 2本が重なっても、片方の推論の最中にもう片方の resetChat が走らない
+ {const ev=[];let live=0,overlap=0;
+  const mkStream=(tag)=>{const chunks=["{",'"a"',":1","}"];let i=0;const it={};
+    it[Symbol.asyncIterator]=()=>({next:async()=>{
+      await new Promise(r=>setTimeout(r,3));
+      if(i<chunks.length)return{value:{choices:[{delta:{content:chunks[i++]}}]},done:false};
+      if(i===chunks.length){i++;live--;ev.push("end:"+tag);
+        return{value:{choices:[{finish_reason:"stop"}],usage:{prompt_tokens:1,completion_tokens:1}},done:false};}
+      return{value:undefined,done:true};}});
+    return it;};
+  let n=0;
+  const eng={async resetChat(){ev.push("reset");if(live>0)overlap++;},interruptGenerate(){},
+    chat:{completions:{create:async()=>{const tag=++n;live++;ev.push("start:"+tag);return mkStream(tag);}}}};
+  const call=()=>PROVIDERS.webllm.invoke({handle:{engine:eng},input:{messages:[{role:"user",content:"x"}]},
+    generation:{maxTokens:8},node:{id:"A"},inputs:{},ex:{}});
+  const rs=await Promise.all([call(),call(),call()]);
+  const seq=ev.join(",");
+  // 実機で起きた形: 1本目が推論している最中に、2本目が来る（ずれて来る）
+  ev.length=0;
+  const c1=call();
+  while(!ev.includes("start:4"))await new Promise(r=>setTimeout(r,1));   // 1本目が推論を始めた
+  const c2=call();
+  await Promise.all([c1,c2]);
+  const seq2=ev.join(",");
+  const okAll=overlap===0&&seq==="reset,start:1,end:1,reset,start:2,end:2,reset,start:3,end:3"
+    &&seq2==="reset,start:4,end:4,reset,start:5,end:5"&&rs.every(r=>r&&r.output);
+  ok("92 同じ engine への推論は1本ずつ通す（resetChat が他の推論の最中に KV を消さない）",okAll);
+  if(!okAll)out.push(`<span class="fail">↳</span>  overlap=${overlap} seq=${seq} ずれて来た=${seq2}`);}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  BB.mute=false;bbClear();          // 自己テストの分は輪に残さない（本物の実行の記録を守る）
