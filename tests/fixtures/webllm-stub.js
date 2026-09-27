@@ -7,14 +7,21 @@ window.__installStub=function(){
     "関連度2__Judge":{tokenScores:[78,72,88],answerUsefulness:71},
     "回答生成":{items:["読書をする","映画を見る","料理をする"]},
     "回答Judge":{questionFit:85,specificity:75,materialUse:70}};
-  const S=window.__stub={loads:0,releases:0,resets:0,calls:0,kvPeak:0,oomAt:null,oomFired:0,hangAt:null,hung:0,out:null,eng:null};
+  const S=window.__stub={loads:0,releases:0,resets:0,calls:0,kvPeak:0,oomAt:null,oomFired:0,goneAt:null,goneFired:0,hangAt:null,hung:0,out:null,eng:null};
   const P=window.__dbg.eng.PROVIDERS;
   const mkEngine=function(){
     const e={kv:0};
-    if(!window.__killReset)e.resetChat=async function(){S.resets++;e.kv=0;};
+    if(!window.__killReset)e.resetChat=async function(){
+      if(e.gone)throw new Error("The current Object has already been disposed");
+      S.resets++;e.kv=0;};
     e.interruptGenerate=function(){};
     e.chat={completions:{create:async function(opt){
       S.calls++;
+      // goneAt: GPU の device を失った状況（同梱の WebLLM は Instance.dispose() して、読み出し中の mapAsync が失敗する）。
+      // そのあと同じ engine を使うと「already been disposed」になる（v0.40.0 の実機の記録と同じ順番）
+      if(e.gone)throw new Error("Error: The current Object has already been disposed");
+      if(S.goneAt&&S.calls===S.goneAt){S.goneFired++;e.gone=true;
+        throw new Error("OperationError: map async was not successful");}
       var chars=(opt.messages||[]).reduce(function(a,m){return a+String(m.content||"").length;},0);
       e.kv+=chars;                                  // resetChat しないと積みっぱなしになる
       if(e.kv>S.kvPeak)S.kvPeak=e.kv;

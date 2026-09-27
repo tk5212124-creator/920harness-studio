@@ -35,10 +35,11 @@ R['① JSONそのまま'] = await p.evaluate(s => {
   return { 同じ: a === c, 文字数: [now.length, s.length] }; }, spec);
 ok.untouched = R['① JSONそのまま'].同じ;
 
-const runIt = async (killReset, oomAt) => {
-  await p.evaluate(([k, o]) => { const S = window.__stub;
+const runIt = async (killReset, oomAt, goneAt) => {
+  await p.evaluate(([k, o, g]) => { const S = window.__stub;
     S.calls = 0; S.resets = 0; S.kvPeak = 0; S.oomAt = o; S.oomFired = 0; S.loads = 0; S.releases = 0;
-    window.__killReset = !!k; window.__dbg.eng.ModelManager.reset(); S.eng = null; }, [killReset, oomAt || null]);
+    S.goneAt = g; S.goneFired = 0;
+    window.__killReset = !!k; window.__dbg.eng.ModelManager.reset(); S.eng = null; }, [killReset, oomAt || null, goneAt || null]);
   await tap('#runTop');
   const t0 = Date.now();
   while (Date.now() - t0 < 90000) {
@@ -49,7 +50,9 @@ const runIt = async (killReset, oomAt) => {
   return p.evaluate(() => ({
     line: ((document.querySelector('#stateline') || {}).textContent || '').slice(0, 150),
     S: { calls: window.__stub.calls, resets: window.__stub.resets, kvPeak: window.__stub.kvPeak,
-         loads: window.__stub.loads, releases: window.__stub.releases, oomFired: window.__stub.oomFired },
+         loads: window.__stub.loads, releases: window.__stub.releases, oomFired: window.__stub.oomFired,
+         goneFired: window.__stub.goneFired },
+    errs: (window.__dbg.run() && window.__dbg.run().errors || []).map(e => e.node + ':' + String(e.message).slice(0, 50)),
     表の行: document.querySelectorAll('#nodeTable tbody tr').length,
     使用量: ((document.querySelector('#totals') || {}).textContent || '').replace(/\s+/g, ' '),
     赤字: [...document.querySelectorAll('#log span.l-err')].map(x => x.textContent.trim().slice(0, 140)).slice(0, 6),
@@ -73,6 +76,13 @@ const c = await runIt(false, 10);
 R['④ 途中でOOM'] = c;
 ok.oomRecover = /state: success/.test(c.line) && c.S.oomFired === 1 && c.S.releases === 1 && c.S.loads >= 1
   && c.赤字.some(x => /リセットが要る/.test(x));
+
+// ④.5 回答生成（20回目）で GPU の device を失っても、次の回答Judge は engine を読み直して動く
+//     （v0.40.0 の実機: 回答生成が「map async was not successful」、続く回答Judge が「already been disposed」で失敗した）
+const g = await runIt(false, null, 20);
+R['④.5 途中でGPUを失う'] = g;
+ok.goneRecover = /state: success/.test(g.line) && g.S.goneFired === 1 && g.S.releases === 1 && g.S.loads === 2
+  && g.errs.length === 1 && /^回答生成:.*map async/.test(g.errs[0]) && g.S.calls === 21;
 
 // ⑤ 使用量に Checkpoint のコストが出ている
 ok.cpShown = /続きの保存/.test(a.使用量) && /書いた合計/.test(a.使用量);

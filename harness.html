@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 開くたびに本物のモデルを読まない v0.40.0</title>
+<title>Harness Studio — GPU を失ったら読み直す v0.40.1</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.40.0 · 開くたびに本物のモデルを読まない</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.40.1 · 開くたびに本物のモデルを読まない・GPU を失ったら読み直す</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -1010,6 +1010,12 @@ function transportOf(def){const t=def&&def.transport;if(t){if(!TRANSPORTS[t])thr
 const isAbort=e=>!!e&&(e.name==="AbortError"||e.code==="ABORT_ERR"||e.__abort===true);
 function abortError(){const e=new Error("aborted");e.name="AbortError";e.__abort=true;return e;}
 function oomLike(t){return /out of memory|oom|cudamalloc|insufficient memory|failed to allocate|device lost|allocation failed/i.test(String(t||""));}
+/* engine がもう使えない（GPU の device を失った・中の instance が片付けられた）ことを示す文。
+   同梱の WebLLM（tvmjs）は device.lost で Instance.dispose() を呼ぶ。そのとき読み出し中だった mapAsync は
+   「map async was not successful」（OperationError）で失敗し、そのあと同じ engine を使うと
+   「… has already been disposed」になる（v0.40.0 の実機の記録: 回答生成→回答Judge の順で起きた）。
+   メモリ不足かどうかはこの文からは分からないので、エラーの種類は変えず、engine を捨てる印だけ付ける。 */
+function engineGoneLike(t){return /map async was not successful|has already been disposed|Instance\.dispose|device (?:is|was) lost/i.test(String(t||""));}
 
 /* --- JSON schema（最小サブセット・プログラム側で答えを縛るための検査） --- */
 function checkSchema(v,sc,path){
@@ -1539,7 +1545,7 @@ function bbRead(){
 function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));
   ["h","open","cur","in","last","gen","lprg","step","gpu","spec","hb","whb"].forEach(bbDel);
   BB.head=0;BB.n=0;BB.slotAt={};BB.slotPct={};}
-const HARNESS_BUILD="0.40.0";
+const HARNESS_BUILD="0.40.1";
 /* ---- 取り置き（前の回の記録を、消える前に別の置き場へ移す）----
    v0.36.0 まで: 開いたときに前回の記録を**メモリへ**移し、置き場からは消していた。
    そのため (1) もう一度読み込まれると（iOS の自動再読み込み・版の読み込み直し）証拠が消え、
@@ -2149,6 +2155,9 @@ const WebLLMProvider={
       if(/GrammarMatcherInit|grammar matcher/i.test(errText(e)))
         throw{code:"SCHEMA_VALIDATION_ERROR",stage:"decode",retryable:false,
           message:"このモデルでは、その schema でのJSON強制を組み立てられない（"+errText(e).slice(0,140)+"）。schema を簡単にする（required だけにする等）か、schema を外して文章で受ける"};
+      if(engineGoneLike(errText(e)))
+        throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,providerState:"needs_reset",
+          message:errText(e)+"｜GPU の device を失ったか、engine が片付けられている（このまま同じ engine は使えない）"};
       throw{code:"MODEL_INFERENCE_FAILED",stage:"decode",retryable:false,message:errText(e)};
     }finally{if(onAbort&&req.signal)req.signal.removeEventListener("abort",onAbort);}
     bbStep("10 生成完了",{chunks:nChunk,chars:text.length,finish:finish||null,
@@ -11175,6 +11184,13 @@ Runtime 側でやっていることは次の3つ。
 \`ModelManager\` から**その engine を捨てて解放する**。次に呼ぶときは読み直す。
 捨てずに呼び直すと、壊れた状態のまま呼ぶことになって落ちやすい。
 
+**GPU の device を失ったときも同じ（v0.40.1）。** 同梱の WebLLM は device を失うと中の instance を片付ける
+（\`device.lost\` → \`Instance.dispose()\`）。そのとき読み出し中の推論は \`map async was not successful\` で失敗し、
+同じ engine をもう一度使うと \`… has already been disposed\` で失敗する。v0.40.0 まではこの2つを捨てる理由と見ておらず、
+片付け済みの engine を使い続けていた（実機の記録: 回答生成が前者、続く回答Judge が後者で失敗）。
+いまはこの2つにも \`needs_reset\` を付ける。**エラーの種類は \`MODEL_INFERENCE_FAILED\` のまま**
+（メモリ不足かどうかはこの文からは分からないので \`RESOURCE_EXHAUSTED\` にはしない）。
+
 - ログに \`■ <ノード>: <code> で Provider が「リセットが要る」と言ったので engine を捨てた\` と出る。
 - 回数は使用量の \`providerResets\`。
 - そのあとは**ふつうのノードのエラー**として扱うので、\`onError\` がそのまま効く
@@ -14207,6 +14223,21 @@ export async function CreateMLCEngine(model,opt){
   const empty=Object.keys(ModelManager.states).length===0;
   ModelManager.states=saved;
   ok("94 ModelManager.reset() は Worker の engine と Wllama を止めてから忘れる",term===1&&exited===1&&empty);}
+ // 95 GPU の device を失ったあと（map async の失敗・片付け済み）は engine を捨てる印を付ける。種類は変えない
+ {const tryMsg=async m=>{const eng={async resetChat(){},interruptGenerate(){},
+      chat:{completions:{create:async()=>{throw new Error(m);}}}};
+    try{await PROVIDERS.webllm.invoke({handle:{engine:eng},input:{messages:[{role:"user",content:"x"}]},
+      generation:{maxTokens:8},node:{id:"A"},inputs:{},ex:{}});return null;}
+    catch(e){return{code:e.code,reset:e.providerState||null};}};
+  const a1=await tryMsg("OperationError: map async was not successful");
+  const a2=await tryMsg("Error: The current Object has already been disposed");
+  const a3=await tryMsg("何か別の失敗");
+  const a4=await tryMsg("Device lost");
+  ok("95 GPU を失ったあとの失敗（map async・片付け済み）は engine を捨てて読み直す（種類は MODEL_INFERENCE_FAILED のまま）",
+    a1&&a1.code==="MODEL_INFERENCE_FAILED"&&a1.reset==="needs_reset"
+    &&a2&&a2.code==="MODEL_INFERENCE_FAILED"&&a2.reset==="needs_reset"
+    &&a3&&a3.code==="MODEL_INFERENCE_FAILED"&&a3.reset===null
+    &&a4&&a4.code==="RESOURCE_EXHAUSTED"&&a4.reset==="needs_reset");}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  BB.mute=false;bbClear();          // 自己テストの分は輪に残さない（本物の実行の記録を守る）

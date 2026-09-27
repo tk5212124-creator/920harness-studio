@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.40.0 開くたびに本物のモデルを読んでいたのを止める
+## 1. 現状 — v0.40.1 GPU を失ったら engine を読み直す
 
 | 段階 | 状態 |
 |---|---|
@@ -71,7 +71,8 @@ iPhone でもPCでも同じ操作。
 | HSL も貼れる・状態の食い違いを直す v0.37.0（JSON タブの欄に HSL を貼っても取り込める＝LLM の返事をコードブロックごと貼ってよい／終わった Run に output の attempt・branch・branchGroup が running のまま残っていた（ChatGPT の報告）→ output の経路でも attempt を閉じる・枝は root を映す・グループは activation の execution が全部終わったら completed / cancelled に確定。10通り＋実ハーネスで「動いていないのに running」が0件） | 実装済み |
 | 落ちる原因を端末で切り分ける v0.38.0（推論1回を12の境界に分けて記録／Worker の中の GPU の確保・device の喪失・WebGPU のエラー・console を別の口で記録＝これまで Worker の中の異常は見えていなかった／実行したハーネス（JSON）も記録に残す／開いている途中で消えた回を別に取り置く／端末で A〜J の条件を1つずつ、ページを読み込み直しながら試す「切り分け」＝落ちても続きから進む／モデル用 wasm の数字から「945MB」の中身を確認＝ふつうの推論の見積もりは約320MB） | 実装済み |
 | 落ちる前の記録だけで追える・開き直しても消えない v0.39.0（記録はページを開いてからの全部を2000枠に残す＝実行より前にしたことも残る・時刻はページを開いてからの ms にそろえ端末の時計も入れる／wasm のメモリ（作った・増やす前・増やした後）を Worker とメインで記録／メインと Worker の心拍（どちらがいつまで生きていたか）・Worker が詰まった時間／engine を作った・捨てた／読み出した文の頭に「記録から数えたこと」／いま開いているハーネスを端末に置いて開き直しても戻す＝切り分けの読み込み直しで例に戻っていた／「ファイルから」で選ぶファイルを絞らない＝iPhone で書き出したファイルが出てこなかった・.txt（AIに渡す1枚）も戻せる＝それまで読めなかった／診断結果をコピー・保存） | 実装済み |
-| **開くたびに本物のモデルを読んでいたのを止める v0.40.0（実機の記録で「実行の前から GPU 804MB・wasm 240MB・engine を10個作った」・開くのに27秒。自己テスト65が「JSONで書く」の例（webllm の Qwen2.5）をそのまま走らせていて、WebGPU のある端末では開くたびに本物のモデルを読み込んで推論していた＝ふだんのテストは WebGPU の無い Chromium なので気づけなかった → mock に替えた写しで走らせる。HTTP＋本物の WebGPU で開いて「自己テストが本物を読まない」を毎回確かめるテストを足した／`ModelManager.reset()` が engine を忘れるだけで Worker ごと残していた → 止めてから忘れる／切り分けが実行と重なると、断られたのに「完走」と書き、記録を上書きし、0.4秒後に読み込み直して実行を止めていた → 始めずに「続ける／やめる」を出す／いま開いている画面の記録を「途中で消えた」と書いていた）** | **いまここ** |
+| 開くたびに本物のモデルを読んでいたのを止める v0.40.0（実機の記録で「実行の前から GPU 804MB・wasm 240MB・engine を10個作った」・開くのに27秒。自己テスト65が「JSONで書く」の例（webllm の Qwen2.5）をそのまま走らせていて、WebGPU のある端末では開くたびに本物のモデルを読み込んで推論していた＝ふだんのテストは WebGPU の無い Chromium なので気づけなかった → mock に替えた写しで走らせる。HTTP＋本物の WebGPU で開いて「自己テストが本物を読まない」を毎回確かめるテストを足した／`ModelManager.reset()` が engine を忘れるだけで Worker ごと残していた → 止めてから忘れる／切り分けが実行と重なると、断られたのに「完走」と書き、記録を上書きし、0.4秒後に読み込み直して実行を止めていた → 始めずに「続ける／やめる」を出す／いま開いている画面の記録を「途中で消えた」と書いていた） | 実装済み |
+| **GPU を失ったら engine を読み直す v0.40.1（v0.40.0 の実機で初めて最後まで走ったが、回答生成が `map async was not successful`、続く回答Judge が `The current Object has already been disposed` で失敗していた。同梱の WebLLM は GPU の device を失うと中の instance を片付けるのに、アプリはその engine を使い続けていた → この2つの失敗でも engine を捨てて次は読み直す。エラーの種類は `MODEL_INFERENCE_FAILED` のまま。stub で同じ順番を再現し、直す前は失敗・直した後は回答Judge が動くことを確かめた）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -1191,7 +1192,7 @@ runtime が気づいているが、`console.error` に出すだけでアプリ�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト94件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める）
+node tests/harness-runtime.mjs      # 自己テスト95件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
@@ -1210,7 +1211,7 @@ node tests/harness-calc.mjs         # 計算ノード（式/JavaScript）・条�
 node tests/harness-race.mjs         # 先着（race）— 足す・中身を決める・実行して候補が止まる・記録・診断・使い方3タブ
 node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱い・毎周たまる・記録・診断・使い方3タブ
 node tests/harness-parity.mjs       # 画面とJSONの対応（JSONの全キーに画面の欄があるか・画面の操作がJSONに入るか）
-node tests/harness-realspec.mjs     # 実際に使う大きいハーネス（23ノード/21回推論）を JSON 無改変で画面から実行
+node tests/harness-realspec.mjs     # 実際に使う大きいハーネス（23ノード/21回推論）を JSON 無改変で画面から実行（OOM・GPU を失ったときも走りきる）
 node tests/harness-blackbox.mjs     # 推論の途中でレンダラを本当にクラッシュさせ、落ちた場所が残って読めるか
 node tests/harness-invariants.mjs   # 終わった Run に「動いていないのに running」が残らない（10通り＋Retry＋実ハーネス）
 node tests/harness-hslbox.mjs       # JSON タブの欄に HSL を貼る（貼り付け・打つ途中・LLM の返事・欄を離れる・壊れた文）
