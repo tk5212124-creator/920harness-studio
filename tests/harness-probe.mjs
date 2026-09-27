@@ -82,6 +82,28 @@ const fs2 = R['F の境界'] || [];
 ok.noResetInF = fs2.includes('3-4 resetChatしない（切り分け）') && !fs2.includes('3 resetChat開始')
   && ['1 engine取得開始','2 engine取得完了','5 形式の準備開始','6 形式の準備完了','7 create直前','8 create直後',
       '9 最初のchunk','10 生成完了','11 形の検査開始','12 形の検査完了'].every(x => fs2.includes(x));
+// 何かが動いている途中に切り分けの続きが来ても、始めない・完走と書かない・読み込み直さない・記録を上書きしない
+// （v0.39.0 の実機: 開いている途中に押した実行と重なり、断られたのに「完走」と書いて 0.4秒後に読み込み直し、実行を止めた）
+{ const q = await ctx.newPage(); q.on('pageerror', e => errs.push(String(e).slice(0, 200)));
+  await q.goto(FILE); await q.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
+  await q.evaluate(() => {
+    localStorage.setItem('hsprobe.v1', JSON.stringify({ active: true, order: ['A', 'F'], idx: 0, results: {}, startedAt: Date.now(),
+      opts: { model: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', ctx: 1024, prefill: null, worker: true } }));
+    window.__sameページ = 1;
+    window.__dbg.eng.exclusive('実行', () => new Promise(r => { window.__release = r; }));   // 実行の途中
+    window.__bb.push('run', { tag: 'run' }); window.__bb.push('log', { k: 'cp', m: '人が押した実行' });
+    window.__dbg.eng.probeResume(); });
+  await q.waitForTimeout(4200);
+  R['動いている途中に来た切り分け'] = await q.evaluate(() => { const P = JSON.parse(localStorage.getItem('hsprobe.v1'));
+    const r = window.__bb.read();
+    return { 同じページ: window.__sameページ === 1, A: P.results.A || null, 続きが残る: P.active && P.idx === 0,
+      知らせ: (document.querySelector('#probeBanner') || {}).textContent || '',
+      切り分けの記録: r.rows.filter(x => x.e === 'run' && /^probe:/.test(x.tag || '')).length,
+      最後の行: r.rows[r.rows.length - 1].m || r.rows[r.rows.length - 1].e }; });
+  const w = R['動いている途中に来た切り分け'];
+  ok.probeWaitsBusy = w.同じページ && w.A === null && w.続きが残る && /始めなかった/.test(w.知らせ) && /続ける/.test(w.知らせ)
+    && w.切り分けの記録 === 0 && w.最後の行 === '人が押した実行';
+  await q.evaluate(() => window.__release()); await q.close(); }
 R['シート'] = R['シート'].slice(0, 700);
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v)));
 console.log('pageerror: ' + JSON.stringify(errs));

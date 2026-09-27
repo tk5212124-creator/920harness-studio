@@ -41,6 +41,7 @@ R['① 見張りの Worker'] = await p.evaluate(async () => {
   w.postMessage({ __hsPort: 1 }, [ch.port2]);
   await new Promise(r => { w.onmessage = ev => { if (ev.data === 'done') r(); }; w.postMessage('go'); });
   await new Promise(r => setTimeout(r, 300));
+  w.terminate();                          // 止めないと心拍を送り続け、③の心拍と混ざる
   const rd = window.__bb.read();
   return { 行: rd.rows.filter(x => x.e !== 'run').map(x => x.e + (x.st ? '(' + x.st + ')' : '')),
     確保後: rd.rows.find(x => x.e === 'gpu' && x.st === '確保後') || null,
@@ -81,23 +82,35 @@ R['③ wasm と心拍'] = await p.evaluate(async () => {
     " setTimeout(()=>{const t=Date.now();while(Date.now()-t<1200){}},400);\n" +
     " setTimeout(()=>self.postMessage('done'),2400);};\n";
   const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })), { type: 'module' });
-  const ch = new MessageChannel(); ch.port1.onmessage = ev => window.__dbg.eng.bbWorkerEvent(ev.data);
+  const ch = new MessageChannel(); ch.port1.onmessage = ev => window.__dbg.eng.bbWorkerEvent(Object.assign({}, ev.data, { wid: 'wA' }));
   w.postMessage({ __hsPort: 1 }, [ch.port2]);
+  // 片付け損ねた engine の Worker を真似る（止めずに残っている、wasm 無しの Worker）
+  const w2 = new Worker(URL.createObjectURL(new Blob([window.__dbg.eng.workerProbeSrc() +
+    "self.onmessage=e=>{if(e.data&&e.data.__hsPort)__hsSetPort(e.ports[0]);};"], { type: 'text/javascript' })), { type: 'module' });
+  const ch2 = new MessageChannel(); ch2.port1.onmessage = ev => window.__dbg.eng.bbWorkerEvent(Object.assign({}, ev.data, { wid: 'wB' }));
+  w2.postMessage({ __hsPort: 1 }, [ch2.port2]);
   await new Promise(r => { w.onmessage = ev => { if (ev.data === 'done') r(); }; w.postMessage('go'); });
   await new Promise(r => setTimeout(r, 400));
+  const 二つ = window.__bb.read().whb;
+  w2.terminate();
+  await new Promise(r => setTimeout(r, 2600));   // wB の心拍が止まって2秒たつと、並びから外れる
   w.terminate();
   const rd = window.__bb.read();
   return { 行: [...new Set(rd.rows.filter(x => x.e !== 'run').map(x => x.e))],
     作った: rd.rows.filter(x => x.e === 'wasm').map(x => x.why + ':' + x.memMB),
     増やす前: rd.rows.find(x => x.e === 'wgrow0') || null, 増やした: rd.rows.find(x => x.e === 'wgrow') || null,
-    詰まり: rd.rows.find(x => x.e === 'wlag') || null, 心拍: rd.whb || null,
+    詰まり: rd.rows.find(x => x.e === 'wlag') || null, 心拍: rd.whb || null, 二つのとき: 二つ && 二つ.alive,
     文: (window.__bb.text(rd) || '').split('\n').filter(l => /Worker の最後の心拍/.test(l)) };
 });
 { const c = R['③ wasm と心拍'];
   ok.wasmSeen = c.作った.includes('instantiate:0.1') && c.作った.includes('Memory:2');
   ok.wasmGrow = !!c.増やす前 && c.増やす前.addMB === 16 && !!c.増やした && c.増やした.memMB === 16.1;
   ok.workerLag = !!c.詰まり && c.詰まり.ms >= 700;
-  ok.workerHeartbeat = !!c.心拍 && c.心拍.wasmMB === 18.1 && c.文.length === 1; }
+  ok.workerHeartbeat = !!c.心拍 && c.心拍.wid === 'wA' && c.心拍.wasmMB === 18.1 && c.文.length === 1
+    && JSON.stringify(c.心拍.alive) === JSON.stringify([{ wid: 'wA', wasmMB: 18.1, gMB: 0 }]);
+  // 2つ生きていたときは、両方が並ぶ（どちらの値か分かる）
+  ok.twoWorkersSeen = Array.isArray(c.二つのとき) && c.二つのとき.map(x => x.wid).join() === 'wA,wB'
+    && c.二つのとき[0].wasmMB === 18.1 && c.二つのとき[1].wasmMB === 0; }
 
 for (const [k, v] of Object.entries(R)) console.log(k + ': ' + JSON.stringify(v));
 console.log('pageerror: ' + JSON.stringify(errs));
