@@ -78,9 +78,10 @@ ok.normal = R['① ふつうの実行'].clean === true && R['① ふつうの実
 await p.reload(); await p.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
 R['② きれいに終わった次の起動'] = await p.evaluate(() => ({
   知らせ: !!document.querySelector('#bbOpenPrev'),
-  前回のclean: (window.__bb.prev() || {}).clean }));
+  今回の扱い: window.__bb.boot(), 落ちた回の取り置き: window.__bb.prev() }));
 ok.noNoticeWhenClean = R['② きれいに終わった次の起動'].知らせ === false
-  && R['② きれいに終わった次の起動'].前回のclean === true;
+  && R['② きれいに終わった次の起動'].今回の扱い === 'clean'
+  && R['② きれいに終わった次の起動'].落ちた回の取り置き === null;
 
 // ③ 3回目の推論の途中で、レンダラを本当にクラッシュさせる（pagehide も unload も来ない）
 await paste(p);
@@ -103,8 +104,7 @@ ok.crashed = R['③ クラッシュ'].ページは死んだ === true && 落ち�
 // ④ 開き直すと「どこで消えたか」が残っていて、知らせが出る
 p = await newPage();
 R['④ 開き直した'] = await p.evaluate(() => { const r = window.__bb.prev();
-  const msg = [...document.querySelectorAll('.mini')].map(x => x.textContent)
-    .find(t => /最後まで行かずに終わっている/.test(t)) || '';
+  const msg = (document.querySelector('#bbNoticeMsg') || {}).textContent || '';
   return { 知らせ: !!document.querySelector('#bbOpenPrev'), 文: msg.slice(0, 120),
     clean: r && r.clean, open: r && r.open, 最後に通った: r && r.cur,
     種類: r ? [...new Set(r.rows.map(x => x.e))] : null,
@@ -136,6 +136,22 @@ ok.notice = R['④ 開き直した'].知らせ === true && R['④ 開き直し�
   && /最後まで行かずに終わっている/.test(R['④ 開き直した'].文)
   && R['④ 開き直した'].種類.includes('load') && !!R['④ 開き直した'].端末;
 
+// ④.5 常設の「落ちる前の記録」ボタンからも、落ちた回が見える
+//      （v0.36.0 では今回の空の記録を読んで「（記録なし…）」と出た。実機で起きた）
+await tap(p, '#bbShow');
+R['④.5 常設ボタン'] = await p.evaluate(() => (document.querySelector('#sheetBody pre') || {}).textContent || '');
+ok.permanentButton = /途中で消えた回/.test(R['④.5 常設ボタン'])
+  && R['④.5 常設ボタン'].includes(落ちる直前.n) && !/（記録なし/.test(R['④.5 常設ボタン']);
+R['④.5 常設ボタン'] = R['④.5 常設ボタン'].slice(0, 160);
+await tap(p, '#bbCloseBtn');
+
+// ④.6 もう一度読み込まれても（iOS の自動再読み込み・版の読み込み直し）記録が消えない
+await p.reload(); await p.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
+await p.reload(); await p.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
+R['④.6 2回読み込み直した'] = await p.evaluate(() => ({ 知らせ: !!document.querySelector('#bbOpenPrev'),
+  取り置き: !!window.__bb.kept('crash'), 開いた履歴: window.__bb.boots().map(b => b.prev) }));
+ok.survivesReload = R['④.6 2回読み込み直した'].知らせ === true && R['④.6 2回読み込み直した'].取り置き === true;
+
 // ⑤ 知らせから記録を開いて、そのままコピーできる
 await tap(p, '#bbOpenPrev');
 R['⑤ 記録を開く'] = await p.evaluate(() => ({
@@ -147,6 +163,7 @@ const 貼れた = await p.evaluate(() => navigator.clipboard.readText().catch(()
 R['⑤ コピーした文'] = 貼れた.slice(0, 200);
 ok.sheetSlots = /## 入力/.test(R['⑤ 記録を開く'].中身)
   && /## 最後にモデルへ送った文/.test(R['⑤ 記録を開く'].中身)
+  && /開いた履歴/.test(R['⑤ 記録を開く'].中身)
   && /雨の日/.test(R['⑤ 記録を開く'].中身);
 ok.sheet = /途中で消えた/.test(R['⑤ 記録を開く'].中身)
   && /ここで消えた/.test(R['⑤ 記録を開く'].中身)
@@ -158,9 +175,55 @@ ok.sheet = /途中で消えた/.test(R['⑤ 記録を開く'].中身)
 await tap(p, '#bbCloseBtn');
 await tap(p, '#repCopy');
 const メモ = await p.evaluate(() => navigator.clipboard.readText().catch(() => ''));
-R['⑥ 調査用メモ'] = { 前回が入っている: /## 落ちる前の記録（前回/.test(メモ),
-  今回が入っている: /## 落ちる前の記録（今回/.test(メモ), 字数: メモ.length };
-ok.report = R['⑥ 調査用メモ'].前回が入っている && R['⑥ 調査用メモ'].今回が入っている;
+R['⑥ 調査用メモ'] = { 落ちた回が入っている: /## ■ 途中で消えた回（/.test(メモ),
+  開いた履歴が入っている: /## ■ 開いた履歴/.test(メモ),
+  落ちた場所が入っている: メモ.includes(落ちる直前.n), 字数: メモ.length };
+ok.report = R['⑥ 調査用メモ'].落ちた回が入っている && R['⑥ 調査用メモ'].開いた履歴が入っている
+  && R['⑥ 調査用メモ'].落ちた場所が入っている;
+
+// ⑥.2 落ちた回のあとに、きれいに走りきっても、落ちた回の取り置きは消えない
+await paste(p);
+await tap(p, '#runTop');
+{ const t0 = Date.now();
+  for (;;) { const st = await p.evaluate(() => document.querySelector('#stateline').textContent);
+    if (/^state: (success|failed)/.test(st) || Date.now() - t0 > 90000) break;
+    await p.waitForTimeout(300); } }
+await p.reload(); await p.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
+R['⑥.2 きれいに走った後'] = await p.evaluate(() => ({ 落ちた回: !!window.__bb.kept('crash'),
+  きれいな回: !!window.__bb.kept('last'), 今回の扱い: window.__bb.boot(),
+  文に両方: /途中で消えた回（/.test(window.__bb.all()) && /最後にきれいに終わった回/.test(window.__bb.all()) }));
+ok.crashKeptAfterClean = R['⑥.2 きれいに走った後'].落ちた回 && R['⑥.2 きれいに走った後'].きれいな回
+  && R['⑥.2 きれいに走った後'].今回の扱い === 'clean' && R['⑥.2 きれいに走った後'].文に両方;
+
+// ⑥.3 開いてすぐ（自己テスト中）に実行を押しても、自己テストの後で始まり、記録される
+{ const p3 = await ctx.newPage();
+  p3.on('pageerror', e => errs.push(String(e).slice(0, 200)));
+  await p3.goto(FILE);
+  await p3.waitForFunction(() => window.__bb && window.__dbg && window.__dbg.eng, null, { timeout: 30000 });
+  const 押した時に自己テスト中 = await p3.evaluate(() => !window.__selfTest);
+  await p3.locator('#viewSeg button[data-v="json"]').first().tap();
+  await p3.evaluate(s => { const t = document.querySelector('#spec'); t.value = s; t.dispatchEvent(new Event('input')); }, spec);
+  // 差し替えは「自己テストが終わった直後・待たされている実行が動き出す前」に入れる。
+  // 自己テスト中に入れると、自己テストが差し替えた engine を呼んで止まってしまう（テストの都合）。
+  // 約束（Promise）の後続は登録した順に動くので、実行を押す前に登録しておけば先に入る。
+  await p3.evaluate(stub);
+  await p3.evaluate(() => { window.__bb.selftestDone().then(() => {
+    window.__installStub(); window.__stub.hangAt = 2; }); });
+  p3.locator('#runTop').first().tap().catch(() => {});
+  await p3.waitForFunction(() => { const r = window.__bb.read(); return r && r.open && r.open.i === 2; }, null, { timeout: 60000 });
+  const 待った = await p3.evaluate(() => [...document.querySelectorAll('#log span')].some(x => /自己テストが終わるのを待って/.test(x.textContent)));
+  const 記録 = await p3.evaluate(() => { const r = window.__bb.read();
+    return { run: r.rows[0] && r.rows[0].e, 件数: r.rows.length, open: r.open && r.open.n }; });
+  (await ctx.newCDPSession(p3)).send('Page.crash').catch(() => {});
+  await new Promise(r => setTimeout(r, 1500));
+  const p4 = await ctx.newPage(); await p4.goto(FILE);
+  await p4.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
+  const 後 = await p4.evaluate(() => ({ 取り置き: (window.__bb.kept('crash') || {}).open || null,
+    知らせ: !!document.querySelector('#bbOpenPrev') }));
+  R['⑥.3 開いてすぐ押した'] = { 押した時に自己テスト中, 待った, 記録, 後 };
+  ok.earlyRun = 押した時に自己テスト中 && 待った && 記録.run === 'run' && 記録.件数 > 3
+    && !!後.取り置き && 後.取り置き.i === 2 && 後.知らせ;
+  await p4.close(); }
 
 // ⑥.4 「モデルの読み込み中に消えた」記録なら、知らせから省メモリにできる
 { const p2 = await ctx.newPage();
@@ -176,15 +239,13 @@ ok.report = R['⑥ 調査用メモ'].前回が入っている && R['⑥ 調査�
   R['⑥.4 読み込み中に消えた'] = await p2.evaluate(() => ({
     知らせ: !!document.querySelector('#bbOpenPrev'),
     省メモリ: !!document.querySelector('#bbMemSave'),
-    文: ([...document.querySelectorAll('.mini')].map(x => x.textContent)
-          .find(t => /最後まで行かずに終わっている/.test(t)) || '').slice(0, 140) }));
+    文: ((document.querySelector('#bbNoticeMsg') || {}).textContent || '').slice(0, 140) }));
   if (R['⑥.4 読み込み中に消えた'].省メモリ) {
     await p2.locator('#bbMemSave').first().tap(); await p2.waitForTimeout(300);
     R['⑥.4 省メモリを押した'] = await p2.evaluate(() => {
       const sp = JSON.parse(document.querySelector('#spec').value);
       const ov = Object.values(sp.providers || {}).map(d => (d.overrides || {}).context_window_size);
-      return { providers: ov, 文: ([...document.querySelectorAll('.mini')].map(x => x.textContent)
-        .find(t => /省メモリにした/.test(t)) || '').slice(0, 120) }; });
+      return { providers: ov, 文: ((document.querySelector('#bbNoticeMsg') || {}).textContent || '').slice(0, 120) }; });
   }
   ok.loadNotice = R['⑥.4 読み込み中に消えた'].知らせ === true
     && R['⑥.4 読み込み中に消えた'].省メモリ === true
@@ -206,14 +267,16 @@ ok.stepRecorded = R['⑥.5 1 Work Item'].種類 !== null
   && R['⑥.5 1 Work Item'].種類[0] === 'run' && R['⑥.5 1 Work Item'].種類[1] === 'dev'
   && R['⑥.5 1 Work Item'].tag === 'step' && !!R['⑥.5 1 Work Item'].runId;
 
-// ⑦ 捨てたら知らせは出ない
-await tap(p, '#bbOpenPrev');
+// ⑦ 捨てたら知らせは出ない（常設ボタンから捨てる。知らせはコピーした時点で出なくなっている）
+await tap(p, '#bbShow');
 await tap(p, '#bbClearBtn');
 await p.reload(); await p.waitForFunction(() => window.__selfTest, null, { timeout: 60000 });
 R['⑦ 捨てたあと'] = await p.evaluate(() => ({ 知らせ: !!document.querySelector('#bbOpenPrev'),
   前回: window.__bb.prev() }));
 // 捨てたので「実行の始まり」が無い＝報せることが無い（開き直しで付く left / vis だけが残る）
+R['⑦ 取り置き'] = await p.evaluate(() => ({ 落ちた回: window.__bb.kept('crash'), きれいな回: window.__bb.kept('last') }));
 ok.cleared = R['⑦ 捨てたあと'].知らせ === false
+  && R['⑦ 取り置き'].落ちた回 === null && R['⑦ 取り置き'].きれいな回 === null
   && (R['⑦ 捨てたあと'].前回 === null
      || (R['⑦ 捨てたあと'].前回.startedRun === false && R['⑦ 捨てたあと'].前回.open === null));
 
