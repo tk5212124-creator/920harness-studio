@@ -136,15 +136,31 @@ for (let i = 0; i < 6; i++) { await settle(); await p.evaluate(() => window.__sh
 v = await readNow(['F1']);
 ok('LOOP の中の LLM が周ごとに答えを受けて終わる（14→7→4→2字）', v[0] === 'あい', v);
 
-// ---- 画面: 例のシートが開き、ページのエラーが無い ----
+// ---- 画面: 最初に開くデモ ----
 await p.evaluate(() => { localStorage.clear(); });
 await p.reload(); await p.waitForFunction(() => window.__sheet, null, { timeout: 15000 });
+const d0 = await p.evaluate(() => ({ tab: document.querySelector('.tab.on').textContent, bar: !document.querySelector('#demoBar').hidden,
+  btn: document.querySelector('#demoRun').textContent, b4: [...document.querySelectorAll('#tbl tbody tr')[3].querySelectorAll('td')][1].textContent,
+  idle: !window.__sheet.LLMCore.running && !window.__sheet.LLMQ.queue.length }));
+ok('開くとデモのシートで「▶ デモを実行」が出て、まだ何も呼んでいない', d0.tab === 'デモ' && d0.bar && d0.btn === '▶ デモを実行' && d0.b4 === '#未実行' && d0.idle, d0);
+const chip = await p.textContent('#llmChip');
+ok('LLM の数式があると「▶ LLMを実行（n件）」が出る（勝手には呼ばない）', /LLMを実行（\d+件）/.test(chip), chip);
+// 実ブラウザの WebGPU はここに無いので、device を mock に差し替えて「押したら最後まで埋まる」流れを見る
+await p.evaluate(() => { const S = window.__sheet; S.wb.llm.providers.device = { adapter: 'mock', delayMs: 30 }; S.paint(); });
+await p.locator('#demoRun').tap();
+await p.waitForFunction(() => { const S = window.__sheet; return !S.LLMCore.running && !S.LLMQ.queue.length && !S.LLMQ.follow; }, null, { timeout: 15000 });
+await p.waitForTimeout(150);
+const d1 = await p.evaluate(() => { const S = window.__sheet, E = S.engine; const g = (si, k) => { const q = E.parseA1(k); return E.fmtVal(E.cellValue(si, q.r, q.c)); };
+  return { b: ['B4', 'B5', 'B6', 'B7', 'B8', 'B9'].map(k => g(0, k)), c4: g(0, 'C4'), f4: g(0, 'F4'), f7: g(0, 'F7'), e10: g(0, 'E10'), a13: g(0, 'A13'), a14: g(0, 'A14'),
+    other: g(2, 'I2'), bar: document.querySelector('#demoTx').textContent }; });
+ok('押すとデモの LLM セルが全部埋まり、集計（COUNTIF・AVERAGE・FILTER）も追従する', d1.b.every(x => x === '肯定') && /^\d+$/.test(d1.c4) && d1.f4 === '6' && d1.f7 !== '' && !d1.f7.startsWith('#') && d1.e10 === 'なし', d1);
+ok('LOOP の中の LLM は押し直さなくても周が進んで終わる', d1.a13.startsWith('(mock)') && /^\d+字$/.test(d1.a14), d1);
+ok('デモの実行は他のシートの LLM を呼ばない', d1.other === '#未実行', d1.other);
+ok('終わるとバーが「完了」になる', d1.bar.startsWith('完了'), d1.bar);
+await p.screenshot({ path: path.join(ROOT, 'docs', 'sheet-mobile.png') });
 await p.locator('.tab', { hasText: '関数の例' }).tap(); await p.waitForTimeout(300);
 const cellsText = await p.evaluate(() => [...document.querySelectorAll('#tbl tbody tr')[1].querySelectorAll('td')].slice(0, 3).map(td => td.textContent));
 ok('「関数の例」シートの SEQUENCE / MAP が画面に出る', cellsText[0] === '1' && cellsText[1] === '1' && cellsText[2] === '奇数', cellsText);
-const chip = await p.textContent('#llmChip');
-ok('LLM の数式があると「▶ LLMを実行（n件）」が出る（勝手には呼ばない）', /LLMを実行（4件）/.test(chip), chip);
-await p.screenshot({ path: path.join(ROOT, 'docs', 'sheet-mobile.png') });
 ok('ページのエラーなし', errs.length === 0, errs);
 
 console.log(results.join('\n'));

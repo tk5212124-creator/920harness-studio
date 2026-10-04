@@ -120,6 +120,11 @@ th.hs{background:var(--hsel);color:var(--accent);font-weight:600}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .seg button{border:none;border-radius:0;height:28px}
 .warn{color:var(--err)}
+.demo{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:none;background:var(--accent-soft);border:1px solid var(--accent);border-radius:8px;padding:8px 10px}
+.demo .dtx{flex:1 1 240px;min-width:0;font-size:12.5px;line-height:1.55;color:var(--ink)}
+.demo .dtx b{font-weight:600}
+.demo .dtx .sub{display:block;color:var(--muted);font-size:12px}
+.demo .btn.primary{height:34px;padding:0 14px;font-weight:600}
 #toast{position:fixed;left:50%;bottom:calc(56px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:8px 14px;border-radius:8px;font-size:13px;z-index:60;max-width:calc(100% - 32px);text-align:center;transition:opacity .2s}
 @media (prefers-reduced-motion:reduce){#toast{transition:none}}
 @media (max-width:560px){.brand .tx{display:none}.stat{display:none}}
@@ -179,6 +184,11 @@ th.hs{background:var(--hsel);color:var(--accent);font-weight:600}
     <input id="nb" aria-label="セル番地" spellcheck="false" autocomplete="off">
     <span class="fxl">fx</span>
     <input id="fx" aria-label="数式バー" spellcheck="false" autocomplete="off">
+  </div>
+
+  <div class="demo" id="demoBar" hidden>
+    <div class="dtx" id="demoTx"></div>
+    <button class="btn primary" id="demoRun">▶ デモを実行</button>
   </div>
 
   <div class="gridwrap" id="wrap">
@@ -1107,7 +1117,7 @@ const MockProvider={
 const PROVIDERS={mock:MockProvider,openai_local:OpenAILocalProvider,webllm:WebLLMProvider};
 
 /* ---------- LLM の待ち行列（画面の側） ---------- */
-const LLMQ={queue:[],ctrl:null,progress:'',done:0,total:0};
+const LLMQ={queue:[],ctrl:null,progress:'',done:0,total:0,follow:null};
 function llmLoadCache(){try{const o=JSON.parse(localStorage.getItem(LS_LLM)||'{}');for(const k in o)LLMCore.results.set(k,o[k])}catch(_){}}
 let llmSaveT=null;
 function llmSaveCache(){clearTimeout(llmSaveT);llmSaveT=setTimeout(()=>{try{
@@ -1118,7 +1128,18 @@ LLMCore.enqueue=req=>{
   LLMQ.queue.push(req);LLMCore.queued.add(req.key);LLMQ.total++;
   setTimeout(llmPump,0);
 };
-function llmRunPending(){const list=[...LLMCore.pending.values()];list.forEach(r=>LLMCore.enqueue(r));LLMCore.pending=new Map();paint();return list.length}
+/* 実行ボタン: 未実行を順番待ちに入れる。filter を渡すとそれだけ。
+   押したあとに新しく出てきた呼び出し（LOOP の次の周など）も、同じ filter で続けて入れる（LLMQ.follow） */
+function llmRunPending(filter){
+  LLMQ.follow=filter||(()=>true);
+  const list=[...LLMCore.pending.values()].filter(r=>LLMQ.follow(r.key));
+  list.forEach(r=>{LLMCore.enqueue(r);LLMCore.pending.delete(r.key)});paint();return list.length}
+function llmFollow(){
+  if(!LLMQ.follow)return;
+  const list=[...LLMCore.pending.values()].filter(r=>LLMQ.follow(r.key));
+  list.forEach(r=>{LLMCore.enqueue(r);LLMCore.pending.delete(r.key)});
+  if(!list.length&&!LLMQ.queue.length&&!LLMCore.running)LLMQ.follow=null;
+}
 async function llmPump(){
   if(LLMCore.running||!LLMQ.queue.length){updateLLMChip();return}
   const job=LLMQ.queue.shift();LLMCore.queued.delete(job.key);LLMCore.running=job;
@@ -1143,12 +1164,12 @@ async function llmPump(){
   }finally{
     LLMCore.running=null;LLMQ.ctrl=null;LLMQ.progress='';LLMQ.done++;
     if(!LLMQ.queue.length){LLMQ.done=0;LLMQ.total=0}
-    paint();setTimeout(llmPump,0);
+    paint();llmFollow();setTimeout(llmPump,0);
   }
 }
 function llmStop(){
   const n=LLMQ.queue.length+(LLMCore.running?1:0);
-  for(const r of LLMQ.queue)LLMCore.queued.delete(r.key);LLMQ.queue=[];LLMQ.total=0;LLMQ.done=0;
+  LLMQ.follow=null;for(const r of LLMQ.queue)LLMCore.queued.delete(r.key);LLMQ.queue=[];LLMQ.total=0;LLMQ.done=0;
   if(LLMQ.ctrl)try{LLMQ.ctrl.abort()}catch(_){}
   paint();return n;
 }
@@ -1169,6 +1190,29 @@ function updateLLMChip(){
   else if(pend){chip.classList.add('wait');t.textContent=`▶ LLMを実行（${pend}件）`}
   else t.textContent=wb&&wb.llm&&wb.llm.auto?'LLM 自動':'LLM';
   if(!$('modal').hidden&&$('panel').dataset.kind==='llm')renderLLMStatus();
+  updateDemoBar();
+}
+function sheetLLMKeys(si){const keys=new Set();for(const[k,set]of cellLLM)if(k.startsWith(si+','))set.forEach(x=>keys.add(x));return keys}
+function updateDemoBar(){
+  const bar=$('demoBar');if(!bar||!wb)return;const sh=S();
+  if(!sh.demo){bar.hidden=true;return}
+  const keys=sheetLLMKeys(wb.active);let done=0,pend=0,err=null;
+  for(const k of keys){if(LLMCore.results.has(k))done++;else if(LLMCore.errors.has(k))err=err||LLMCore.errors.get(k);else pend++}
+  const busy=LLMCore.running||LLMQ.queue.length||LLMQ.follow;
+  const tx=$('demoTx'),btn=$('demoRun');bar.hidden=false;
+  const prov=(wb.llm.providers||{}).device;const what=prov?`${prov.adapter==='webllm'?'端末内の LLM':prov.adapter}（${esc(prov.model||prov.adapter)}）`:'provider「device」';
+  if(busy){btn.hidden=true;
+    tx.innerHTML=`<b>実行中</b> · ${LLMQ.progress?esc(LLMQ.progress):`答えが入ったセル ${done}件`}<span class="sub">LLM は1本ずつ呼ぶので、セルが順に埋まっていきます。下の「LLM 実行中」で止められます。</span>`}
+  else if(pend||err){btn.hidden=false;btn.textContent=err&&!pend?'▶ もう一度実行':'▶ デモを実行';
+    const gpu=typeof navigator!=='undefined'&&navigator.gpu;
+    tx.innerHTML=(err?`<b class="warn">止まった</b> · ${esc(err.code)}: ${esc(String(err.message).slice(0,140))}<span class="sub">`:`<b>分類・緊急度・要約の列は LLM を呼ぶ関数です。</b><span class="sub">`)
+      +`押すと ${what} がセルを1つずつ埋め、集計の列もそれに合わせて変わります。初回だけモデル（約300MB）を取得し、2回目からは端末に残ります。`
+      +(gpu?'':'この端末・ブラウザは WebGPU が使えないため端末内 LLM は動きません。「LLM」の設定で provider「device」を Ollama などに変えると実行できます。')+`</span>`}
+  else{btn.hidden=true;tx.innerHTML=`<b>完了</b> · LLM の答え ${done}件<span class="sub">問い合わせを書き換えると、変わったセルだけ #未実行 になり、また実行できます。答えは端末に保存されます。</span>`}
+}
+function demoRun(){
+  const si=wb.active;const keys=sheetLLMKeys(si);keys.forEach(k=>LLMCore.errors.delete(k));paint();
+  const n=llmRunPending(k=>sheetLLMKeys(si).has(k));updateDemoBar();return n;
 }
 
 /* ---------- workbook ---------- */
@@ -1198,6 +1242,32 @@ function exampleSheet(){
   sh.cw={4:230,5:120,7:220,8:96,9:150};
   return sh;
 }
+/* 最初に開くデモ。分類・緊急度・要約の列は端末内LLM（provider device）を呼ぶ。問い合わせは架空の例 */
+function demoSheet(){
+  const sh=newSheet('デモ');sh.demo=true;
+  const put=(k,v,st)=>{sh.cells[k]=Object.assign({v},st||{})};
+  const h={b:1,bg:'#dfe7fb',bd:1};
+  put('A1','問い合わせを LLM で仕分ける（架空の例）',{b:1});
+  put('A3','問い合わせ',h);put('B3','分類（LLM）',h);put('C3','緊急度（LLM）',h);
+  ['アプリの起動が遅くて毎回30秒待たされる','画面が見やすくなって作業が早くなりました','CSVで書き出せる機能が欲しいです',
+   '保存したデータが消えてしまった。至急対応してほしい','サポートの方の説明がとても丁寧でした','ダークモードに対応してもらえると嬉しい'].forEach((t,i)=>{
+    const r=i+4;put('A'+r,t,{bd:1});
+    put('B'+r,`=LLM("この問い合わせを分類して。肯定=褒めている、否定=不満や不具合、要望=機能のお願い",A${r},"肯定|否定|要望","device")`,{bd:1,al:'c'});
+    put('C'+r,`=LLM("この問い合わせの緊急度を1（低い）から5（高い）の整数で答えて",A${r},"整数","device")`,{bd:1,al:'c'});
+  });
+  put('E3','集計（ふつうの関数）',h);put('F3','',h);
+  put('E4','肯定');put('F4','=COUNTIF(B4:B9,"肯定")');
+  put('E5','否定');put('F5','=COUNTIF(B4:B9,"否定")');
+  put('E6','要望');put('F6','=COUNTIF(B4:B9,"要望")');
+  put('E7','緊急度の平均');put('F7','=ROUND(AVERAGE(C4:C9),1)');
+  put('E9','否定だけ抜き出す（FILTER）',h);
+  put('E10','=FILTER(A4:A9,B4:B9="否定","なし")');
+  put('A12','全体の要約（20字以下になるまで LLM で短くし続ける・LOOP）',h);
+  put('A13','=LOOP(LLM("これらの問い合わせ全体を一文で要約して",A4:A9,,"device"),LAMBDA(s,i,AND(LEN(s)>20,i<=3)),LAMBDA(s,i,LLM("この文を20字以内に短くして",s,,"device")))');
+  put('A14','=LEN(A13)&"字"',{i:1});
+  sh.cw={0:140,1:80,2:84,4:190,5:60};   // 電話の幅でも A〜C（問い合わせと LLM の答え）が最初の画面に入る
+  return sh;
+}
 function sampleBook(){
   const sh=newSheet('売上サンプル');
   const put=(k,v,st)=>{sh.cells[k]=Object.assign({v},st||{})};
@@ -1217,7 +1287,7 @@ function sampleBook(){
   put('A14','税込の構成比(PC)');put('B14','=E2/E7',{fmt:'pct'});
   put('G1','サンプルです。自由に書き換えてください',{i:1});
   sh.cw={0:132,4:104};
-  return fixBook({sheets:[sh,exampleSheet()],active:0,names:{'階乗':'=LAMBDA(n,IF(n<=1,1,n*階乗(n-1)))'}});
+  return fixBook({sheets:[demoSheet(),sh,exampleSheet()],active:0,names:{'階乗':'=LAMBDA(n,IF(n<=1,1,n*階乗(n-1)))'}});
 }
 function load(){
   try{const s=localStorage.getItem(LS);if(s){const o=JSON.parse(s);if(o&&o.sheets&&o.sheets.length){o.active=Math.min(o.active||0,o.sheets.length-1);return fixBook(o)}}}catch(e){}
@@ -1669,6 +1739,7 @@ on('tPaste',()=>{if(editing)commitEdit(0,0);pasteInternal();focusGrid()});
 on('tRange',()=>{rangeMode=!rangeMode;updateToolbarState();toast(rangeMode?'タップした位置まで範囲を広げます':'範囲モードを終了しました')});
 on('tNames',()=>{if(editing)commitEdit(0,0);openNames()});
 on('tLLM',()=>{if(editing)commitEdit(0,0);openLLM()});
+on('demoRun',()=>{if(editing)commitEdit(0,0);demoRun()});
 on('llmChip',()=>{if(editing)commitEdit(0,0);
   if(!LLMCore.running&&LLMCore.pending.size){const n=llmRunPending();toast(`${n}件を順に実行します`)}else openLLM()});
 
@@ -1909,8 +1980,9 @@ on('bHelp',()=>{
   <p>答えは provider の設定・送る文・形ごとに保存し、同じ問いでは呼び直しません。待っている間は <code>#待機中</code>・<code>#実行中</code>、手動モードでは <code>#未実行</code>。失敗は <code>#LLM!</code> になり、セルを選ぶと下に理由が出ます。自動では再試行しません。</p>
   <div class="fnlist">${FN_GROUPS.map(([g,l])=>`<b>${g}</b>　${l.split(' ').join('、')}`).join('<br>')}</div>
   <p>内容はこのブラウザに自動保存されます。</p>
-  <div class="row"><button class="btn solid" id="hEx">「関数の例」シートを追加</button><button class="btn primary" id="hClose">閉じる</button></div>`,p=>{
+  <div class="row"><button class="btn solid" id="hDemo">「デモ」シートを追加</button><button class="btn solid" id="hEx">「関数の例」シートを追加</button><button class="btn primary" id="hClose">閉じる</button></div>`,p=>{
     p.querySelector('#hClose').onclick=closeModal;
+    p.querySelector('#hDemo').onclick=()=>{pushUndo();const sh=demoSheet();sh.name=uniqueName(sh.name);wb.sheets.push(sh);closeModal();switchSheet(wb.sheets.length-1)};
     p.querySelector('#hEx').onclick=()=>{pushUndo();const sh=exampleSheet();sh.name=uniqueName(sh.name);wb.sheets.push(sh);if(!wb.names['階乗'])wb.names['階乗']='=LAMBDA(n,IF(n<=1,1,n*階乗(n-1)))';closeModal();switchSheet(wb.sheets.length-1)};
   });
 });
@@ -1925,7 +1997,7 @@ if(!coarse)ed.focus({preventScroll:true});
 window.addEventListener('resize',()=>updateSel());
 if(location.protocol.startsWith('http'))loadSiteModels();
 /* テストから中を見る口（tests/sheet.mjs） */
-window.__sheet={engine:ENGINE,LLMCore,LLMQ,PROVIDERS,TRANSPORTS,ModelManager,paint,get wb(){return wb},set wb(v){wb=fixBook(v);renderTabs();build()},runPending:llmRunPending,stop:llmStop,rerun:llmRerun,select,extend};
+window.__sheet={engine:ENGINE,LLMCore,LLMQ,PROVIDERS,TRANSPORTS,ModelManager,paint,get wb(){return wb},set wb(v){wb=fixBook(v);renderTabs();build()},runPending:llmRunPending,demoRun,stop:llmStop,rerun:llmRerun,select,extend};
 })();
 </script>
 </body>
