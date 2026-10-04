@@ -27,6 +27,7 @@ node tests/harness-gpuprobe.mjs     # Worker の中の GPU の見張り — 本�
 node tests/harness-selftest-gpu.mjs # 開くたびに回る自己テストが本物のモデルを読まない（HTTP＋本物の WebGPU）
 node tests/harness-fileimport.mjs   # 書き出した .json / .hsl / .txt を「ファイルから」で戻す（選ぶファイルを絞らない）
 node tests/harness-startup.mjs      # 開いた直後の状態・開き直しても落ちたあとでもハーネスが戻る
+node tests/sheet.mjs              # 方眼シート — 配列・こぼれ・LET/LAMBDA・ループ関数と =LLM()（mock と OpenAI互換スタブのSSE）
 node tests/harness-blackbox.mjs     # 落ちても残る記録 — 推論の途中で**本当にレンダラをクラッシュさせ**、
                                     #   どこで消えたか・何を入力して何を送っていたか・画面のログと
                                     #   同じ行が全部残る／常設ボタンからも見える／2回読み込み直しても

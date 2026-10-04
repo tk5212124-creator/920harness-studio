@@ -37,11 +37,25 @@ jobs:
           PYEOF
           node --check /tmp/page.js
 
+      # 方眼シート（sheet.html）も同じく、配る前に script が読めるかを確かめる
+      - name: Check the sheet script parses
+        run: |
+          python3 - <<'PYEOF'
+          import re, io
+          s = io.open("sheet.html", encoding="utf-8").read()
+          parts = re.findall(r"<script>(.*?)</script>", s, re.S)
+          assert len(parts) == 1, "script タグが1つではない: %d" % len(parts)
+          io.open("/tmp/sheet.js", "w", encoding="utf-8").write(parts[0])
+          PYEOF
+          node --check /tmp/sheet.js
+
       - name: Build site (harness.html as index.html)
         run: |
           mkdir -p _site
           cp harness.html _site/index.html
           cp harness.html _site/harness.html
+          # 方眼シート（同じ vendor/ と models/ を使って =LLM() を動かす）
+          cp sheet.html _site/sheet.html
           cp -r docs _site/docs
           cp -r vendor _site/vendor
           # 内蔵LLMの本体が配信物に入っていなければ、ここで落とす
