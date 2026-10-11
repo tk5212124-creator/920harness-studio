@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.40.1 GPU を失ったら engine を読み直す
+## 1. 現状 — v0.41.0 ハーネスを方眼シートの数式で動かす
 
 | 段階 | 状態 |
 |---|---|
@@ -72,7 +72,8 @@ iPhone でもPCでも同じ操作。
 | 落ちる原因を端末で切り分ける v0.38.0（推論1回を12の境界に分けて記録／Worker の中の GPU の確保・device の喪失・WebGPU のエラー・console を別の口で記録＝これまで Worker の中の異常は見えていなかった／実行したハーネス（JSON）も記録に残す／開いている途中で消えた回を別に取り置く／端末で A〜J の条件を1つずつ、ページを読み込み直しながら試す「切り分け」＝落ちても続きから進む／モデル用 wasm の数字から「945MB」の中身を確認＝ふつうの推論の見積もりは約320MB） | 実装済み |
 | 落ちる前の記録だけで追える・開き直しても消えない v0.39.0（記録はページを開いてからの全部を2000枠に残す＝実行より前にしたことも残る・時刻はページを開いてからの ms にそろえ端末の時計も入れる／wasm のメモリ（作った・増やす前・増やした後）を Worker とメインで記録／メインと Worker の心拍（どちらがいつまで生きていたか）・Worker が詰まった時間／engine を作った・捨てた／読み出した文の頭に「記録から数えたこと」／いま開いているハーネスを端末に置いて開き直しても戻す＝切り分けの読み込み直しで例に戻っていた／「ファイルから」で選ぶファイルを絞らない＝iPhone で書き出したファイルが出てこなかった・.txt（AIに渡す1枚）も戻せる＝それまで読めなかった／診断結果をコピー・保存） | 実装済み |
 | 開くたびに本物のモデルを読んでいたのを止める v0.40.0（実機の記録で「実行の前から GPU 804MB・wasm 240MB・engine を10個作った」・開くのに27秒。自己テスト65が「JSONで書く」の例（webllm の Qwen2.5）をそのまま走らせていて、WebGPU のある端末では開くたびに本物のモデルを読み込んで推論していた＝ふだんのテストは WebGPU の無い Chromium なので気づけなかった → mock に替えた写しで走らせる。HTTP＋本物の WebGPU で開いて「自己テストが本物を読まない」を毎回確かめるテストを足した／`ModelManager.reset()` が engine を忘れるだけで Worker ごと残していた → 止めてから忘れる／切り分けが実行と重なると、断られたのに「完走」と書き、記録を上書きし、0.4秒後に読み込み直して実行を止めていた → 始めずに「続ける／やめる」を出す／いま開いている画面の記録を「途中で消えた」と書いていた） | 実装済み |
-| **GPU を失ったら engine を読み直す v0.40.1（v0.40.0 の実機で初めて最後まで走ったが、回答生成が `map async was not successful`、続く回答Judge が `The current Object has already been disposed` で失敗していた。同梱の WebLLM は GPU の device を失うと中の instance を片付けるのに、アプリはその engine を使い続けていた → この2つの失敗でも engine を捨てて次は読み直す。エラーの種類は `MODEL_INFERENCE_FAILED` のまま。stub で同じ順番を再現し、直す前は失敗・直した後は回答Judge が動くことを確かめた）** | **いまここ** |
+| GPU を失ったら engine を読み直す v0.40.1（v0.40.0 の実機で初めて最後まで走ったが、回答生成が `map async was not successful`、続く回答Judge が `The current Object has already been disposed` で失敗していた。同梱の WebLLM は GPU の device を失うと中の instance を片付けるのに、アプリはその engine を使い続けていた → この2つの失敗でも engine を捨てて次は読み直す。エラーの種類は `MODEL_INFERENCE_FAILED` のまま。stub で同じ順番を再現し、直す前は失敗・直した後は回答Judge が動くことを確かめた） | 実装済み |
+| **ハーネスを方眼シートの数式で動かす v0.41.0（「方眼で動かす」＝1行1ノードの数式にして方眼シート（sheet.html）で開く。線はセルの参照、入力のセルを書き換えると先が計算し直し。ノードの中身の扱いは harness.html の関数を写して使い、一字一句同じかをテストで固定。実ハーネス v13.1 を同じスタブにつないで、送った文・呼んだ回数・各ノードの値・出力が harness と同じことを確かめた。同じに動かせないもの（ループ・条件・先着など）は理由を付けて変換しない）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -931,6 +932,30 @@ provider cpu = wllama url "https://…/qwen2.5-0.5b-instruct-q4_k_m.gguf" contex
 | 片付け | 別のGGUFを読むと前のを `exit()` する（同時に1つだけ） |
 | 同梱本体 | `vendor/wllama/index.js` が実ブラウザから読め、wasm も互換ビルドも 200 |
 
+## 4.6 方眼で動かす（ハーネスを表計算の数式にする）
+
+画面の「**方眼で動かす**」で、いまのハーネスを方眼シート（`sheet.html`）の数式にして、新しいシートとして開く
+（今あるシートには触らない）。
+
+| A ノード | B 種類 | C 値（数式） | D メモ |
+|---|---|---|---|
+| in | input | 雨の日に家でできることを3つ挙げて。 | 入力（書き換えると先が計算し直し） |
+| 契約 | calc | `=JS("const q=String(inputs[0]??'');…","in1",$C$2,"@node","契約")` | |
+| 概念分解 | llm | `=ONERROR(LLMNODE("local","質問を…",HTEMPLATE("質問:\n{{{in.question}}}",$C$3)&"\n\n"&"…","{schema}","{設定}"),"value","{…}",$C$3)` | |
+| 関連度1Map | map | `=HMAP($C$7,LAMBDA(_ITEM,_I,LET(_N1,…Judge…,_N2,…結合…,_N2)),"{設定}")` | 1件ずつ: Judge → 結合 |
+
+- 線は `$C$行` の参照。出口の pick・線の pick・transform・型は `HPICK` / `HTRANSFORM` / `HTYPE` で包む。
+- 値: text はふつうの文字列。JSON は数・真偽ならそのまま、ほかはセルに JSON の文で見える（"5" と 5 は混ざらない）。
+- シートの上の「**▶ ハーネスを実行**」で、そのシートの LLM だけを1本ずつ呼ぶ。計算ノード（JavaScript）は Worker で自動で動く（3秒で打ち切り）。
+- ノードの中身の扱い（差し込み・merge・pick・transform・型・Join・Reduce・式・点検の式・JavaScript の Worker の中身・文脈の窓の見積もり）は
+  `harness.html` の関数を `tools/sync-harness-copy.mjs` で写したもの。`node tools/sync-harness-copy.mjs --check` で一字一句同じかを確かめる。
+  onTruncate（use / retry）・onBadOutput（retry）・onContextOverflow・onError（value / null）・Map の onItemError も同じ決め方。
+- **変換しないもの**（理由を1つずつ出して止める。近いものに置き換えない）: loop / cond / race / quorum / memory / tool、mock の LLM、wllama、
+  ループの線・if / else の線、first_match、start が all 以外で入口2本以上、onError:"skip"、「複数受け取る」でない入口に線2本以上、
+  入口が2つ以上の LLM、差し込みの run_input、式の run / input、手前に無いノードを読む式、Map の中の Map など。
+- **方眼での動き方の違い**: LLM は押してから動く／同じ文を送る呼び出しは1回にまとまる（答えを覚える）／
+  fail_fast でも失敗に続く行だけがエラーになる／点検の結果は点検の行に入る／落ちても残る記録と GPU の見張りは無い。
+
 ## 5. 4つの adapter
 
 | adapter | 中身 | 料金 | 必要なもの |
@@ -1115,7 +1140,7 @@ BranchGroup       = fan-out全体の失敗波及の単位   primaryFailure を1�
 | `hbb.lprg` | 読み込みの途中（%と段階・%が動いたら書く） |
 | `hbb.keep.crash` | **途中で消えた回の取り置き**（捨てるまで残る） |
 | `hbb.keep.last` | 最後にきれいに終わった回 |
-| `hbb.boots` | 開いた履歴（直近10回。前の回が「途中で消えた／きれい／開いただけ／開いている途中で消えた」のどれだったか） |
+| `hbb.keep.boots` | 開いた履歴（直近10回。前の回が「途中で消えた／きれい／開いただけ／開いている途中で消えた」のどれだったか） |
 | `hbb.keep.bootcrash` | 開いている途中（自己テストが終わる前）に消えた回。落ちた回とは別に取り置く |
 | `hbb.step` | 推論1回の中で最後に通った境界（1 engine取得開始 〜 12 形の検査完了） |
 | `hbb.gpu` | GPU の確保量・最大量・個数（Worker の中の見張りから） |
@@ -1140,7 +1165,7 @@ console.error）だけを別に足している。
 **落ちた回は取り置きに移す（v0.36.1）。** 開いたとき、前のページが書いた輪を見て、
 途中で消えた回は `hbb.keep.crash`、きれいに終わった回は `hbb.keep.last` に移してから輪を空にする。
 開いただけの読み込みは取り置きを上書きしないので、**何回読み込み直しても、そのあときれいに走っても、
-落ちた回の記録は「記録を全部捨てる」まで残る**。開くたびに `hbb.boots` に1行（直近10回）。
+落ちた回の記録は「記録を全部捨てる」まで残る**。開くたびに `hbb.keep.boots` に1行（直近10回）。
 常設の「落ちる前の記録」ボタンは、落ちた回（いちばん上）・いまの回・最後にきれいに終わった回・開いた履歴を1枚で出す。
 v0.36.0 までは前回の記録をメモリに移して置き場から消していたため、読み込み直しで消え、
 常設ボタンは今回の空の記録を読んで「記録なし」と出していた（実機で起きた）。
@@ -1219,6 +1244,9 @@ node tests/harness-probe.mjs        # 落ちる原因の切り分け（A→E→F
 node tests/harness-gpuprobe.mjs     # Worker の中の GPU の見張り（本物の WebGPU：確保・解放・検証エラー・device の喪失・console）＋ wasm のメモリと心拍・詰まり
 node tests/harness-selftest-gpu.mjs # 開くたびに回る自己テストが本物のモデルを読まない（HTTP＋本物の WebGPU で開いて数える）
 node tests/harness-fileimport.mjs   # 書き出した .json / .hsl / .txt を「ファイルから」で戻す（拡張子違い・BOM・共有リンクだけ・文字でないファイル）
+node tests/sheet.mjs                # 方眼シート — 配列・こぼれ・LET/LAMBDA・ループ・=LLM()・ハーネスの関数（JSON の値・ONERROR・HMAP・JS の打ち切り）
+node tests/sheet-harness-equiv.mjs  # 「方眼で動かす」— 実ハーネス v13.1 を harness と方眼で走らせ、送った文・回数・各ノードの値・出力が同じか（切れる・JSON でない回も）
+node tools/sync-harness-copy.mjs --check   # 方眼シートに写した関数が harness.html と一字一句同じか
 MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
 

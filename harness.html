@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — GPU を失ったら読み直す v0.40.1</title>
+<title>Harness Studio — ハーネスを方眼の数式で動かす v0.41.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.40.1 · 開くたびに本物のモデルを読まない・GPU を失ったら読み直す</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.41.0 · ハーネスを方眼シートの数式で動かせる</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -187,7 +187,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 </div>
 <div class="mini" id="nowSpec"></div>
 <div class="hintbar" id="hint"></div>
-<div class="row"><button id="btnSpec">このハーネスの設定</button><button id="btnExport">書き出す</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button><button id="btnExp">くらべる</button></div>
+<div class="row"><button id="btnSpec">このハーネスの設定</button><button id="btnExport">書き出す</button><button id="btnSheet">方眼で動かす</button><button id="btnImport">取り込む</button><button id="btnReview">診断する</button><button id="btnExp">くらべる</button></div>
 <!-- accept は付けない。v0.38.0 の実機（iPhone）で「ファイルから」を押しても、書き出したファイルが出てこなかった。
      そのとき付けていた accept（.hsl,.json,.txt と MIME）で iOS が選べるファイルを絞っていたのが疑わしいので外し、
      何のファイルでも選べるようにして中身で判断する（iPhone で直ったかは未確認）。
@@ -1545,7 +1545,7 @@ function bbRead(){
 function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));
   ["h","open","cur","in","last","gen","lprg","step","gpu","spec","hb","whb"].forEach(bbDel);
   BB.head=0;BB.n=0;BB.slotAt={};BB.slotPct={};}
-const HARNESS_BUILD="0.40.1";
+const HARNESS_BUILD="0.41.0";
 /* ---- 取り置き（前の回の記録を、消える前に別の置き場へ移す）----
    v0.36.0 まで: 開いたときに前回の記録を**メモリへ**移し、置き場からは消していた。
    そのため (1) もう一度読み込まれると（iOS の自動再読み込み・版の読み込み直し）証拠が消え、
@@ -1553,7 +1553,7 @@ const HARNESS_BUILD="0.40.1";
    実機でこれが起きた。そこで**前の回の記録は localStorage の取り置きに移す**。
      - hbb.keep.crash … 途中で消えた回（新しい「途中で消えた回」が来るか、人が捨てるまで残す）
      - hbb.keep.last  … きれいに終わった回（次のきれいな回で置き換わる）
-     - hbb.boots      … 開いた履歴（直近10回。何回読み込み直されたかが分かる）
+     - hbb.keep.boots … 開いた履歴（直近10回。何回読み込み直されたかが分かる）
      - hbb.seen       … 知らせを閉じた・コピーした印（知らせは出なくなるが、記録は残る）
    実行していない読み込み（開いただけ）は取り置きを上書きしない。これで、何回読み込み直されても
    落ちた回の記録は消えない。 */
@@ -4692,7 +4692,7 @@ async function retryBranchGroup(spec,run,branchGroupId,store,log,ctl){
   run.status="running";run.resumable=true;if(store)store.save(run);
   await runUntilIdle(spec,run,store,log,ctl);return run;}
 
-if(typeof module!=="undefined"&&module.exports){module.exports={stateViolations,fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,runSummary,whyNotRun,LOGOPT,expandModules,startRun,resumeRun,modulePorts,remapNodeIds,remapLoopIds,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
+if(typeof module!=="undefined"&&module.exports){module.exports={specToSheet,stateViolations,fullRun,runUntilIdle,processOneWorkItem,traceReport,traceText,runSummary,whyNotRun,LOGOPT,expandModules,startRun,resumeRun,modulePorts,remapNodeIds,remapLoopIds,startRun,makeRun,memStore,validate,canonSpec,resumeRun,requestCancel,retryExecution,retryBranchGroup,deliveryMatchesExec,errText,confluenceConflict,deliveryOrigin,buildCtx,evalBool,evalExpr,compileExpr,mustacheRender,makeController,registerTransport,checkSchema,buildMessages,specToHSL,hslToSpec,hslRoundTripDiff,reviewSpec,exprNodeRefs,buildEditPrompt,extractHarnessText,parseHarnessText,specDiff,errorReplyText,HSL_GUIDE,webgpuDiagnostics,diagnosisText,webllmModuleUrl,PROVIDERS,ModelManager,ABSENT};}
 
 /* ==================================================================
    UI
@@ -7557,6 +7557,252 @@ async function copyText(t){
     let okc=false;try{okc=document.execCommand("copy");}catch(_){}ta.remove();return okc;}
 }
 const specName=()=>((Ed.spec.metadata||{}).name||"harness").replace(/[^\w一-龠ぁ-んァ-ヶー-]/g,"_");
+/* ==================================================================
+   ハーネス → 方眼シート（「方眼で動かす」）
+   1行＝1ノード。A ノード名 / B 種類 / C 値（数式）/ D メモ。線は $C$行 の参照になる。
+   使う関数（LLMNODE・JS・HMAP・ONERROR…）は sheet.html にあり、値の扱いはこのファイルの関数を写したもの
+   （tools/sync-harness-copy.mjs で写し、tests で一字一句同じかを確かめる）。
+   方眼で同じに動かせないもの（ループ・条件・先着・記憶…、届く順で値が変わる受け取り方）は、
+   近いものに置き換えずに理由を付けて断る。
+   ================================================================== */
+const SHEET_IMPORT_KEY="hogan-sheet.import.v1";
+const SHEET_OK_TYPES=["input","output","llm","calc","map","join","reduce","assert","pass"];
+const SHEET_ADAPTERS=["webllm","openai_local"];
+function specToSheet(specIn,input){
+  const problems=[],warns=[];
+  const no=(m,id)=>problems.push(id?`${id}: ${m}`:m);
+  let spec;
+  try{spec=expandModules(JSON.parse(JSON.stringify(specIn||{})));}
+  catch(e){no("モジュールを展開できない — "+errText(e));return{ok:false,problems,warns};}
+  for(const e of validate(spec))no("ハーネスの検査で止まる — "+e);
+  if(problems.length)return{ok:false,problems,warns};
+  const nodes=spec.nodes||[],edges=spec.edges||[];
+  const byId={};nodes.forEach(n=>byId[n.id]=n);
+  const q=s=>'"'+String(s).replace(/"/g,'""')+'"';
+  const qj=v=>q(JSON.stringify(v));
+  /* 種類・線の検査（方眼で同じに動かせるか） */
+  for(const n of nodes){
+    if(!SHEET_OK_TYPES.includes(n.type)){no(`種類「${n.type}」は方眼では動かせない（動かせるのは ${SHEET_OK_TYPES.join(" / ")}）`,n.id);continue;}
+    if(n.onError==="skip")no(`onError:"skip" は方眼では動かせない（value / null / error にする）`,n.id);
+    if(n.start&&n.start.mode&&n.start.mode!=="all"&&edges.filter(e=>e.to.node===n.id&&!e.loop).length>1)
+      no(`動き出す条件（start: ${n.start.mode}）は、届く順で値が変わるので方眼では動かせない`,n.id);
+    if(n.routing&&n.routing.mode==="first_match")no("routing: first_match（条件で行き先を選ぶ）は方眼では動かせない",n.id);
+    if(n.type==="llm"){
+      if(!n.provider)no(n.mock?"mock の LLM ノードは方眼では動かせない（provider を付ける）":"provider が無い",n.id);
+      else{const d=(spec.providers||{})[n.provider];
+        if(!d)no(`provider「${n.provider}」が providers に無い`,n.id);
+        else if(!SHEET_ADAPTERS.includes(d.adapter))no(`adapter「${d.adapter}」は方眼では動かせない（${SHEET_ADAPTERS.join(" / ")}）`,n.id);}
+      const t=(n.prompt||{}).template;
+      if(t&&(t.syntax!=="mustache"||t.mode!=="interpolation_only"))no("prompt.template は syntax=mustache / mode=interpolation_only だけ",n.id);
+      const all=[(n.prompt||{}).system,t&&t.value,(n.prompt||{}).prefix,(n.prompt||{}).suffix].filter(Boolean).join("\n");
+      if(/\{\{\{?\s*run_input/.test(all))no("差し込みの run_input は方眼では使えない（線でつなぐ）",n.id);
+      if(/\{\{\{?\s*inputs\.(?!in\b)/.test(all))no("差し込みの inputs.〇〇 は in だけ使える",n.id);
+      if(/\{\{\{?\s*inputs\./.test(all)&&edges.some(e=>e.to.node===n.id&&(e.to.port||"in")!=="in"))no("入口の名前が in でないときは、差し込みの inputs.〇〇 を使えない",n.id);
+    }
+    if(n.type==="assert"&&(n.lang==="js"||(n.asserts||[]).some(a=>a&&a.lang==="js")))no("点検の JavaScript は方眼では動かせない（式にする）",n.id);
+  }
+  for(const e of edges){
+    if(e.loop)no(`ループの線（${e.from.node} → ${e.to.node}）は方眼では動かせない`);
+    if(e.if||e.else)no(`条件付きの線（${e.from.node} → ${e.to.node}）は方眼では動かせない`);
+    const f=byId[e.from.node];
+    if(f&&e.from.port&&e.from.port!=="out"&&!outPortsOf(f).some(p=>p.id===e.from.port))no(`出口「${e.from.port}」が無い`,f.id);
+  }
+  if(problems.length)return{ok:false,problems,warns};
+  /* Map の中（1件ずつ動くノード） */
+  const maps=nodes.filter(n=>n.type==="map");
+  const inMap={};                              // ノード → 属する Map
+  for(const m of maps){
+    const back=mapBackEdges(spec,m);
+    if(back.length!==1){no(`Map に戻る線がちょうど1本ではない（${back.length}本）`,m.id);continue;}
+    const seen=new Set(),st=mapBodyEdges(spec,m.id).map(e=>e.to.node);
+    while(st.length){const x=st.pop();if(x===m.id||seen.has(x))continue;seen.add(x);
+      for(const e of edges)if(e.from.node===x&&!(e.map&&e.to.node===m.id))st.push(e.to.node);}
+    for(const x of seen){
+      if(inMap[x]){no("2つの Map の中に入っている",x);continue;}
+      inMap[x]=m.id;
+      if(byId[x]&&byId[x].type==="map")no("Map の中の Map は方眼では動かせない",x);
+      if(byId[x]&&(byId[x].type==="output"||byId[x].type==="input"))no("入力・出力ノードは Map の中に置けない",x);
+    }
+    if(!seen.has(back[0].from.node))no(`Map に戻る線の元（${back[0].from.node}）が Map の中に無い`,m.id);
+  }
+  for(const e of edges){
+    const a=inMap[e.from.node]||null,b=inMap[e.to.node]||null;
+    if(a===b)continue;
+    if(b&&e.from.node===b&&e.mapRole!=="done")continue;    // Map から中へ（1件ずつ）
+    if(a&&e.to.node===a&&e.map)continue;                   // 中から Map へ戻る
+    if(a&&!b)no(`Map「${a}」の中から外（${e.to.node}）へ線が出ている（外へ出すのは Map の「ぜんぶ終わった」の線だけ）`,e.from.node);
+    else no(`Map「${b}」の中が外（${e.from.node}）から値を受け取っている（中へ入れるのは Map からの線だけ）`,e.to.node);
+  }
+  if(problems.length)return{ok:false,problems,warns};
+  /* 並べる順（線の向き。Map に戻る線は数えない） */
+  const fwd=edges.filter(e=>!e.loop&&!(e.map&&byId[e.to.node]&&byId[e.to.node].type==="map"));
+  const indeg={};nodes.forEach(n=>indeg[n.id]=0);fwd.forEach(e=>indeg[e.to.node]++);
+  const order=[],ready=nodes.filter(n=>!indeg[n.id]).map(n=>n.id);
+  while(ready.length){const x=ready.shift();order.push(x);
+    for(const e of fwd)if(e.from.node===x&&--indeg[e.to.node]===0)ready.push(e.to.node);}
+  if(order.length<nodes.length){no("線が輪になっている: "+nodes.filter(n=>!order.includes(n.id)).map(n=>n.id).join(", "));return{ok:false,problems,warns};}
+  const anc={};                                            // 手前にある（先に値が決まる）ノード
+  for(const id of order){const s=new Set();for(const e of fwd)if(e.to.node===id){s.add(e.from.node);(anc[e.from.node]||new Set()).forEach(x=>s.add(x));}anc[id]=s;}
+  /* 行を決める。Map の中のノードは Map の行のすぐ下（値は Map の行の式の中で決まる） */
+  const rowOf={},rows=[];
+  const place=id=>{rows.push(id);rowOf[id]=rows.length+1;};
+  for(const id of order){if(inMap[id])continue;place(id);
+    if(byId[id].type==="map")for(const x of order)if(inMap[x]===id)place(x);}
+  /* 線1本ぶんの値の式（出口の pick → 線の pick → transform → 型の確かめ。harness と同じ順） */
+  const portPick=(f,port)=>{if(!port||port==="out")return f.ports&&f.ports.length?(f.ports[0].pick||""):"";
+    const pd=outPortsOf(f).find(x=>x.id===port);return pd?(pd.pick||""):"";};
+  const edgeExpr=(e,src)=>{
+    let x=src;const f=byId[e.from.node];
+    const pp=portPick(f,e.from.port);if(pp)x=`HPICK(${x},${q(pp)})`;
+    if(e.pick)x=`HPICK(${x},${q(e.pick)})`;
+    if(e.transform)x=`HTRANSFORM(${x},${q(e.transform)})`;
+    const to=byId[e.to.node],pd=to&&to.inputs&&to.inputs[e.to.port||"in"];
+    const want=pd&&pd.type,bypass=e.validation&&e.validation.typeCheck==="bypass";
+    if(want&&want!=="any"&&!bypass)x=`HTYPE(${x},${q(want)})`;
+    return x;};
+  /* ノードの値の置き場（外の行は $C$n、Map の中は LET の名前） */
+  const local={};
+  const srcOf=(id)=>local[id]||`$C$${rowOf[id]}`;
+  const inEdges=id=>edges.filter(e=>e.to.node===id&&!e.loop&&!(e.map&&byId[id].type==="map"));
+  const byPort=id=>{const g={};for(const e of inEdges(id))(g[e.to.port||"in"]=g[e.to.port||"in"]||[]).push(e);
+    for(const k in g)g[k].sort((a,b)=>(a.position||0)-(b.position||0));return g;};
+  const srcExpr=(e,ctx)=>e.from.node===ctx.map?"_ITEM":srcOf(e.from.node);
+  const card=(n,port)=>n.inputs&&n.inputs[port]&&n.inputs[port].cardinality;
+  /* 1つ目の入口の値（受け取り方 merge を含めて）。無ければ null */
+  const firstIn=(n,ctx)=>{const g=byPort(n.id);const ks=Object.keys(g);if(!ks.length)return null;const es=g[ks[0]];
+    if(card(n,ks[0])==="many")return `HMERGE(${qj(n.merge||{})},${es.map(e=>edgeExpr(e,srcExpr(e,ctx))).join(",")})`;
+    if(es.length>1){no(`入口「${ks[0]}」に線が${es.length}本あるのに「複数受け取る」になっていない（harness では先に届いた1本だけを使うので、届く順で変わる）`,n.id);return "\"\"";}
+    return edgeExpr(es[0],srcExpr(es[0],ctx));};
+  const scopePairs=(n,ctx)=>{
+    const es=edges.filter(e=>e.to.node===n.id&&!e.loop).slice().sort((a,b)=>(a.position||0)-(b.position||0));
+    const out=[];es.forEach((e,i)=>out.push(q(varNameOf(e,i)),edgeExpr(e,srcExpr(e,ctx))));
+    return{pairs:out,names:es.map((e,i)=>varNameOf(e,i))};};
+  /* 式が読む名前を調べる（run / input は方眼に無い。ノード名は手前のノードの .out / .type だけ） */
+  const exprViews=(n,srcs,names,ctx)=>{
+    const views=new Set();
+    for(const src of srcs){let tk;try{tk=tokenize(String(src||""));}catch(_){no(`式が読めない: ${src}`,n.id);continue;}
+      tk.forEach((t,i)=>{if(t.t!=="id")return;const prev=tk[i-1];if(prev&&prev.t==="op"&&prev.v===".")return;
+        const nx=tk[i+1];if(nx&&nx.t==="op"&&nx.v==="(")return;
+        if(names.includes(t.v))return;
+        if(t.v==="run"||t.v==="input"){no(`式の ${t.v} は方眼には無い`,n.id);return;}
+        if(!byId[t.v])return;
+        const f=tk[i+2];
+        if(!(nx&&nx.v==="."&&f&&f.t==="id"&&(f.v==="out"||f.v==="type"))){no(`式の ${t.v}${nx&&nx.v==="."&&f?"."+f.v:""} は方眼では読めない（読めるのは ${t.v}.out と ${t.v}.type）`,n.id);return;}
+        const ok=anc[n.id].has(t.v)||(ctx.map&&anc[ctx.map].has(t.v));
+        if(!ok||inMap[t.v]){no(`式が ${t.v} を読んでいるが、${t.v} はこのノードより先に決まるとは限らない（線でつなぐと方眼でも読める）`,n.id);return;}
+        views.add(t.v);});}
+    return[...views].flatMap(v=>[q("#"+v),srcOf(v)]);};
+  const mapExtras=(n,ctx,withValue)=>{if(!ctx.map)return[];const o=[q("@iteration"),"_I+1"];
+    if(withValue){const v=firstIn(n,ctx);o.push(q("@value"),v==null?"HJSON(\"null\")":v);}o.push(q("@index"),"_I");return o;};
+  const tplArgs=(inV,ctx)=>`${inV==null?'""':inV}${ctx.map?",_I+1":""}`;
+  const fill=(t,inV,ctx)=>String(t).includes("{{{")?`HTEMPLATE(${q(t)},${tplArgs(inV,ctx)})`:q(t);
+  const nodeExpr=(n,ctx)=>{
+    const id=n.id;
+    switch(n.type){
+      case"output":case"pass":{const v=firstIn(n,ctx);return v==null?(n.type==="output"?'HJSON("null")':'""'):v;}
+      case"llm":{
+        const g=byPort(id);if(Object.keys(g).length>1)no("入口が2つ以上の LLM ノードは方眼では動かせない（in だけにする）",id);
+        const p=n.prompt||{};const inV=firstIn(n,ctx);
+        let user=p.template?`HTEMPLATE(${q(p.template.value||"")},${tplArgs(inV,ctx)})`:`HTEXT(${inV==null?'""':inV})`;
+        if(p.prefix)user=`${fill(p.prefix,inV,ctx)}&${q("\n\n")}&${user}`;
+        if(p.suffix)user=`${user}&${q("\n\n")}&${fill(p.suffix,inV,ctx)}`;
+        const cf={id};for(const k of["model","contextSize","overrides","generation","onTruncate","onBadOutput","onContextOverflow"])if(n[k]!=null)cf[k]=n[k];
+        return `LLMNODE(${q(n.provider)},${p.system?fill(p.system,inV,ctx):""},${user},${n.schema?qj(n.schema):'""'},${qj(cf)})`;}
+      case"calc":{const{pairs,names}=scopePairs(n,ctx);
+        const ex=mapExtras(n,ctx,true).concat([q("@node"),q(id)]);
+        if(n.lang==="js")return `JS(${[q(n.code||""),...pairs,...ex].join(",")})`;
+        const vs=exprViews(n,[n.code],names.concat(["inputs","iteration","vars","loop"],ctx.map?["value","index"]:[]),ctx);
+        return `HEXPR(${[q(n.code||""),...pairs,...vs,...ex].join(",")})`;}
+      case"assert":{const inV=firstIn(n,ctx);
+        const vs=exprViews(n,(n.asserts||[]).map(a=>a&&a.expr),["value","iteration","vars","loop"].concat(ctx.map?["index"]:[]),ctx);
+        const ex=ctx.map?[q("@iteration"),"_I+1",q("@index"),"_I"]:[];
+        return `HASSERT(${[qj(n.asserts||[]),q(n.onFail||""),inV==null?'""':inV,...vs,...ex,q("@node"),q(id)].join(",")})`;}
+      case"join":{const g=byPort(id);const es=g.items||[];
+        if(Object.keys(g).some(k=>k!=="items"))no("join は items の入口だけ使う",id);
+        if(es.length&&card(n,"items")!=="many")no("join の items が「複数受け取る」になっていない",id);
+        const cf={id};for(const k of["op","sep","labels","keys","prefix","suffix","template"])if(n[k]!=null)cf[k]=n[k];
+        return `HJOIN(${[qj(cf),...es.map(e=>edgeExpr(e,srcExpr(e,ctx)))].join(",")})`;}
+      case"reduce":{const g=byPort(id);const ks=Object.keys(g);
+        const cf={id};for(const k of["op","path","skipMissing"])if(n[k]!=null)cf[k]=n[k];
+        if(!ks.length)return `HREDUCE(${qj(cf)},HJSON("[]"))`;
+        const es=g[ks[0]];if(es.length>1&&card(n,ks[0])!=="many")no(`入口「${ks[0]}」に線が${es.length}本あるのに「複数受け取る」になっていない`,id);
+        return `HREDUCE(${[qj(cf),...es.map(e=>edgeExpr(e,srcExpr(e,ctx)))].join(",")})`;}
+      case"map":{
+        const v=firstIn(n,ctx);
+        const body=order.filter(x=>inMap[x]===id);const keep=Object.assign({},local);
+        const inner={map:id};const lets=[];
+        body.forEach((x,i)=>{const nm="_N"+(i+1);lets.push(nm,wrapErr(byId[x],nodeExpr(byId[x],inner),inner));local[x]=nm;});
+        const back=mapBackEdges(spec,n)[0];
+        const res=edgeExpr(back,local[back.from.node]);
+        for(const k of Object.keys(local))delete local[k];Object.assign(local,keep);
+        const cf={id};if(n.onItemError)cf.onItemError=n.onItemError;if(n.onItemErrorValue!==undefined)cf.onItemErrorValue=n.onItemErrorValue;
+        return `HMAP(${v==null?'""':v},LAMBDA(_ITEM,_I,LET(${lets.join(",")},${res})),${qj(cf)})`;}
+    }
+    return '""';};
+  /* onError: value / null は ONERROR で包む（手前の値の失敗は包まない） */
+  const wrapErr=(n,x,ctx)=>{const pol=n.onError||"error";if(pol!=="value"&&pol!=="null")return x;
+    const ups=[...new Set(edges.filter(e=>e.to.node===n.id&&!e.loop&&!(e.map&&n.type==="map")).map(e=>srcExpr(e,ctx)))];
+    return `ONERROR(${[x,q(pol),pol==="value"&&n.onErrorValue!==undefined?qj(n.onErrorValue):'""',...ups].join(",")})`;};
+  /* セル */
+  const cells={},hd={b:1,bg:"#dfe7fb",bd:1};
+  const put=(k,v,st)=>{cells[k]=Object.assign({v},st||{});};
+  put("A1","ノード",hd);put("B1","種類",hd);put("C1","値（数式）",hd);put("D1","メモ",hd);
+  const memo=n=>{const m=[];
+    if(n.label&&n.label!==n.id)m.push(n.label);
+    if(n.type==="llm")m.push(`LLM（${n.provider}${n.model?" / "+n.model:""}）`);
+    if(n.onError==="value"||n.onError==="null")m.push(`失敗したら ${n.onError==="null"?"null":"決めた値"}`);
+    if(n.type==="map")m.push(`1件ずつ: ${order.filter(x=>inMap[x]===n.id).join(" → ")}`);
+    return m.join(" · ");};
+  const inp=input||{};
+  for(const id of rows){const n=byId[id],r=rowOf[id];
+    put("A"+r,id,{b:1});put("B"+r,n.type);
+    if(inMap[id]){put("D"+r,`${inMap[id]} の中で1件ずつ動く（式は ${inMap[id]} の行）${memo(n)?" · "+memo(n):""}`,{i:1});continue;}
+    if(n.type==="input"){
+      const has=Object.prototype.hasOwnProperty.call(inp,id);const v=has?inp[id]:(n.default!=null?n.default:"");
+      if(typeof v==="string")put("C"+r,v,{fmt:"text",bg:"#fff7d6"});else put("C"+r,"=HJSON("+qj(v)+")",{bg:"#fff7d6"});
+      put("D"+r,"入力（書き換えると、そこから先が計算し直しになる）"+(memo(n)?" · "+memo(n):""));continue;}
+    const x=wrapErr(n,nodeExpr(n,{map:null}),{map:null});
+    put("C"+r,"="+x);put("D"+r,memo(n));
+  }
+  if(problems.length)return{ok:false,problems,warns};
+  /* 方眼での動き方の違い（事実だけ書く） */
+  const llms=nodes.filter(n=>n.type==="llm");
+  if(llms.length)warns.push("LLM は「LLMを実行」を押すと順に動く（方眼は手動が既定）。答えは覚えておき、同じ文を送る呼び出しは1回にまとまる（harness は毎回呼ぶ）");
+  if(nodes.some(n=>n.routing&&n.routing.failurePolicy==="fail_fast"))
+    warns.push("fail_fast: 方眼では、失敗したノードとそれに続く行だけがエラーになり、ほかの行は計算される（harness は実行ごと止める）");
+  if(nodes.some(n=>n.type==="assert"&&n.onFail==="continue"))warns.push("点検の結果は点検の行に入る（harness の実行の記録には入らない）");
+  const used=[...new Set(llms.map(n=>n.provider))];
+  const providers={};for(const k of used)providers[k]=JSON.parse(JSON.stringify(spec.providers[k]));
+  const name=String((spec.metadata&&spec.metadata.name)||"ハーネス").slice(0,24);
+  return{ok:true,problems,warns,providers,
+    sheet:{name,cells,nr:Math.max(100,rows.length+10),nc:26,cw:{0:130,1:70,2:320,3:260},harness:{name:(spec.metadata&&spec.metadata.name)||null,at:new Date().toISOString()}},
+    rows:rows.map(id=>({id,row:rowOf[id],type:byId[id].type,inMap:inMap[id]||null}))};
+}
+function openSheetConvert(){
+  const res=specToSheet(Ed.spec,inputForRun());
+  let h=head("方眼で動かす");
+  h+=`<div class="mini">このハーネスを、方眼シート（表計算）の数式にして開く。1行が1ノードで、線はセルの参照になる。`
+    +`入力のセルを書き換えると、そこから先が計算し直しになる。ノードの中身の扱い（差し込み・合流・pick・計算・点検）は、このページと同じコードで動く。</div>`;
+  if(!res.ok){
+    h+=`<div class="vErr" style="margin:10px 0">方眼では同じに動かせないところがあるので、変換しなかった（${res.problems.length}件）:\n`
+      +res.problems.map(p=>"・"+esc(p)).join("\n")+`</div>`;
+  }else{
+    h+=`<div class="mini" style="margin-top:8px">${res.rows.length}行（${res.rows.filter(r=>!r.inMap).length}ノード${res.rows.some(r=>r.inMap)?"・Map の中 "+res.rows.filter(r=>r.inMap).length+"ノード":""}）にした。`
+      +`provider: ${esc(Object.keys(res.providers).join(" / ")||"なし")}</div>`;
+    if(res.warns.length)h+=`<div class="mini" style="margin-top:6px">方眼での動き方:<br>${res.warns.map(w=>"・"+esc(w)).join("<br>")}</div>`;
+    h+=`<div class="row" style="margin-top:10px"><button class="primary" id="cvOpen">方眼シートで開く</button></div>`;
+    h+=`<div class="mini" id="cvInfo">方眼シートの中で新しいシートとして足す（今あるシートには触らない）。</div>`;
+  }
+  openSheet(h);bindClose();
+  const a=$("#cvOpen");
+  if(a)a.onclick=()=>{
+    try{localStorage.setItem(SHEET_IMPORT_KEY,JSON.stringify({v:1,sheet:res.sheet,providers:res.providers,from:"harness "+HARNESS_BUILD}));}
+    catch(e){$("#cvInfo").textContent="渡せない（端末の保存領域がいっぱい）: "+errText(e);return false;}
+    const w=window.open("sheet.html#import","_blank");
+    if(w)$("#cvInfo").textContent="方眼シートを別のタブで開いた";
+    else location.href="sheet.html#import";        // 別のタブが開けない端末では、このタブで開く（ハーネスは自動で残してある）
+  };
+}
 function openExportSheet(){
   let hsl="",warn="";
   try{hsl=specToHSL(Ed.spec);}catch(e){hsl="";warn="HSLに書き出せない: "+errText(e);}
@@ -7968,6 +8214,7 @@ let reviewCtl=null;
 $("#btnSpec").onclick=openSpecSheet;
 $("#btnExp").onclick=openExpSheet;
 $("#btnExport").onclick=openExportSheet;
+$("#btnSheet").onclick=openSheetConvert;
 $("#btnImport").onclick=openImportSheet;
 $("#btnReview").onclick=openReviewSheet;
 /* 共有リンクで開かれたとき */
@@ -8980,7 +9227,7 @@ window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
     processOneWorkItem,resumeRun,startRun,makeRun,memStore,
     // Provider を差し替えて画面ごと試せるようにする（自動テスト用。JSONは触らずに済む）
     PROVIDERS,ModelManager,ABSENT,CP_STAT,estTokensMin,contextWindowOf,stateViolations,retryExecution,
-    workerProbeSrc,bbWorkerEvent,exclusive,probeResume,ENG_SEQ:()=>ENG_SEQ}};
+    workerProbeSrc,bbWorkerEvent,exclusive,probeResume,ENG_SEQ:()=>ENG_SEQ,specToSheet,inputForRun}};
 
 /* ---- 使い方（？ボタン） ---- */
 const HELP_TEXT=`# Harness Studio の使い方
@@ -9333,6 +9580,24 @@ v0.39.0 からは、**ページを開いてからの全部**（実行より前�
   組み合わせて設計するときと、外部のLLMに渡すときはここ。
 
 どのタブも「全部コピー」と「文で保存」ができる。
+
+## 14.7 方眼で動かす（表計算の数式にする）
+
+上の「**方眼で動かす**」を押すと、いまのハーネスを**方眼シート（表計算・sheet.html）の数式**にして開ける。
+
+- **1行が1ノード**。A列にノード名、B列に種類、**C列に値（数式）**、D列にメモ。線はセルの参照（\`$C$5\` など）になる。
+- 入力ノードの行（黄色）を書き換えると、そこから先の行が計算し直しになる。
+- 方眼シートの上に出る「**▶ ハーネスを実行**」で、そのシートの LLM だけを上から順に呼ぶ。計算ノード（JavaScript）は自動で動く。
+- ノードの中身の扱い（差し込み・合流・pick・計算・点検・結合・まとめ）は、**このページと同じコード**で動く
+  （写したものが一字一句同じかを、自動テストで毎回確かめている）。
+- 方眼シートの中に**新しいシートとして足す**。今あるシートには触らない。
+- **同じに動かせないハーネスは変換しない**（ループ・条件分岐・先着・多数決・記憶・mock の LLM・条件付きの線・ループの線・
+  届く順で値が変わる受け取り方など）。そのときは理由を1つずつ出す。近いものに置き換えて動かすことはしない。
+- 方眼での動き方の違い（押す前に画面にも出る）:
+  LLM は「▶ ハーネスを実行」を押してから動く／同じ文を送る呼び出しは1回にまとまる（答えを覚えておく）／
+  fail_fast でも、失敗したノードに続く行だけがエラーになり、ほかの行は計算される。
+
+詳しい対応は「詳しい動き」の 58.5。
 
 ## 15. 気をつけること
 - 端末のメモリには限りがある。大きいモデル＋長い文脈＋並列は落ちやすい。
@@ -11385,7 +11650,7 @@ v0.38.0 までは実行の始まりで輪を空にしていた。そのため実
 
 **開いただけの読み込みは取り置きを上書きしない。** だから iOS が落ちたタブを読み込み直しても、
 版を読み込み直しても、そのあときれいに走りきっても、**落ちた回の記録は捨てるまで残る**。
-開くたびに \`hbb.boots\` に1行足す（直近10回）。「落ちた → 読み込み直し → もう一度読み込み直し」の
+開くたびに \`hbb.keep.boots\` に1行足す（直近10回）。「落ちた → 読み込み直し → もう一度読み込み直し」の
 ような流れがそのまま読める。
 
 v0.36.0 までは、前回の記録を**メモリへ**移して置き場から消していた。
@@ -12078,6 +12343,45 @@ JSON を書くだけでは存在が分からないが、画面にあるもの。
 - 3つのタブ。
 - それぞれ「**全部コピー**」と「**文で保存**」ができる。
   外部のLLMに渡すときは、このタブごと渡せばよい。
+
+## 58.5 方眼で動かす（ハーネス → 方眼シートの数式）
+
+「方眼で動かす」は、ハーネスを方眼シート（sheet.html）の**数式**にする。1行＝1ノード、C列がそのノードの値。
+値の決まり: **text の値はふつうの文字列**。**JSON の値**は、数・真偽はそのまま数・真偽、
+文字列・配列・オブジェクト・null はセルに JSON の文で見える（"5" と 5 は混ざらない）。
+
+| ノード | 数式 |
+|---|---|
+| input | 文字をそのまま（この行を書き換えると先が計算し直し） |
+| llm | \`=LLMNODE(provider, system, 本文, schema, 設定)\`。本文は \`HTEMPLATE(template, 入ってきた値)\` と prefix / suffix を \`"\\n\\n"\` でつないだもの |
+| calc（JavaScript） | \`=JS(コード, 名前, 値, …)\`。名前は calc と同じ決め方（as → pick → ノード名 → in1…）。Worker で動かし3秒で打ち切る |
+| calc（式） | \`=HEXPR(式, 名前, 値, …, "#ノード名", 値)\`。\`ノード名.out\` / \`.type\` は "#ノード名" で渡した値 |
+| map | \`=HMAP(配列, LAMBDA(_ITEM,_I, LET(中のノード…, 戻る値)), 設定)\`。中のノードは Map の行の下にメモだけの行で並ぶ |
+| join / reduce / assert | \`=HJOIN(設定, 値…)\` / \`=HREDUCE(設定, 値…)\` / \`=HASSERT(点検の並び, onFail, 値, …)\` |
+| output / pass | 手前の行の参照（複数受け取るなら \`HMERGE(merge, 値…)\`） |
+| onError: value / null | \`=ONERROR(中身, "value", 代わりの値, 手前の値…)\`。手前の行の失敗・まだ来ていない値は代わりの値にしない |
+| 線の pick・transform・型 | \`HPICK\` / \`HTRANSFORM\` / \`HTYPE\` で包む（出口の pick → 線の pick → transform → 型、の順） |
+
+**同じコードで動く**: 差し込み（mustache）・merge・pick・transform・型の確かめ・Join・Reduce・式（expr）・点検の式・
+JavaScript の Worker の中身・文脈の窓の見積もりは、このページの関数を写したもの（\`tools/sync-harness-copy.mjs\`）。
+onTruncate（use / retry）・onBadOutput（retry）・onContextOverflow も同じ決め方で動く。
+
+**変換しないもの**（理由を出して止める）: loop / cond / race / quorum / memory / tool の各ノード、mock の LLM（provider を付ける）、
+wllama、ループの線・if / else の線、routing.mode:"first_match"、start が all 以外で入口が2本以上、onError:"skip"、
+「複数受け取る」になっていない入口に線が2本以上（harness では先に届いた1本だけを使う）、入口が2つ以上の LLM、
+差し込みの run_input、式の run / input、式が読むノードが手前に無い（線でつなげば読める）、
+\`ノード名.status\` など out / type 以外、点検の JavaScript、Map の中の Map、Map の中と外を直接つなぐ線。
+
+**方眼での動き方の違い**（変換の画面にも出る）:
+- LLM は「▶ ハーネスを実行」を押してから、そのシートの分だけを1本ずつ呼ぶ。
+- 答えは provider の設定・送る文・形・切れたときの扱いごとに覚える。**同じ文を送る呼び出しは1回にまとまる**（harness は毎回呼ぶ）。
+- fail_fast: 失敗したノードとそれに続く行だけがエラーになり、ほかの行は計算される（harness は実行ごと止める）。
+- 点検の結果は点検の行に入る（実行の記録には入らない）。
+- 落ちても残る記録（ブラックボックス）と GPU の見張りは方眼シートには無い。
+
+確かめ方（自動テスト \`sheet-harness-equiv.mjs\`）: 実ハーネス v13.1 を同じスタブ（OpenAI 互換）につないで、
+harness と方眼の両方で走らせ、**送った文の集まり・同じ文を呼んだ回数・各ノードの値・出力が同じ**ことを確かめている
+（答えが途中で切れる・JSON でない・2回聞き直して onError の値になる、の回も）。
 
 ## 59. 自己テストで確かめている Runtime の約束
 

@@ -136,6 +136,40 @@ for (let i = 0; i < 6; i++) { await settle(); await p.evaluate(() => window.__sh
 v = await readNow(['F1']);
 ok('LOOP の中の LLM が周ごとに答えを受けて終わる（14→7→4→2字）', v[0] === 'あい', v);
 
+// ---- ハーネスの関数（「方眼で動かす」で使う） ----
+// JSON の値は JSON の文で見える。text と JSON は混ざらない（"5" と 5 は別）
+v = await run({ A1: '=HJSON("{""a"":[1,2],""b"":""x""}")', A2: '=JSONGET(A1,"a.1")', A3: '=JSONGET(A1,"b")', A4: '=HTEXT(A1)',
+  A5: '=HJSON("null")', A6: '=HPICK(A1,"a.0..")', A7: '=HPICK(A1,"zz")', A8: '=HMERGE("{""op"":""json_array""}","5",5)',
+  A9: '=A1=HJSON("{""a"":[1,2],""b"":""x""}")', A10: '=LEN(A1)' },
+  ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10']);
+ok('JSON の値（表示・JSONGET・HTEXT・null・pick・text と数の区別・比較・LEN）',
+  eq(v, ['{"a":[1,2],"b":"x"}', '2', 'x', '{"a":[1,2],"b":"x"}', 'null', '[1,2]', '#NODE!', '["5",5]', 'TRUE', '19']), v);
+// 差し込み・結合・まとめ・式・点検（harness から写した関数）
+v = await run({ A1: '=HJSON("{""q"":""雨""}")', A2: '=HTEMPLATE("Q={{{in}}} / {{{in.q}}} / {{{iteration}}}",A1,3)',
+  A3: '=HJOIN("{""op"":""markdown"",""labels"":[""一"",null]}","a",HJSON("[1]"))', A4: '=HREDUCE("{""op"":""best"",""path"":""s""}",HJSON("[{""s"":1},{""s"":5},{""s"":2}]"))',
+  A5: '=HEXPR("len(x) + n.out.q.length","x","abc","#n",A1)', A6: '=HEXPR("len(x) * 2","x","abc")',
+  A7: `=JSONGET(HASSERT("[{""name"":""a"",""expr"":""q == '雨'""},{""name"":""b"",""expr"":""q == 1"",""severity"":""warn""}]","",A1),"warned")` },
+  ['A2', 'A3', 'A4', 'A5', 'A6', 'A7']);
+ok('HTEMPLATE（in は文・in.q は空）・HJOIN・HREDUCE・HEXPR（文字列に .length は無い）・HASSERT',
+  eq(v, ['Q={"q":"雨"} /  / 3', '## 一\n\na\n\n- [1]', '{"s":5}', '#NODE!', '6', '1']), v);
+// ONERROR: このノードの失敗だけ代わりの値にする。手前の失敗・まだ来ていない値はそのまま
+v = await run({ A1: '=HPICK(HJSON("{}"),"x")', A2: '=ONERROR(HPICK(HJSON("{}"),"x"),"value","{""ok"":0}")',
+  A3: '=ONERROR(HPICK(A1,"y"),"value","{""ok"":0}",A1)', A4: '=ONERROR(LLM("分類",,"肯定|否定"),"null","")', A5: '=ONERROR(NOSUCH(1),"null","")' },
+  ['A2', 'A3', 'A4', 'A5'], LLMEX);
+ok('ONERROR（自分の失敗→代わりの値／手前の失敗・#未実行・名前の誤りはそのまま）', eq(v, ['{"ok":0}', '#NODE!', '#未実行', '#NAME?']), v);
+// HMAP の1件ずつの失敗（onItemError）
+v = await run({ A1: '=HJSON("[{""v"":1},{},{""v"":3}]")',
+  A2: '=HMAP(A1,LAMBDA(x,i,HPICK(x,"v")),"{}")',
+  A3: '=HMAP(A1,LAMBDA(x,i,HPICK(x,"v")),"{""onItemError"":""skip""}")',
+  A4: '=HMAP(A1,LAMBDA(x,i,HPICK(x,"v")),"{""onItemError"":""value"",""onItemErrorValue"":-1}")',
+  A5: '=HMAP("abc",LAMBDA(x,i,x),"{}")', A6: '=HMAP(A1,LAMBDA(x,i,i*10),"{}")' }, ['A2', 'A3', 'A4', 'A5', 'A6']);
+ok('HMAP（失敗で止める・飛ばす・決めた値・配列でない・番号）', eq(v, ['#NODE!', '[1,3]', '[1,-1,3]', '#NODE!', '[0,10,20]']), v);
+// JS: Worker で動かす。同じ入力なら動かし直さない。3秒で打ち切る
+await run({ A1: '=JS("return a*2+inputs.length","a",20)', A2: '=JS("while(true){}","@node","無限")', A3: '=JS("let x=1","@node","戻さない")' }, []);
+await p.waitForFunction(() => { const E = window.__sheet.engine; window.__sheet.paint(); return [1, 2].every(r => { const v = E.cellValue(0, r, 0); return E.isErr(v) && v.err === '#NODE!'; }); }, null, { timeout: 15000, polling: 300 });
+v = await p.evaluate(() => { const E = window.__sheet.engine; return [0, 1, 2].map(r => { const x = E.cellValue(0, r, 0); return E.isErr(x) ? x.msg.split(':')[0] : E.fmtVal(x); }); });
+ok('JS（答え・3秒で打ち切り・return が無い）', eq(v, ['41', 'CODE_TIMEOUT', 'CODE_NO_RETURN']), v);
+
 // ---- 画面: 最初に開くデモ ----
 await p.evaluate(() => { localStorage.clear(); });
 await p.reload(); await p.waitForFunction(() => window.__sheet, null, { timeout: 15000 });

@@ -255,9 +255,9 @@ const isArr=v=>!!(v&&v.rng);
 const single=v=>v.rng.length===1&&v.rng[0].length===1;
 const scalar=v=>v&&v.rng?(v.rng[0]&&v.rng[0][0]!==undefined?v.rng[0][0]:null):v;
 const toArr=v=>v&&v.rng?v.rng:[[v]];
-function toNum(v){v=scalar(v);if(isErr(v))throw v;if(v===null||v==='')return 0;if(typeof v==='number')return v;if(typeof v==='boolean')return v?1:0;if(v&&v.fnv)throw ERR('#VALUE!','LAMBDA は数値にできない');const n=parseNumStr(v);if(n===null)throw ERR('#VALUE!','数値にできない: '+String(v).slice(0,20));return n}
-function toStr(v){v=scalar(v);if(isErr(v))throw v;if(v===null)return'';if(typeof v==='boolean')return v?'TRUE':'FALSE';if(typeof v==='number')return gen(v);if(v&&v.fnv)throw ERR('#VALUE!');return String(v)}
-function toBool(v){v=scalar(v);if(isErr(v))throw v;if(v===null)return false;if(typeof v==='boolean')return v;if(typeof v==='number')return v!==0;const u=String(v).toUpperCase();if(u==='TRUE')return true;if(u==='FALSE')return false;throw ERR('#VALUE!','真偽にできない: '+String(v).slice(0,20))}
+function toNum(v){v=scalar(v);if(isErr(v))throw v;if(v===null||v==='')return 0;if(typeof v==='number')return v;if(typeof v==='boolean')return v?1:0;if(v&&v.fnv)throw ERR('#VALUE!','LAMBDA は数値にできない');if(isJ(v))throw ERR('#VALUE!','JSON は数値にできない（JSONGET で中の数を取り出す）');const n=parseNumStr(v);if(n===null)throw ERR('#VALUE!','数値にできない: '+String(v).slice(0,20));return n}
+function toStr(v){v=scalar(v);if(isErr(v))throw v;if(v===null)return'';if(typeof v==='boolean')return v?'TRUE':'FALSE';if(typeof v==='number')return gen(v);if(v&&v.fnv)throw ERR('#VALUE!');if(isJ(v))return JSON.stringify(v.json);return String(v)}
+function toBool(v){v=scalar(v);if(isErr(v))throw v;if(v===null)return false;if(typeof v==='boolean')return v;if(typeof v==='number')return v!==0;if(isJ(v))throw ERR('#VALUE!','JSON は真偽にできない（JSONGET で中の値を取り出す）');const u=String(v).toUpperCase();if(u==='TRUE')return true;if(u==='FALSE')return false;throw ERR('#VALUE!','真偽にできない: '+String(v).slice(0,20))}
 function literal(raw,cell){
   if(raw[0]==="'")return raw.slice(1);
   if(cell&&cell.fmt==='text')return raw;
@@ -278,10 +278,12 @@ function fmtVal(v,f){
     case'yen':return(v<0?'-¥':'¥')+nf0.format(Math.abs(v));case'pct':return nf1.format(v*100)+'%';
     case'fix2':return nf2.format(v);default:return gen(v)}}
   if(v&&v.fnv)return'#CALC!';
+  if(isJ(v))return JSON.stringify(v.json);
   return String(v);
 }
 function cmpVals(a,b){
   a=scalar(a);b=scalar(b);if(isErr(a))throw a;if(isErr(b))throw b;
+  if(isJ(a))a=JSON.stringify(a.json);if(isJ(b))b=JSON.stringify(b.json);
   const ty=x=>x===null?'z':typeof x==='number'?'num':typeof x==='boolean'?'bool':'str';
   let ta=ty(a),tb=ty(b);
   if(ta==='z'&&tb==='z')return 0;
@@ -669,6 +671,539 @@ const LLMCore={
   },
 };
 
+/* ---------- ハーネスのノードを数式で動かす ----------
+   harness.html のハーネスを「1行＝1ノード」の数式にしたものが、ここの関数で動く（ハーネスの「方眼で動かす」）。
+   値の決まり（harness の RuntimeValue と1対1）:
+     text の値 … ふつうの文字列
+     JSON の値 … 数・真偽はそのまま数・真偽。文字列・配列・オブジェクト・null は {json:値}（セルには JSON の文で見える）
+   ノードの中身の扱い（差し込み・合流・pick・型・結合・まとめ・式）は harness.html から写した関数（HX）をそのまま使う。 */
+/*#HARNESS-COPY — harness.html v0.41.0 から写した（手で直さない。tools/sync-harness-copy.mjs で作り直す）*/
+const HX=(()=>{
+const ABSENT=Symbol("absent");
+const OPS2=["&&","||","==","!=","<=",">="],OPS1=["+","-","*","/","%","<",">"];
+const FNS=new Set(["len","has","regex","count","min","max","json_parse","json_stringify"]);
+const ID1=/[A-Za-z_$\u0080-\uFFFF]/,IDN=/[A-Za-z0-9_$\u0080-\uFFFF]/;
+const IDRE="[A-Za-z_$\\u0080-\\uFFFF][A-Za-z0-9_$\\u0080-\\uFFFF]*";
+const NOTID="[^A-Za-z0-9_$\\u0080-\\uFFFF]";
+function tokenize(s){const t=[];let i=0;
+  const isId=c=>ID1.test(c)&&!/\s/.test(c),isIdN=c=>IDN.test(c)&&!/\s/.test(c);
+  while(i<s.length){const c=s[i];if(/\s/.test(c)){i++;continue;}
+    if(c==='"'||c==="'"){let j=i+1,v="";while(j<s.length&&s[j]!==c)v+=s[j++];i=j+1;t.push({t:"str",v});continue;}
+    if(/[0-9]/.test(c)||(c==="."&&/[0-9]/.test(s[i+1]))){let j=i,v="";while(j<s.length&&/[0-9.]/.test(s[j]))v+=s[j++];i=j;t.push({t:"num",v:parseFloat(v)});continue;}
+    if(isId(c)){let j=i,v="";while(j<s.length&&isIdN(s[j]))v+=s[j++];i=j;if(v==="true"||v==="false")t.push({t:"bool",v:v==="true"});else if(v==="null")t.push({t:"null"});else t.push({t:"id",v});continue;}
+    const two=s.slice(i,i+2);if(OPS2.includes(two)){t.push({t:"op",v:two});i+=2;continue;}
+    if(OPS1.includes(c)||"()[].,!".includes(c)){t.push({t:"op",v:c});i++;continue;}throw{code:"EXPRESSION_PARSE_ERROR"};}return t;}
+function parseE(tk){let p=0;const pk=()=>tk[p],eat=()=>tk[p++];const ex=v=>{const x=eat();if(!x||x.v!==v)throw{code:"EXPRESSION_PARSE_ERROR"};};
+  function bin(sub,ops){let l=sub();while(pk()&&pk().t==="op"&&ops.includes(pk().v)){const op=eat().v;l={type:"Binary",op,l,r:sub()};}return l;}
+  const or=()=>bin(and,["||"]),and=()=>bin(cmp,["&&"]),cmp=()=>bin(add,["==","!=","<","<=",">",">="]),add=()=>bin(mul,["+","-"]),mul=()=>bin(un,["*","/","%"]);
+  function un(){if(pk()&&pk().t==="op"&&(pk().v==="!"||pk().v==="-")){const op=eat().v;return{type:"Unary",op,x:un()};}return po();}
+  function po(){let n=pr();while(pk()){if(pk().v==="."){eat();const id=eat();n={type:"Member",obj:n,prop:id.v,computed:false};}
+    else if(pk().v==="["){eat();const ix=or();ex("]");n={type:"Member",obj:n,prop:ix,computed:true};}
+    else if(pk().v==="("){if(n.type!=="Id")throw{code:"EXPRESSION_NOT_ALLOWED"};eat();const a=[];if(pk()&&pk().v!==")"){a.push(or());while(pk()&&pk().v===","){eat();a.push(or());}}ex(")");n={type:"Call",name:n.name,args:a};}else break;}return n;}
+  function pr(){const x=pk();if(!x)throw{code:"EXPRESSION_PARSE_ERROR"};if(x.t==="num"){eat();return{type:"Lit",v:x.v};}if(x.t==="str"){eat();return{type:"Lit",v:x.v};}if(x.t==="bool"){eat();return{type:"Lit",v:x.v};}if(x.t==="null"){eat();return{type:"Lit",v:null};}if(x.t==="id"){eat();return{type:"Id",name:x.v};}if(x.v==="("){eat();const e=or();ex(")");return e;}if(x.v==="["){eat();const els=[];if(pk()&&pk().v!=="]"){els.push(or());while(pk()&&pk().v===","){eat();els.push(or());}}ex("]");return{type:"Array",els};}throw{code:"EXPRESSION_PARSE_ERROR"};}
+  const ast=or();if(p<tk.length)throw{code:"EXPRESSION_PARSE_ERROR"};return ast;}
+function showVal(v){
+  if(v===ABSENT)return "（値が無い）";
+  if(v===null)return "null";
+  if(typeof v==="string")return `"${v.length>24?v.slice(0,24)+"…":v}"（文字列）`;
+  if(typeof v==="number")return `${v}（数）`;
+  if(typeof v==="boolean")return `${v}（真偽値）`;
+  if(Array.isArray(v))return `配列（${v.length}個）`;
+  return "JSON（"+Object.keys(v||{}).slice(0,4).join(", ")+"）";
+}
+function evalExpr(ast,ctx){
+  const S=v=>{if(typeof v!=="string")throw{code:"EXPRESSION_EVALUATION_ERROR",message:`${showVal(v)} は文字列として扱えない`};return v;};
+  const N=v=>{if(typeof v!=="number")throw{code:"EXPRESSION_EVALUATION_ERROR",
+    message:`${showVal(v)} は数として比べられない`+(typeof v==="string"?"。返すノードの schema でその項目を integer / number にすると数で返る":"")};return v;};
+  const A=v=>{if(!Array.isArray(v))throw{code:"EXPRESSION_EVALUATION_ERROR",message:`${showVal(v)} は配列ではない`};return v;};
+  const B=v=>{if(v!==true&&v!==false)throw{code:"EXPRESSION_EVALUATION_ERROR",message:`${showVal(v)} は true/false ではない`};return v;};
+  const fns={len:a=>Array.isArray(a)?a.length:[...S(a)].length,has:a=>a!==ABSENT&&a!==null&&a!==undefined,regex:(t,p)=>new RegExp(S(p)).test(S(t)),count:(arr,v)=>A(arr).filter(x=>x===v).length,min:(...a)=>Math.min(...a.map(N)),max:(...a)=>Math.max(...a.map(N)),json_parse:t=>JSON.parse(S(t)),json_stringify:v=>JSON.stringify(v)};
+  // 参照が外れたときは「何が無かったか」を必ず文にする（[object Object] を出さない）
+  const near=(o,k)=>Object.keys(o||{}).slice(0,8).join(", ")||"（空）";
+  const rid=name=>{if(name in ctx.root)return ctx.root[name];
+    throw{code:"REFERENCE_ERROR",message:`${name} が無い（使えるのは: ${near(ctx.root)}）`};};
+  function mem(o,pr){
+    if(o===ABSENT||o===null||o===undefined)throw{code:"REFERENCE_ERROR",message:`${pr} を読もうとしたが、その手前が空（まだ値が無い）`};
+    if(typeof o==="string")throw{code:"REFERENCE_ERROR",message:`${pr} を読もうとしたが、そこは文章（JSONではない）。読みたいノードに schema を付けると JSON で返る`};
+    if(typeof o==="number"||typeof o==="boolean")throw{code:"REFERENCE_ERROR",message:`${pr} を読もうとしたが、そこは ${typeof o==="number"?"数値":"真偽値"}（中に項目は無い）`};
+    if(typeof o==="object"){if(pr in o)return o[pr];
+      throw{code:"REFERENCE_ERROR",message:`${pr} がその中に無い（あるのは: ${near(o)}）`};}
+    throw{code:"REFERENCE_ERROR",message:`${pr} が読めない`};}
+  function ev(n){switch(n.type){case"Lit":return n.v;case"Array":return n.els.map(ev);case"Id":return rid(n.name);
+    case"Member":{const o=ev(n.obj);const p=n.computed?ev(n.prop):n.prop;const v=mem(o,p);return v===ABSENT?null:v;}
+    case"Unary":if(n.op==="!")return !B(ev(n.x));if(n.op==="-")return -N(ev(n.x));break;
+    case"Call":if(!FNS.has(n.name))throw{code:"EXPRESSION_NOT_ALLOWED"};return fns[n.name](...n.args.map(ev));case"Binary":return bo(n.op,n.l,n.r);}throw{code:"EXPRESSION_NOT_ALLOWED"};}
+  function bo(op,ln,rn){if(op==="&&")return B(ev(ln))?B(ev(rn)):false;if(op==="||")return B(ev(ln))?true:B(ev(rn));const a=ev(ln),b=ev(rn);
+    switch(op){case"==":return a===b;case"!=":return a!==b;case"<":return N(a)<N(b);case"<=":return N(a)<=N(b);case">":return N(a)>N(b);case">=":return N(a)>=N(b);case"+":if(typeof a==="number"&&typeof b==="number")return a+b;if(typeof a==="string"&&typeof b==="string")return a+b;throw{code:"EXPRESSION_EVALUATION_ERROR"};case"-":return N(a)-N(b);case"*":return N(a)*N(b);case"/":return N(a)/N(b);case"%":return N(a)%N(b);}throw{code:"EXPRESSION_NOT_ALLOWED"};}
+  return ev(ast);}
+const compileExpr=s=>parseE(tokenize(s));
+function evalBool(src,ctx){const v=evalExpr(compileExpr(src),ctx);
+  if(v!==true&&v!==false)throw{code:"EXPRESSION_EVALUATION_ERROR",message:`式の答えが true/false にならない: "${src}"`};return v;}
+function evalValAt(src,ctx,where){
+  try{return evalExpr(compileExpr(src),ctx);}
+  catch(e){throw{code:e.code||"EXPRESSION_EVALUATION_ERROR",retryable:false,
+    message:`${where} の式が読めない: "${src}"`+(e.message?` — ${e.message}`:"")};}
+}
+function evalBoolAt(src,ctx,where){
+  try{return evalBool(src,ctx);}
+  catch(e){throw{code:e.code||"EXPRESSION_EVALUATION_ERROR",retryable:false,
+    message:`${where} の式が読めない: "${src}"`+(e.message?` — ${e.message}`:"")};}
+}
+function jsWorkerSrc(){
+  return `onmessage=function(e){var d=e.data;try{`
+    +`var f=Function.apply(null,d.names.concat(['"use strict";'+d.code]));`
+    +`var v=f.apply(null,d.vals);`
+    +`postMessage({id:d.id,ok:true,undef:v===undefined,v:v===undefined?null:v});`
+    +`}catch(err){postMessage({id:d.id,ok:false,err:String((err&&err.message)||err)});}};`;
+}
+const JS_RESERVED=new Set(("break case catch class const continue debugger default delete do else enum export extends "
+ +"false finally for function if implements import in instanceof interface let new null package private protected public "
+ +"return static super switch this throw true try typeof var void while with yield await arguments eval undefined NaN Infinity")
+ .split(" "));
+const _varOk=new Map();
+const okVarName=v=>{
+  const t=String(v==null?"":v);
+  if(_varOk.has(t))return _varOk.get(t);
+  let r=false;
+  if(t&&!/\s/.test(t)&&!JS_RESERVED.has(t)){try{new Function(t,"return 0");r=true;}catch(_){r=false;}}
+  _varOk.set(t,r);return r;};
+function localsOf(rv,ex){
+  const o={value:rv?rv.value:null,iteration:(ex&&ex.iteration)||1};
+  const v=rv?rv.value:null;
+  if(v&&typeof v==="object"&&!Array.isArray(v))
+    for(const[k,x]of Object.entries(v))if(!(k in o)&&okVarName(k))o[k]=x;
+  return o;
+}
+function mustacheRender(tpl,scope,opt){
+  const escape=!(opt&&opt.escape===false);
+  let out="",i=0;
+  while(i<tpl.length){
+    const open=tpl.indexOf("{{",i);
+    if(open<0){out+=tpl.slice(i);break;}
+    out+=tpl.slice(i,open);
+    if(tpl.startsWith("{{{",open)){
+      const close=tpl.indexOf("}}}",open+3);if(close<0)throw{code:"TEMPLATE_NOT_ALLOWED",message:"unterminated"};
+      const key=tpl.slice(open+3,close).trim();
+      if(!/^[^\s{}.]+(?:\.[^\s{}.]+)*$/.test(key))throw{code:"TEMPLATE_NOT_ALLOWED",message:"使えない差し込み名: "+key};
+      const v=getPath(scope,key);out+=typeof v==="string"?v:JSON.stringify(v);i=close+3;
+    }else{
+      const close=tpl.indexOf("}}",open+2);if(close<0)throw{code:"TEMPLATE_NOT_ALLOWED",message:"unterminated"};
+      const inner=tpl.slice(open+2,close).trim();
+      if(/^[#^\/>&=!]/.test(inner)||!/^[A-Za-z0-9_.]+$/.test(inner))throw{code:"TEMPLATE_NOT_ALLOWED",message:"禁止タグ: {{"+inner+"}}"};
+      const v=getPath(scope,inner);const str=typeof v==="string"?v:JSON.stringify(v);
+      out+=escape?str.replace(/&/g,"&amp;").replace(/\\/g,"&#92;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;"):str;i=close+2;
+    }
+  }
+  return out;
+}
+function getPath(scope,key){const parts=key.split(".");let cur=scope;for(const p of parts){if(cur==null)return "";cur=cur[p];}return cur==null?"":cur;}
+const rvToText=rv=>rv==null?"":(rv.type==="text"?String(rv.value):JSON.stringify(rv.value));
+const MERGE_OPS=["concat","numbered","markdown","csv","json_array"];
+function mergeInputs(list,merge){
+  const m=merge||{};const labels=m.labels||[];
+  const vals=list.map(rvToText);
+  const lab=i=>labels[i]!=null?String(labels[i]):null;
+  switch(m.op||"concat"){
+    case "numbered":return vals.map((t,i)=>`${i+1}. ${lab(i)?lab(i)+": ":""}${t}`).join("\n");
+    case "markdown":return vals.map((t,i)=>lab(i)?`## ${lab(i)}\n\n${t}`:`- ${t}`).join("\n\n");
+    case "csv":return (labels.length?labels.map(csvCell).join(",")+"\n":"")+vals.map(csvCell).join(",");
+    case "json_array":return JSON.stringify(list.map(rv=>rv?rv.value:null));
+    default:return vals.join(m.sep||"\n");
+  }
+}
+function mergeToRV(list,merge){
+  const op=(merge&&merge.op)||"concat";
+  if(op==="json_array")return{type:"json",value:list.map(rv=>rv?rv.value:null)};
+  return{type:"text",value:mergeInputs(list,merge)};
+}
+function estTokensMin(text){
+  const t=String(text==null?"":text);
+  let wide=0,narrow=0;
+  for(const ch of t){
+    const c=ch.codePointAt(0);
+    if(c>=0x1100&&c<=0xFFEF&&!(c>=0xFF61&&c<=0xFF9F))wide++;else narrow++;
+  }
+  return Math.ceil(wide/1.5+narrow/4);
+}
+function contextWindowOf(def,node){
+  const ov=(node&&node.overrides&&node.overrides.context_window_size)
+    ||(def&&def.overrides&&def.overrides.context_window_size);
+  const cs=(node&&node.contextSize)||(def&&def.contextSize);
+  const v=Number(ov||cs||0);
+  return v>0?v:null;
+}
+function effectiveOverrides(def,node){
+  const base=(node.model&&def.model&&node.model!==def.model)?{}:(def.overrides||{});
+  const o=Object.assign({},base,node.overrides||{});
+  return Object.keys(o).length?o:null;
+}
+const joinLabel=(node,i)=>(node.labels&&node.labels[i]!=null)?String(node.labels[i]):null;
+const joinText=v=>typeof v==="string"?v:JSON.stringify(v);
+const csvCell=v=>{const t=joinText(v);return /[",\n]/.test(t)?'"'+t.replace(/"/g,'""')+'"':t;};
+const REDUCE_OPS=[
+  {v:"sum",t:"合計"},{v:"average",t:"平均"},
+  {v:"min",t:"いちばん小さい数"},{v:"max",t:"いちばん大きい数"},
+  {v:"count",t:"個数"},
+  {v:"all",t:"全部あてはまる（true / false）"},{v:"any",t:"どれかあてはまる（true / false）"},
+  {v:"first",t:"最初のもの（要素をそのまま）"},{v:"last",t:"最後のもの（要素をそのまま）"},
+  {v:"best",t:"いちばん良いもの（要素をそのまま）"},{v:"worst",t:"いちばん悪いもの（要素をそのまま）"}];
+const REDUCE_OP_SET=new Set(REDUCE_OPS.map(x=>x.v));
+function atPath(v,path){
+  const p=String(path==null?"":path).trim();
+  if(!p)return v;
+  let cur=v;
+  for(const k of p.split(".")){if(cur==null||typeof cur!=="object")return undefined;cur=cur[k];}
+  return cur;
+}
+const rvVal=x=>(x&&typeof x==="object"&&"type" in x&&"value" in x)?x.value:x;
+function listOfInputs(inputs){
+  const ks=Object.keys(inputs);
+  const first=ks.length?inputs[ks[0]]:undefined;
+  if(Array.isArray(first)){
+    const vs=first.map(rvVal);
+    return (vs.length===1&&Array.isArray(vs[0]))?vs[0]:vs;   // 配列が1つだけ来たとき
+  }
+  const v=rvVal(first);
+  return Array.isArray(v)?v:(v===undefined?[]:[v]);
+}
+function runReduce(node,inputs){
+  const items=listOfInputs(inputs);
+  const op=node.op||"sum",path=node.path||"";
+  const where=`${node.id} のまとめ`;
+  const at=(x,i)=>{
+    const v=atPath(x,path);
+    if(v===undefined&&path){
+      if(node.skipMissing)return undefined;
+      throw{code:"REDUCE_PATH_MISSING",retryable:false,
+        message:`${where}: ${i+1}番目に "${path}" が無い（来たのは ${showVal(x)}）。見る場所を変えるか「無いものは飛ばす」にする`};}
+    return v;};
+  const num=(x,i)=>{const v=at(x,i);if(v===undefined)return undefined;
+    const q=typeof v==="number"?v:Number(v);
+    if(!isFinite(q))throw{code:"REDUCE_NOT_NUMBER",retryable:false,
+      message:`${where}: ${i+1}番目の ${path||"値"} が数ではない（${showVal(v)}）`};
+    return q;};
+  if(op==="count")return rvOf(items.length);
+  if(!items.length)throw{code:"REDUCE_EMPTY",retryable:false,message:`${where}: まとめる値が1つも来ていない`};
+  if(op==="first")return rvOf(items[0]);
+  if(op==="last")return rvOf(items[items.length-1]);
+  if(op==="all"||op==="any"){
+    const bs=items.map((x,i)=>!!at(x,i));
+    return rvOf(op==="all"?bs.every(Boolean):bs.some(Boolean));}
+  if(op==="best"||op==="worst"){
+    let bi=-1,bv=0;
+    items.forEach((x,i)=>{const v=num(x,i);if(v===undefined)return;
+      if(bi<0||(op==="best"?v>bv:v<bv)){bi=i;bv=v;}});
+    if(bi<0)throw{code:"REDUCE_EMPTY",retryable:false,message:`${where}: 比べられる数が1つも無い`};
+    return rvOf(items[bi]);}
+  const ns=[];items.forEach((x,i)=>{const v=num(x,i);if(v!==undefined)ns.push(v);});
+  if(!ns.length)throw{code:"REDUCE_EMPTY",retryable:false,message:`${where}: 数として見られる値が1つも無い`};
+  if(op==="sum")return rvOf(ns.reduce((a,b)=>a+b,0));
+  if(op==="average")return rvOf(ns.reduce((a,b)=>a+b,0)/ns.length);
+  if(op==="min")return rvOf(Math.min.apply(null,ns));
+  if(op==="max")return rvOf(Math.max.apply(null,ns));
+  throw{code:"REDUCE_OP",retryable:false,message:`${where}: 知らないまとめ方 "${op}"`};
+}
+const ASSERT_SEVERITY=["fail","warn","info"];
+function runJoin(node,inputs){const items=(inputs.items||[]).map(rv=>rv?rv.value:null);
+  const wrap=t=>(node.prefix?node.prefix+"\n\n":"")+t+(node.suffix?"\n\n"+node.suffix:"");
+  if(node.op==="json_array")return{type:"json",value:items};
+  if(node.op==="concat"){for(const x of items)if(typeof x!=="string")throw{code:"JOIN_TYPE_ERROR",message:"concat は文字列だけをつなぐ（JSONが来た）。markdown か csv を使うか、transform json_stringify を付ける"};
+    return{type:"text",value:wrap(items.join(node.sep||"\n"))};}
+  if(node.op==="markdown"){
+    const body=items.map((v,i)=>{const lb=joinLabel(node,i);
+      return lb?`## ${lb}\n\n${joinText(v)}`:`- ${joinText(v)}`;}).join("\n\n");
+    return{type:"text",value:wrap(body)};}
+  if(node.op==="csv"){
+    const head=(node.labels&&node.labels.length)?node.labels.map(csvCell).join(",")+"\n":"";
+    return{type:"text",value:wrap(head+items.map(csvCell).join(","))};}
+  if(node.op==="json_object"){const o={};
+    if(node.keys&&node.keys.length)node.keys.forEach(k=>o[k.key]=items[k.position]);
+    else if(node.labels&&node.labels.length)node.labels.forEach((k,i)=>o[String(k)]=items[i]);
+    else throw{code:"JOIN_OP_ERROR",message:"json_object には keys か labels（項目の名前）が要る"};
+    return{type:"json",value:o};}
+  if(node.op==="template")return{type:"text",value:wrap(mustacheRender(node.template&&node.template.value||"",{items,labels:node.labels||[]}))};
+  throw{code:"JOIN_OP_ERROR",message:"知らないまとめ方: "+node.op};}
+const rvOf=v=>typeof v==="string"?{type:"text",value:v}:{type:"json",value:v};
+function parsePick(pick){
+  const t=String(pick==null?"":pick).trim();if(!t)return null;
+  const parts=t.split(".");let key=null;
+  // 項目名は日本語でもよい（schema も式もノード名も日本語を許しているので、ここだけ ASCII にしない）。
+  // "items.0" のような数字の指定とは、先頭の文字で区別できる。
+  if(new RegExp("^"+IDRE+"$").test(parts[0])){key=parts[0];parts.shift();}
+  const rest=parts.join(".");
+  if(rest==="")return{key,from:null,to:null,range:false};
+  const m=/^(\d+)(?:\.\.(\d*))?$/.exec(rest);
+  if(!m)throw{code:"PICK_ERROR",retryable:false,message:`出口の取り出し方が読めない: ${pick}`};
+  return{key,from:+m[1],range:m[2]!==undefined,to:(m[2]===undefined||m[2]==="")?null:+m[2]};
+}
+function pickValue(rv,pick){
+  const q=parsePick(pick);if(!q||rv===undefined||rv===null)return rv;
+  let v=rv.value;
+  if(q.key!=null){
+    if(v==null||typeof v!=="object"||Array.isArray(v))
+      throw{code:"PICK_ERROR",retryable:false,message:`${q.key} を取り出せない（返ってきたのは ${showVal(v)}）。返すノードの出力の形に ${q.key} を入れる`};
+    if(!(q.key in v))
+      throw{code:"PICK_ERROR",retryable:false,message:`${q.key} がその中に無い（あるのは: ${Object.keys(v).join(", ")||"なし"}）`};
+    v=v[q.key];
+  }
+  if(q.from!=null){
+    const arr=Array.isArray(v)?v:(v&&Array.isArray(v.items)?v.items:null);
+    if(!arr)throw{code:"PICK_ERROR",retryable:false,message:`リストではないので ${q.from+1} 個目を取り出せない（来たのは ${showVal(v)}）`};
+    if(q.range)v=arr.slice(q.from,q.to==null?undefined:q.to+1);
+    else{
+      if(q.from>=arr.length)throw{code:"PICK_ERROR",retryable:false,message:`リストに ${q.from+1} 個目が無い（${arr.length}個しかない）`};
+      v=arr[q.from];}
+  }
+  return rvOf(v);
+}
+function applyEdgeAndValidate(rv,edge,toNode,toPort){
+  if(rv===undefined)return undefined;
+  let v=rv;
+  if(edge.pick)v=pickValue(v,edge.pick);      // 受け取る側で「どの項目を使うか」を決めているとき
+  if(edge.transform==="json_stringify"){if(v.type!=="json"&&v.type!=="text")throw{code:"TYPE_MISMATCH",message:"json_stringify対象がjson/textでない"};v={type:"text",value:typeof v.value==="string"?v.value:JSON.stringify(v.value)};}
+  else if(edge.transform==="json_parse"){if(v.type!=="text")throw{code:"TYPE_MISMATCH",message:"json_parse対象がtextでない"};v={type:"json",value:JSON.parse(v.value)};}
+  else if(edge.transform==="list_to_text"){
+    const arr=Array.isArray(v.value)?v.value:(v.value&&Array.isArray(v.value.items)?v.value.items:null);
+    if(!arr)throw{code:"TYPE_MISMATCH",message:`list_to_text は配列か {"items":[…]} にだけ使える（来たのは ${showVal(v.value)}）`};
+    v={type:"text",value:arr.map(x=>"- "+(typeof x==="string"?x:JSON.stringify(x))).join("\n")};
+  }
+  const portDef=toNode&&toNode.inputs&&toNode.inputs[toPort];
+  const want=portDef&&portDef.type;
+  const bypass=edge.validation&&edge.validation.typeCheck==="bypass";
+  if(want&&want!==v.type&&!bypass&&want!=="any"){throw{code:"TYPE_MISMATCH",message:`型不一致: ${v.type} → ${want} (transform/bypass未指定)`};}
+  return v;
+}
+function errText(e){
+  if(e==null)return "（理由不明）";
+  if(typeof e==="string")return e;
+  if(e.message)return String(e.message);
+  if(e instanceof Error)return e.name+": "+e.message;
+  const c=e.code?String(e.code):"";
+  const rest=Object.keys(e).filter(k=>k!=="code").map(k=>`${k}=${typeof e[k]==="object"?JSON.stringify(e[k]):e[k]}`).join(" ");
+  return (c||"ERROR")+(rest?" "+rest:"");
+}
+function closeJSON(t){
+  let s2=String(t).trim();
+  let inStr=false,esc=false;const stack=[];
+  for(const ch of s2){
+    if(inStr){if(esc)esc=false;else if(ch==="\\")esc=true;else if(ch==='"')inStr=false;continue;}
+    if(ch==='"')inStr=true;
+    else if(ch==="{")stack.push("}");
+    else if(ch==="[")stack.push("]");
+    else if(ch==="}"||ch==="]")stack.pop();
+  }
+  if(esc)s2=s2.slice(0,-1);
+  if(inStr)s2+='"';
+  while(stack.length)s2+=stack.pop();
+  return s2;
+}
+function stripFence(t){const s=String(t).trim();const m=s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);return m?m[1]:s;}
+return{ABSENT,IDRE,tokenize,evalExpr,compileExpr,evalValAt,evalBoolAt,jsWorkerSrc,okVarName,localsOf,mustacheRender,rvToText,mergeInputs,mergeToRV,estTokensMin,contextWindowOf,effectiveOverrides,runReduce,ASSERT_SEVERITY,runJoin,rvOf,pickValue,applyEdgeAndValidate,errText,closeJSON,stripFence,showVal,atPath,listOfInputs};
+})();
+/*#END-HARNESS-COPY*/
+const isJ=v=>v!==null&&typeof v==='object'&&'json' in v&&!('err' in v);
+function hEnc(rv){
+  const v=rv?rv.value:null;
+  if(rv&&rv.type==='text')return String(v);
+  if((typeof v==='number'&&isFinite(v))||typeof v==='boolean')return v;
+  return{json:v===undefined?null:v};
+}
+function hDec(x){
+  x=scalar(x);if(isErr(x))throw x;
+  if(isJ(x))return{type:'json',value:x.json};
+  if(typeof x==='number'||typeof x==='boolean')return{type:'json',value:x};
+  if(x===null||x===undefined)return{type:'text',value:''};
+  if(x.fnv)throw ERR('#VALUE!','LAMBDA は値として渡せない');
+  return{type:'text',value:String(x)};
+}
+/* ハーネスの失敗（{code,message}）をセルのエラーにする。code は文の頭に残す */
+const hErr=e=>isErr(e)?e:ERR('#NODE!',`${(e&&e.code)||'ERROR'}: ${HX.errText(e)}`);
+function hTry(f){try{return f()}catch(e){if(isErr(e)||e instanceof RangeError)throw e;throw hErr(e)}}
+const jsonArg=(t,what)=>{const s=t?toStr(V(t)).trim():'';if(!s)return undefined;try{return JSON.parse(s)}catch(e){throw ERR('#VALUE!',`${what} の JSON が読めない`)}};
+/* 文脈の窓に入るか（harness の checkContextFits と同じ数え方・同じ文）。入らなければ {code,message} を返す */
+function hCtxOver(def,node,messages,gen){
+  if((node.onContextOverflow||'error')==='send')return null;
+  const win=HX.contextWindowOf(def,node);if(!win)return null;
+  const chars=messages.reduce((a,m)=>a+[...String(m.content||'')].length,0);
+  const est=messages.reduce((a,m)=>a+HX.estTokensMin(m.content),0);
+  const out=(gen&&gen.maxTokens)!=null?Number(gen.maxTokens):256;
+  const need=est+out;if(need<=win)return null;
+  const how=`送る文 ${chars}字（少なく見ても約${est}トークン）＋ maxTokens ${out} = 約${need} > 窓 ${win}`;
+  return{code:'CONTEXT_OVERFLOW',retryable:false,message:`${node.id||'LLMNODE'}: 文脈の窓に入らないので送らなかった（${how}）。`
+    +`このまま送ると端末が落ちることがあるので止めた。`
+    +`直し方: 窓（contextSize / overrides.context_window_size）を大きくする／`
+    +`本文に入れる値を減らす（{{{in}}} で JSON をまるごと入れていないか。線の pick で必要な項目だけにする）／`
+    +`maxTokens を下げる。そのまま送りたいときは onContextOverflow:"send"`};
+}
+/* LLM ノード1つ。provider の決め方・generation の重ね方・schema は harness の invokeNode と同じ */
+LLMCore.callNode=function(a){
+  need(a,3,5);
+  const pname=toStr(V(a[0])).trim()||((wb.llm&&wb.llm.def)||'local');
+  const sysV=V(a[1]);const system=sysV===null?null:toStr(sysV);
+  const user=toStr(V(a[2]));
+  const schemaArg=jsonArg(a[3],'schema');
+  const cf=jsonArg(a[4],'設定')||{};
+  const L=wb.llm||DEFAULT_LLM();const base=(L.providers||{})[pname];
+  if(!base)throw ERR('#LLM!',`provider「${pname}」が設定に無い（LLM の設定で足す）`);
+  if(!base.adapter)throw ERR('#LLM!',`provider「${pname}」に adapter が無い`);
+  const def=JSON.parse(JSON.stringify(base));
+  const node={id:cf.id||null,model:cf.model,contextSize:cf.contextSize,overrides:cf.overrides,
+    onTruncate:cf.onTruncate||'error',onBadOutput:cf.onBadOutput||'error',onContextOverflow:cf.onContextOverflow||'error'};
+  const model=node.model||def.model||null;
+  if(node.contextSize)def.contextSize=node.contextSize;
+  const ov=HX.effectiveOverrides(def,node);if(ov)def.overrides=ov;else delete def.overrides;
+  if(model)def.model=model;
+  const generation=Object.assign({},def.generation||{},cf.generation||{});
+  const schema=schemaArg||def.schema||null;
+  const messages=[];
+  if(system!==null)messages.push({role:'system',content:system});
+  messages.push({role:'user',content:user});
+  const over=hCtxOver(def,node,messages,generation);
+  if(over)throw ERR('#LLM!',`${over.code}: ${over.message}`);
+  const pol={onTruncate:node.onTruncate,onBadOutput:node.onBadOutput,onContextOverflow:node.onContextOverflow};
+  const key=hashStr(JSON.stringify({def,messages,schema,generation,pol}));
+  const req={key,def,messages,schema,generation,mode:'node',pname,node,
+    label:(node.id?node.id+': ':'')+user.replace(/\s+/g,' ').slice(0,40)};
+  if(evalCell){let s=cellLLM.get(evalCell);if(!s){s=new Set();cellLLM.set(evalCell,s)}s.add(req.key)}
+  const hit=this.results.get(req.key);
+  if(hit)return hEnc({type:hit.t||(schema?'json':'text'),value:hit.v});
+  const er=this.errors.get(req.key);
+  if(er)throw Object.assign(ERR('#LLM!',`${er.code}: ${er.message}`),er.code==='CANCELLED'?{cancelled:true}:{});
+  if(this.running&&this.running.key===req.key)throw ERR('#実行中','LLM が答えを書いている');
+  if(this.queued.has(req.key))throw ERR('#待機中','順番待ち（LLM は1本ずつ呼ぶ）');
+  if(wb.llm&&wb.llm.auto&&this.enqueue){this.enqueue(req);throw ERR('#待機中','順番待ち（LLM は1本ずつ呼ぶ）')}
+  this.pending.set(req.key,req);
+  throw ERR('#未実行','「LLMを実行」で動かす（手動モード）');
+};
+/* 計算ノード（JavaScript）。画面の側が Worker で動かし、答えを覚えておく（同じ入力なら動かし直さない）。
+   LLM と違って手動モードでも自動で動かす（推論しないので重くない）。3秒で打ち切るのは harness と同じ */
+const JSCore={
+  results:new Map(),errors:new Map(),queued:new Set(),running:new Set(),
+  enqueue:null,                       // 画面の側が差し込む（エンジンだけのテストでは自分で差し込む）
+  call(code,scope,where){
+    const names=Object.keys(scope),vals=Object.values(scope);
+    const key=hashStr(JSON.stringify({code,names,vals}));
+    if(this.results.has(key))return this.results.get(key);
+    const er=this.errors.get(key);if(er)throw hErr(er);
+    if(this.running.has(key))throw ERR('#実行中','JavaScript を動かしている');
+    if(this.queued.has(key))throw ERR('#待機中','JavaScript の順番待ち');
+    if(this.enqueue){this.enqueue({key,code,names,vals,where});
+      if(this.results.has(key))return this.results.get(key);
+      const e2=this.errors.get(key);if(e2)throw hErr(e2);
+      throw ERR('#待機中','JavaScript の順番待ち')}
+    throw ERR('#未実行','JavaScript を動かす場所が無い');
+  },
+};
+/* JS / HEXPR の引数（名前, 値, …）から、harness の calcScope と同じ名前の表を作る。
+   "@iteration" "@value" "@index" は周回・Map の1件の値・番号、"@node" はノード名（文に使う）、
+   "#ノード名" は式から「ノード名.out」で読む値 */
+function hScope(a,from){
+  if((a.length-from)%2)throw ERR('#VALUE!','名前と値を組にして渡す（名前, 値, 名前, 値, …）');
+  const scope={},list=[],late={},views={};let id=null;
+  for(let i=from;i<a.length;i+=2){
+    const nm=toStr(V(a[i]));
+    if(nm==='@node'){id=toStr(V(a[i+1]));continue}
+    const rv=hDec(a[i+1]());
+    if(nm[0]==='@'){late[nm.slice(1)]=rv.value;continue}
+    if(nm[0]==='#'){views[nm.slice(1)]={out:rv.value,type:rv.type,valid:true,status:'success'};continue}
+    scope[nm]=rv.value;list.push(rv.value);
+  }
+  scope.inputs=list;scope.iteration=late.iteration!=null?late.iteration:1;
+  if('value' in late&&!('value' in scope))scope.value=late.value;
+  if('index' in late&&!('index' in scope))scope.index=late.index;
+  return{scope,views,id,late};
+}
+const hRoot=views=>Object.assign({vars:{},loop:{id:null,iteration:null,max:null}},views);
+const H_STRUCT_ERRS=['#NAME?','#ERROR!','#REF!','#CIRC!','#LOOP!'];
+Object.assign(FN,{
+  /* 値を見る・作る */
+  HTEXT:a=>{need(a,1);return HX.rvToText(hDec(a[0]()))},
+  HJSON:a=>{need(a,1);const t=toStr(V(a[0]));let v;try{v=JSON.parse(t)}catch(e){throw ERR('#VALUE!','JSON として読めない: '+t.slice(0,30))}return hEnc({type:'json',value:v})},
+  JSONGET:a=>{need(a,2);const rv=hDec(a[0]());
+    if(rv.type!=='json')throw ERR('#VALUE!','JSON ではない（文章）。文章を JSON として読むときは HJSON(…) を通す');
+    const v=HX.atPath(rv.value,toStr(V(a[1])));if(v===undefined)throw ERR('#N/A','その場所に値が無い: '+toStr(V(a[1])));
+    return typeof v==='string'?v:hEnc({type:'json',value:v})},
+  /* 線（受け取る側で決めること） */
+  HPICK:a=>{need(a,2);const rv=hDec(a[0]()),p=toStr(V(a[1]));return hTry(()=>hEnc(HX.pickValue(rv,p)))},
+  HTRANSFORM:a=>{need(a,2);const rv=hDec(a[0]()),t=toStr(V(a[1]));return hTry(()=>hEnc(HX.applyEdgeAndValidate(rv,{transform:t},null,null)))},
+  HTYPE:a=>{need(a,2);const rv=hDec(a[0]()),t=toStr(V(a[1]));return hTry(()=>hEnc(HX.applyEdgeAndValidate(rv,{},{inputs:{in:{type:t}}},'in')))},
+  HMERGE:a=>{if(a.length<2)throw ERR('#VALUE!','HMERGE(受け取り方, 値, …)');const m=jsonArg(a[0],'受け取り方')||{};
+    const list=a.slice(1).map(t=>hDec(t()));return hTry(()=>hEnc(HX.mergeToRV(list,m)))},
+  /* LLM ノード */
+  HTEMPLATE:a=>{need(a,1,3);const tpl=toStr(V(a[0]));const inText=a[1]?HX.rvToText(hDec(a[1]())):'';
+    const it=a[2]?toNum(V(a[2])):1;
+    const scope={in:inText,inputs:{in:inText},iteration:it,vars:{},run_input:undefined};
+    return hTry(()=>HX.mustacheRender(tpl,scope,{escape:false}))},
+  LLMNODE:a=>LLMCore.callNode(a),
+  /* 計算ノード */
+  JS:a=>{if(!a.length)throw ERR('#VALUE!','JS(コード, 名前, 値, …)');const code=toStr(V(a[0]));const{scope,id}=hScope(a,1);
+    const where=`${id||'JS'} の計算`;
+    if(!String(code).trim())throw hErr({code:'CODE_EMPTY',message:`${where}: 中身が書かれていない`});
+    const v=JSCore.call(code,scope,where);return hEnc(HX.rvOf(v===undefined?null:v))},
+  HEXPR:a=>{if(!a.length)throw ERR('#VALUE!','HEXPR(式, 名前, 値, …)');const code=toStr(V(a[0]));const{scope,views,id}=hScope(a,1);
+    const where=`${id||'HEXPR'} の計算`;
+    if(!String(code).trim())throw hErr({code:'CODE_EMPTY',message:`${where}: 中身が書かれていない`});
+    return hTry(()=>{const v=HX.evalValAt(code,{root:Object.assign(hRoot(views),scope)},where);return hEnc(HX.rvOf(v===undefined?null:v))})},
+  /* 点検（式だけ）。HASSERT(点検の並び, onFail, 入ってきた値, "#ノード名", 値, …) */
+  HASSERT:a=>{if(a.length<3)throw ERR('#VALUE!','HASSERT(点検の並び, onFail, 値, …)');
+    const list=jsonArg(a[0],'点検の並び');const onFail=a[1]?toStr(V(a[1])):'';const inRV=hDec(a[2]());
+    const{views,id,late}=hScope(a,3);const nid=id||'HASSERT';
+    return hTry(()=>{
+      if(!Array.isArray(list)||!list.length)throw{code:'ASSERT_EMPTY',retryable:false,message:`${nid}: 点検する条件が1つも書かれていない`};
+      const locals=Object.assign(HX.localsOf(inRV,{iteration:late.iteration}),'index' in late?{index:late.index}:{});
+      const tests=[];
+      for(let i=0;i<list.length;i++){const t=list[i]||{};const name=String(t.name||('点検'+(i+1)));
+        const sev=HX.ASSERT_SEVERITY.includes(t.severity)?t.severity:'fail';let pass=false,err=null;
+        try{if((t.lang||'expr')==='js')throw{code:'NOT_SUPPORTED',message:'方眼では点検の JavaScript は動かさない'};
+          pass=HX.evalBoolAt(t.expr,{root:Object.assign(hRoot(views),locals)},`${nid} の「${name}」`)}
+        catch(e){pass=false;err=HX.errText(e)}
+        tests.push({name,expr:String(t.expr||''),severity:sev,pass,error:err})}
+      const failed=tests.filter(t=>!t.pass&&t.severity==='fail').length,warned=tests.filter(t=>!t.pass&&t.severity==='warn').length;
+      const out={total:tests.length,passed:tests.filter(t=>t.pass).length,failed,warned,info:tests.filter(t=>!t.pass&&t.severity==='info').length,tests};
+      if(failed&&onFail==='error')throw{code:'ASSERT_FAILED',retryable:false,message:`${nid}: 点検に落ちた（${failed}件）: `
+        +tests.filter(t=>!t.pass&&t.severity==='fail').map(t=>t.name+(t.error?'（'+t.error+'）':'')).join(' / ')};
+      return hEnc(HX.rvOf(out))})},
+  /* 結合・まとめ */
+  HJOIN:a=>{if(!a.length)throw ERR('#VALUE!','HJOIN(設定, 値, …)');const node=jsonArg(a[0],'結合の設定')||{};
+    const items=a.slice(1).map(t=>hDec(t()));return hTry(()=>hEnc(HX.runJoin(node,{items})))},
+  HREDUCE:a=>{if(a.length<2)throw ERR('#VALUE!','HREDUCE(設定, 値, …)');const node=jsonArg(a[0],'まとめの設定')||{};
+    const vs=a.slice(1).map(t=>hDec(t()));return hTry(()=>hEnc(HX.runReduce(node,{in:vs.length===1?vs[0]:vs})))},
+  /* Map: 配列を1件ずつ LAMBDA(値, 番号, …) に通して、答えを同じ順で配列にする。設定は {id, onItemError, onItemErrorValue} */
+  HMAP:a=>{need(a,2,3);const rv=hDec(a[0]());const f=fnOf(a[1]);const cf=jsonArg(a[2],'Map の設定')||{};
+    const nid=cf.id||'HMAP',pol=cf.onItemError||'error';const v=rv.value;
+    if(!Array.isArray(v))throw hErr({code:'MAP_NOT_ARRAY',retryable:false,message:`${nid}: Map に入れられるのは配列だけ（来たのは ${HX.showVal(v)}）。手前で配列にしてから渡す`});
+    const out=[];let wait=null,hard=null;
+    v.forEach((item,i)=>{
+      const r=tryErr(()=>scalar(callClosure(f,[hEnc(HX.rvOf(item)),i])));
+      if(isErr(r)){
+        if(PENDING_ERRS.includes(r.err)||r.cancelled||H_STRUCT_ERRS.includes(r.err)){if(!wait||H_STRUCT_ERRS.includes(r.err))wait=r;return}
+        if(pol==='skip')return;
+        if(pol==='null'){out.push(null);return}
+        if(pol==='value'){out.push(cf.onItemErrorValue===undefined?null:cf.onItemErrorValue);return}
+        if(!hard)hard=r;return;
+      }
+      out.push(hDec(r).value);
+    });
+    if(wait&&H_STRUCT_ERRS.includes(wait.err))throw wait;
+    if(hard)throw hard;
+    if(wait)throw wait;
+    return hEnc({type:'json',value:out})},
+  /* ノードの onError（value / null）。ONERROR(中身, "value"|"null", 代わりの値の JSON, 手前の値, …)
+     手前のノードの失敗・まだ来ていない値・止めた LLM は、代わりの値にしない（harness ではこのノードは動かないので） */
+  ONERROR:a=>{if(a.length<2)throw ERR('#VALUE!','ONERROR(中身, "value"|"null", 代わりの値, 手前の値, …)');
+    const pol=toStr(V(a[1]));
+    for(let i=3;i<a.length;i++){const x=a[i]();for(const y of flat(x))if(isErr(y))throw y}
+    try{const v=a[0]();const s=scalar(v);if(isErr(s))throw s;return v}
+    catch(e){
+      if(!isErr(e))throw e;
+      if(PENDING_ERRS.includes(e.err)||e.cancelled||H_STRUCT_ERRS.includes(e.err))throw e;
+      if(pol!=='value'&&pol!=='null')throw e;
+      const fb=pol==='value'?jsonArg(a[2],'代わりの値'):null;
+      return hEnc(HX.rvOf(fb===undefined?null:fb));
+    }},
+});
+FN_GROUPS.splice(2,0,['ハーネス','LLMNODE HTEMPLATE HTEXT JS HEXPR HMAP ONERROR HPICK HTRANSFORM HTYPE HMERGE HJOIN HREDUCE HASSERT HJSON JSONGET']);
+
 /* ---------- formula text transforms ---------- */
 function adjustFormula(f,cb){
   if(typeof f!=='string'||f[0]!=='=')return f;
@@ -688,7 +1223,7 @@ function normalizeInput(v){
   }).join('');
   return depthP>0?out+')'.repeat(depthP):out;
 }
-const ENGINE={get wb(){return wb},set wb(v){wb=v},recalc,cellValue,fmtVal,isErr,parseExpr,shiftFormula,adjustFormula,normalizeInput,LLMCore,FN,A1,parseA1,newSheet,fixBook,spillAt,DEFAULT_LLM};
+const ENGINE={get wb(){return wb},set wb(v){wb=v},recalc,cellValue,fmtVal,isErr,parseExpr,shiftFormula,adjustFormula,normalizeInput,LLMCore,FN,A1,parseA1,newSheet,fixBook,spillAt,DEFAULT_LLM,JSCore,HX,hEnc,hDec};
 /*#END-ENGINE*/
 
 const $=id=>document.getElementById(id);
@@ -1138,7 +1673,7 @@ function llmFollow(){
   if(!LLMQ.follow)return;
   const list=[...LLMCore.pending.values()].filter(r=>LLMQ.follow(r.key));
   list.forEach(r=>{LLMCore.enqueue(r);LLMCore.pending.delete(r.key)});
-  if(!list.length&&!LLMQ.queue.length&&!LLMCore.running)LLMQ.follow=null;
+  if(!list.length&&!LLMQ.queue.length&&!LLMCore.running&&!JSQ.busy&&!JSQ.queue.length)LLMQ.follow=null;
 }
 async function llmPump(){
   if(LLMCore.running||!LLMQ.queue.length){updateLLMChip();return}
@@ -1151,10 +1686,11 @@ async function llmPump(){
     const handle=await ModelManager.ensureLoaded(def,adapter,ac.signal,st=>{
       LLMQ.progress=st.status==='loading'?`読み込み ${Math.round((st.progress||0)*100)}%`+(st.text?` · ${String(st.text).slice(0,40)}`:''):'';updateLLMChip()});
     LLMQ.progress='';updateLLMChip();
-    const out=await adapter.invoke({providerDef:def,handle,model:def.model,input:{messages:job.messages},generation:job.generation,schema:job.schema,signal:ac.signal,
+    const out=job.node?await llmInvokeNode(job,def,adapter,handle,ac.signal)
+      :await adapter.invoke({providerDef:def,handle,model:def.model,input:{messages:job.messages},generation:job.generation,schema:job.schema,signal:ac.signal,
       onToken:()=>{}});
     if(out&&out.cancelled)LLMCore.errors.set(job.key,{code:'CANCELLED',message:'停止した（再実行で呼び直す）'});
-    else{LLMCore.results.set(job.key,{v:out.output.value,at:Date.now(),model:def.model||def.adapter,usage:out.usage||null});llmSaveCache()}
+    else{LLMCore.results.set(job.key,{v:out.output.value,t:out.output.type,at:Date.now(),model:def.model||def.adapter,usage:out.usage||null});llmSaveCache()}
   }catch(e){
     if(isAbort(e))LLMCore.errors.set(job.key,{code:'CANCELLED',message:'停止した（再実行で呼び直す）'});
     else{
@@ -1165,6 +1701,86 @@ async function llmPump(){
     LLMCore.running=null;LLMQ.ctrl=null;LLMQ.progress='';LLMQ.done++;
     if(!LLMQ.queue.length){LLMQ.done=0;LLMQ.total=0}
     paint();llmFollow();setTimeout(llmPump,0);
+  }
+}
+/* LLMNODE の1回ぶん。切れたとき（onTruncate）・形に合わなかったとき（onBadOutput）の扱いは harness の invokeNode と同じ:
+     retry … 切れたら maxTokens を倍にしてやり直す／形に合わなければもう一度聞く（どちらも2回まで）
+     use   … 切れたところまでを使う（JSON は閉じ直して、形を確かめる）
+   やり直しのたびに文脈の窓に入るかを測り直す（入らなければ送らない） */
+async function llmInvokeNode(job,def,adapter,handle,signal){
+  const node=job.node,schema=job.schema,pol=node.onTruncate||'error',badPol=node.onBadOutput||'error';
+  let gen=job.generation,tries=0,badTries=0,res=null;
+  for(;;){
+    try{
+      const over=hCtxOver(def,node,job.messages,gen);if(over)throw over;
+      res=await adapter.invoke({providerDef:def,handle,model:def.model,input:{messages:job.messages},generation:gen,schema,signal,onToken:()=>{}});
+    }catch(err){
+      if(err&&err.providerState==='needs_reset'&&!err._reset){err._reset=true;try{await ModelManager.resetFor(def,adapter)}catch(_){}}
+      if(err&&err.truncated&&pol==='retry'&&tries<2){tries++;gen=Object.assign({},gen,{maxTokens:(gen.maxTokens||256)*2});continue}
+      if(err&&err.code==='SCHEMA_VALIDATION_ERROR'&&!err.truncated&&badPol==='retry'&&badTries<2){badTries++;continue}
+      if(err&&err.truncated&&pol==='use'){
+        const t=String(err.partialText==null?'':err.partialText);
+        if(!schema)return{output:{type:'text',value:t},usage:err.usage,raw:t};
+        let v=null;try{v=JSON.parse(HX.closeJSON(HX.stripFence(t)))}catch(_){v=null}
+        if(v!==null){try{checkSchema(v,schema)}catch(e){throw Object.assign({},e,{usage:err.usage})}
+          return{output:{type:'json',value:v},usage:err.usage,raw:t}}
+        throw Object.assign({},err,{message:err.message+'（閉じ直しても JSON にならなかった）'});
+      }
+      throw err;
+    }
+    break;
+  }
+  if(res&&res.cancelled)return res;
+  if(!res||!res.output)throw{code:'PROVIDER_ERROR',retryable:false,message:'Providerがoutputを返さない'};
+  return res;
+}
+/* ---------- 計算ノード（JavaScript）を動かす（画面の側） ----------
+   harness の runJS と同じ: 別スレッド（Worker）で動かし、3秒で打ち切る。答えは JSCore に覚える。
+   Worker が作れない端末では同じ画面の中で動かす（その場合は打ち切れない）。 */
+const JSQ={queue:[],busy:false,limit:3000};
+let jsW=null,jsWBroken=false,jsWSeq=0;
+function jsWorkerGet(){
+  if(jsW||jsWBroken)return jsW;
+  try{jsW=new Worker(URL.createObjectURL(new Blob([HX.jsWorkerSrc()],{type:'text/javascript'})))}catch(e){jsWBroken=true;jsW=null}
+  return jsW;
+}
+function jsRunHere(job){
+  let v;try{v=new Function(...job.names,'"use strict";'+job.code)(...job.vals)}
+  catch(e){throw{code:'CODE_RUNTIME_ERROR',retryable:false,message:`${job.where}: 途中で止まった — ${errText(e)}`}}
+  if(v===undefined)throw{code:'CODE_NO_RETURN',retryable:false,message:`${job.where}: return で値を返していない`};
+  return v;
+}
+function jsRunOne(job){
+  const w=jsWorkerGet();
+  if(!w)return new Promise(r=>r(jsRunHere(job)));
+  const id=++jsWSeq,limit=JSQ.limit;let clean;
+  return new Promise((res,rej)=>{
+    const t=setTimeout(()=>{clean();try{jsW.terminate()}catch(_){}jsW=null;
+      rej({code:'CODE_TIMEOUT',retryable:false,message:`${job.where}: ${limit/1000}秒で終わらなかったので打ち切った（終わらない繰り返しを書いていないか）`})},limit);
+    const on=ev=>{const d=ev.data||{};if(d.id!==id)return;clean();
+      if(!d.ok)rej({code:'CODE_RUNTIME_ERROR',retryable:false,message:`${job.where}: 途中で止まった — ${d.err}`});
+      else if(d.undef)rej({code:'CODE_NO_RETURN',retryable:false,message:`${job.where}: return で値を返していない`});
+      else res(d.v)};
+    clean=()=>{clearTimeout(t);if(jsW)jsW.removeEventListener('message',on)};
+    w.addEventListener('message',on);
+    try{w.postMessage({id,code:job.code,names:job.names,vals:job.vals})}
+    catch(e){clean();rej({code:'CODE_RUNTIME_ERROR',retryable:false,message:`${job.where}: 値を渡せない — ${errText(e)}`})}
+  });
+}
+JSCore.enqueue=job=>{
+  if(JSCore.queued.has(job.key)||JSCore.running.has(job.key))return;
+  JSQ.queue.push(job);JSCore.queued.add(job.key);setTimeout(jsPump,0);
+};
+async function jsPump(){
+  if(JSQ.busy||!JSQ.queue.length)return;
+  JSQ.busy=true;const job=JSQ.queue.shift();JSCore.queued.delete(job.key);JSCore.running.add(job.key);
+  try{const v=await jsRunOne(job);JSCore.results.set(job.key,v)}
+  catch(e){JSCore.errors.set(job.key,e&&e.code?{code:e.code,message:errText(e)}:{code:'CODE_RUNTIME_ERROR',message:`${job.where}: ${errText(e)}`})}
+  finally{
+    JSCore.running.delete(job.key);JSQ.busy=false;
+    if(JSCore.results.size>3000)JSCore.results.clear();
+    paint();setTimeout(jsPump,0);
+    llmFollow();setTimeout(llmPump,0);           // 計算が済んで、次の LLM が呼べるようになったかもしれない
   }
 }
 function llmStop(){
@@ -1195,7 +1811,8 @@ function updateLLMChip(){
 function sheetLLMKeys(si){const keys=new Set();for(const[k,set]of cellLLM)if(k.startsWith(si+','))set.forEach(x=>keys.add(x));return keys}
 function updateDemoBar(){
   const bar=$('demoBar');if(!bar||!wb)return;const sh=S();
-  if(!sh.demo){bar.hidden=true;return}
+  if(!sh.demo&&!sh.harness){bar.hidden=true;return}
+  if(sh.harness)return updateHarnessBar(bar,sh);
   const keys=sheetLLMKeys(wb.active);let done=0,pend=0,err=null;
   for(const k of keys){if(LLMCore.results.has(k))done++;else if(LLMCore.errors.has(k))err=err||LLMCore.errors.get(k);else pend++}
   const busy=LLMCore.running||LLMQ.queue.length||LLMQ.follow;
@@ -1209,6 +1826,18 @@ function updateDemoBar(){
       +`押すと ${what} がセルを1つずつ埋め、集計の列もそれに合わせて変わります。初回だけモデル（約300MB）を取得し、2回目からは端末に残ります。`
       +(gpu?'':'この端末・ブラウザは WebGPU が使えないため端末内 LLM は動きません。「LLM」の設定で provider「device」を Ollama などに変えると実行できます。')+`</span>`}
   else{btn.hidden=true;tx.innerHTML=`<b>完了</b> · LLM の答え ${done}件<span class="sub">問い合わせを書き換えると、変わったセルだけ #未実行 になり、また実行できます。答えは端末に保存されます。</span>`}
+}
+/* ハーネスから来たシート: このシートの LLM だけを動かす（ほかのシートの #未実行 には触らない） */
+function updateHarnessBar(bar,sh){
+  const keys=sheetLLMKeys(wb.active);let done=0,pend=0,err=0;
+  for(const k of keys){if(LLMCore.results.has(k))done++;else if(LLMCore.errors.has(k))err++;else pend++}
+  const busy=LLMCore.running||LLMQ.queue.length||LLMQ.follow||JSQ.busy||JSQ.queue.length;
+  const tx=$('demoTx'),btn=$('demoRun');bar.hidden=false;
+  const nm=esc((sh.harness&&sh.harness.name)||sh.name);
+  if(busy){btn.hidden=true;tx.innerHTML=`<b>実行中</b> · ${LLMQ.progress?esc(LLMQ.progress):`LLM の答え ${done}件`}<span class="sub">ハーネス「${nm}」を上の行から順に計算している。下の「LLM 実行中」で止められる。</span>`}
+  else if(pend){btn.hidden=false;btn.textContent='▶ ハーネスを実行';
+    tx.innerHTML=`<b>ハーネス「${nm}」</b> · 1行が1ノード（C列が値）<span class="sub">押すと、このシートの LLM だけを順に呼ぶ。計算ノードは自動で動く。入力のセル（黄色）を書き換えると、変わったところから先がまた #未実行 になる。${err?` 失敗した LLM ${err}件はセルを選んで「再実行」。`:''}</span>`}
+  else{btn.hidden=true;tx.innerHTML=`<b>完了</b> · ハーネス「${nm}」 · LLM の答え ${done}件${err?` · 失敗 ${err}件`:''}<span class="sub">答えは端末に保存される。入力のセルを書き換えると、また実行できる。</span>`}
 }
 function demoRun(){
   const si=wb.active;const keys=sheetLLMKeys(si);keys.forEach(k=>LLMCore.errors.delete(k));paint();
@@ -1978,6 +2607,16 @@ on('bHelp',()=>{
     <code>=LOOP(B2, LAMBDA(s,i, LEN(s)>20), LAMBDA(s,i, LLM("もっと短くして", s)))</code>
   </div>
   <p>答えは provider の設定・送る文・形ごとに保存し、同じ問いでは呼び直しません。待っている間は <code>#待機中</code>・<code>#実行中</code>、手動モードでは <code>#未実行</code>。失敗は <code>#LLM!</code> になり、セルを選ぶと下に理由が出ます。自動では再試行しません。</p>
+  <h3>ハーネスを数式で動かす</h3>
+  <p>Harness Studio（harness.html）の「方眼で動かす」で、ハーネスを1行1ノードの数式にしたシートが入ります。C列がノードの値で、線はセルの参照です。上に出る「▶ ハーネスを実行」で、そのシートの LLM だけを順に呼びます。</p>
+  <div class="ex">
+    <code>=LLMNODE("local", system, HTEMPLATE("{{{in}}}", C3), schema, 設定)　LLM ノード</code>
+    <code>=JS("return a*2", "a", C3)　計算ノード（JavaScript。3秒で打ち切り）</code>
+    <code>=HMAP(C7, LAMBDA(_ITEM,_I, …), 設定)　配列の1件ずつ</code>
+    <code>=ONERROR(中身, "value", "{}", C3)　失敗したら決めた値</code>
+    <code>=JSONGET(C5, "items.0")　JSON の中を取り出す</code>
+  </div>
+  <p>JSON の値はセルに JSON の文で見えます（文字列の "5" と数の 5 は別）。中身の扱いは Harness Studio と同じコードです。</p>
   <div class="fnlist">${FN_GROUPS.map(([g,l])=>`<b>${g}</b>　${l.split(' ').join('、')}`).join('<br>')}</div>
   <p>内容はこのブラウザに自動保存されます。</p>
   <div class="row"><button class="btn solid" id="hDemo">「デモ」シートを追加</button><button class="btn solid" id="hEx">「関数の例」シートを追加</button><button class="btn primary" id="hClose">閉じる</button></div>`,p=>{
@@ -1989,15 +2628,46 @@ on('bHelp',()=>{
 let toastT=null;
 function toast(m){const t=$('toast');t.textContent=m;t.hidden=false;t.style.opacity='1';clearTimeout(toastT);toastT=setTimeout(()=>{t.style.opacity='0';setTimeout(()=>{t.hidden=true},220)},2600)}
 
+/* ---------- ハーネスから来たシート（harness.html の「方眼で動かす」） ----------
+   harness.html が localStorage に置いた1件を読み、新しいシートとして足す（今あるシートには触らない）。読んだら消す。
+   provider は同じ名前で中身が違うものがあれば名前を変えて足し、そのシートの LLMNODE の名前も合わせる。 */
+const LS_IMPORT='hogan-sheet.import.v1';
+function importHarness(){
+  let o=null;try{o=JSON.parse(localStorage.getItem(LS_IMPORT)||'null')}catch(_){o=null}
+  if(!o||!o.sheet||!o.sheet.cells)return null;
+  try{localStorage.removeItem(LS_IMPORT)}catch(_){}
+  const P=wb.llm.providers=wb.llm.providers||{};const rename={};
+  const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+  for(const[name,def]of Object.entries(o.providers||{})){
+    let n=name,i=2;while(P[n]&&!same(P[n],def))n=name+'_'+(i++);
+    P[n]=def;if(n!==name)rename[name]=n;
+  }
+  const sh=Object.assign(newSheet(''),o.sheet);sh.name=uniqueName(o.sheet.name||'ハーネス');
+  if(Object.keys(rename).length)for(const k in sh.cells){const c=sh.cells[k];
+    if(typeof c.v==='string'&&c.v[0]==='=')c.v=c.v.replace(/LLMNODE\("((?:[^"]|"")*)"/g,(m,n)=>{const u=n.replace(/""/g,'"');return rename[u]?'LLMNODE("'+rename[u].replace(/"/g,'""')+'"':m})}
+  wb.sheets.push(sh);wb.active=wb.sheets.length-1;save();
+  return{name:sh.name,rename};
+}
+
 /* ---------- boot ---------- */
 wb=load();
 llmLoadCache();
+let IMPORTED=null;
+if(location.hash==='#import'){
+  IMPORTED=importHarness();
+  try{history.replaceState(null,'',location.pathname+location.search)}catch(_){}
+}
 renderTabs();build();
+window.addEventListener('hashchange',()=>{if(location.hash!=='#import')return;
+  if(editing)commitEdit(0,0);const r=importHarness();try{history.replaceState(null,'',location.pathname+location.search)}catch(_){}
+  if(r){IMPORTED=r;renderTabs();build();toast(`ハーネスを「${r.name}」に入れた。上の「▶ ハーネスを実行」で動く`)}});
+if(IMPORTED)setTimeout(()=>toast(`ハーネスを「${IMPORTED.name}」に入れた。上の「▶ ハーネスを実行」で動く`
+  +(Object.keys(IMPORTED.rename).length?`（provider 名を ${Object.entries(IMPORTED.rename).map(([a,b])=>a+'→'+b).join('、')} にした）`:'')),300);
 if(!coarse)ed.focus({preventScroll:true});
 window.addEventListener('resize',()=>updateSel());
 if(location.protocol.startsWith('http'))loadSiteModels();
 /* テストから中を見る口（tests/sheet.mjs） */
-window.__sheet={engine:ENGINE,LLMCore,LLMQ,PROVIDERS,TRANSPORTS,ModelManager,paint,get wb(){return wb},set wb(v){wb=fixBook(v);renderTabs();build()},runPending:llmRunPending,demoRun,stop:llmStop,rerun:llmRerun,select,extend};
+window.__sheet={engine:ENGINE,LLMCore,LLMQ,PROVIDERS,TRANSPORTS,ModelManager,paint,get wb(){return wb},set wb(v){wb=fixBook(v);renderTabs();build()},runPending:llmRunPending,demoRun,stop:llmStop,rerun:llmRerun,select,extend,JSCore,JSQ,importHarness,get imported(){return IMPORTED}};
 })();
 </script>
 </body>

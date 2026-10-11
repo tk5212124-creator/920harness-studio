@@ -27,7 +27,12 @@ node tests/harness-gpuprobe.mjs     # Worker の中の GPU の見張り — 本�
 node tests/harness-selftest-gpu.mjs # 開くたびに回る自己テストが本物のモデルを読まない（HTTP＋本物の WebGPU）
 node tests/harness-fileimport.mjs   # 書き出した .json / .hsl / .txt を「ファイルから」で戻す（選ぶファイルを絞らない）
 node tests/harness-startup.mjs      # 開いた直後の状態・開き直しても落ちたあとでもハーネスが戻る
-node tests/sheet.mjs              # 方眼シート — 配列・こぼれ・LET/LAMBDA・ループ関数と =LLM()（mock と OpenAI互換スタブのSSE）
+node tests/sheet.mjs                # 方眼シート — 配列・こぼれ・LET/LAMBDA・ループ関数と =LLM()（mock と OpenAI互換スタブのSSE）
+                                    #   ＋ハーネスの関数（JSON の値・差し込み・結合・まとめ・式・点検・ONERROR・HMAP・JS の打ち切り）
+node tests/sheet-harness-equiv.mjs  # 「方眼で動かす」— 実ハーネス v13.1 を同じスタブで harness と方眼の両方で走らせ、
+                                    #   送った文・同じ文を呼んだ回数・各ノードの値・出力が同じか（切れた答え・JSON でない答え・
+                                    #   聞き直し・onError の値の回も）／画面から開く／写した関数が同じ／変換しないものを断る
+node tools/sync-harness-copy.mjs --check   # 方眼シートに写した関数が harness.html と一字一句同じか（ずれたら 1）
 node tests/harness-blackbox.mjs     # 落ちても残る記録 — 推論の途中で**本当にレンダラをクラッシュさせ**、
                                     #   どこで消えたか・何を入力して何を送っていたか・画面のログと
                                     #   同じ行が全部残る／常設ボタンからも見える／2回読み込み直しても
