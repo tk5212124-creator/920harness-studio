@@ -10,11 +10,11 @@ export const COPY_NAMES = ['ABSENT', 'OPS2', 'FNS', 'ID1', 'IDRE', 'NOTID', 'tok
   'mustacheRender', 'getPath', 'rvToText', 'MERGE_OPS', 'mergeInputs', 'mergeToRV', 'estTokensMin', 'contextWindowOf',
   'effectiveOverrides', 'joinLabel', 'joinText', 'csvCell', 'REDUCE_OPS', 'REDUCE_OP_SET', 'atPath', 'rvVal', 'listOfInputs',
   'runReduce', 'ASSERT_SEVERITY', 'runJoin', 'rvOf', 'parsePick', 'pickValue', 'applyEdgeAndValidate', 'errText',
-  'closeJSON', 'stripFence'];
+  'closeJSON', 'stripFence', 'buildMessages'];
 export const EXPORTS = ['ABSENT', 'IDRE', 'tokenize', 'evalExpr', 'compileExpr', 'evalValAt', 'evalBoolAt', 'jsWorkerSrc',
   'okVarName', 'localsOf', 'mustacheRender', 'rvToText', 'mergeInputs', 'mergeToRV', 'estTokensMin', 'contextWindowOf',
   'effectiveOverrides', 'runReduce', 'ASSERT_SEVERITY', 'runJoin', 'rvOf', 'pickValue', 'applyEdgeAndValidate', 'errText',
-  'closeJSON', 'stripFence', 'showVal', 'atPath', 'listOfInputs'];
+  'closeJSON', 'stripFence', 'showVal', 'atPath', 'listOfInputs', 'buildMessages'];
 const BEGIN = '/*#HARNESS-COPY', END = '/*#END-HARNESS-COPY*/';
 export function buildBlock(harnessSrc) {
   const parts = [];

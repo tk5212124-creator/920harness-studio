@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — ハーネスを方眼の数式で動かす v0.41.0</title>
+<title>Harness Studio — 方眼タブ（数式で書いて動かす） v0.42.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.41.0 · ハーネスを方眼シートの数式で動かせる</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.42.0 · 方眼タブ＝数式で書くと図と JSON に入る</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -178,7 +178,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <div class="grid">
 <div class="card"><h2>ハーネス編集</h2>
 <div class="row">
-<div class="seg" id="viewSeg"><button data-v="editor" class="on">エディタ</button><button data-v="json">JSON</button></div>
+<div class="seg" id="viewSeg"><button data-v="editor" class="on">エディタ</button><button data-v="json">JSON</button><button data-v="sheet">方眼</button></div>
 <button id="addNode">＋ ノード</button><button id="autoLay">整列</button><button id="dirBtn">縦に流す</button>
 </div>
 <div id="editorView">
@@ -201,6 +201,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 <button data-ex="ex1" class="on">mock改稿ループ</button><button data-ex="ex5">mock並列</button><button data-ex="ex7">mock Loop×並列</button><button data-ex="ex2">mock分岐</button><button data-ex="ex8">mock template</button><button data-ex="ex9">mock fail_fast</button><button data-ex="ex10">mockループノード</button>
 </div></div>
 <div id="jsonView" style="display:none"><textarea id="spec" spellcheck="false"></textarea></div>
+<div id="sheetView" style="display:none"><div class="mini" id="svMsg"></div><div class="vErr" id="svProblems" hidden style="white-space:pre-wrap"></div><iframe id="svFrame" title="方眼" style="width:100%;height:72vh;min-height:420px;border:1px solid var(--line,#ccd);border-radius:10px;background:#fff"></iframe></div>
 <div class="row"><button class="primary" id="run">実行</button><button id="step">1 Work Item</button><button id="cancel" disabled class="danger">■ 緊急停止</button><button id="resume" disabled>Resume</button><button id="retry" disabled>Retry</button><button id="reset">クリア</button></div>
 <div class="state" id="stateline">state: idle</div>
 <div class="vErr" id="vErr"></div></div>
@@ -1545,7 +1546,7 @@ function bbRead(){
 function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));
   ["h","open","cur","in","last","gen","lprg","step","gpu","spec","hb","whb"].forEach(bbDel);
   BB.head=0;BB.n=0;BB.slotAt={};BB.slotPct={};}
-const HARNESS_BUILD="0.41.0";
+const HARNESS_BUILD="0.42.0";
 /* ---- 取り置き（前の回の記録を、消える前に別の置き場へ移す）----
    v0.36.0 まで: 開いたときに前回の記録を**メモリへ**移し、置き場からは消していた。
    そのため (1) もう一度読み込まれると（iOS の自動再読み込み・版の読み込み直し）証拠が消え、
@@ -5035,8 +5036,9 @@ function setSpecObj(spec,opt){
   if(!(opt&&opt.keepText))$("#spec").value=JSON.stringify(spec,null,2);
   edRender();showErrs();renderIO();if(typeof renderModels==="function")renderModels();
   showNow();
+  if(SV&&SV.shown)svRefresh();
 }
-function syncFromCanvas(){normalizeSpec(Ed.spec);$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();showNow();}
+function syncFromCanvas(){normalizeSpec(Ed.spec);$("#spec").value=JSON.stringify(Ed.spec,null,2);edRender();showErrs();renderIO();showNow();if(SV&&SV.shown)svRefresh();}
 /* いま開いているハーネスを端末（localStorage）に置いておく。
    v0.38.0 までは、開き直すと必ず例「内蔵LLM直列」に戻していた。そのため
    「落ちる原因を切り分ける」（条件ごとに読み込み直す）や、落ちたあとに開き直したときに、
@@ -6495,46 +6497,12 @@ function openNodeSheet(id){
    if(nt)nt.onchange=()=>{
      const to=nt.value,from=n.type||"llm";
      if(to===from)return;
-     const perType={
-       llm:["provider","model","prompt","generation","schema","mock","onTruncate","onBadOutput","ports"],
-       tool:["provider","model","prompt","generation","schema","mock","onTruncate","onBadOutput","ports"],
-       input:["label","default"],output:[],pass:[],
-       join:["op","sep","labels","keys","prefix","suffix","template"],
-       loop:["loop","ports"],cond:["lang","ports"],calc:["lang","code"],
-       map:["map","order","onItemError","onItemErrorValue"],module:["module"],
-       reduce:["op","path","skipMissing"],
-       quorum:["lang","condition","required","requiredRatio","total","onBadItem"],
-       race:["lang","condition","onNone","onNoneValue","path","cancel","total","onBadItem"],
-       memory:["scope","rules","out","max","emit","lang","when","unique","initial"],
-       assert:["lang","asserts","onFail"]};
-     const COMMON=["id","type","inputs","start","merge","routing","onError","onErrorValue"];
-     const keep=new Set(COMMON.concat(perType[to]||[]));
-     const drop=Object.keys(n).filter(k=>!keep.has(k));
+     const drop=retypeNode(n,to,true);
      if(drop.length&&nt.dataset.armed!==to){
        nt.dataset.armed=to;
        setHint(`もう一度選ぶと ${from} → ${to} に変える（消えるもの: ${drop.join(", ")}）`);
        return;}
-     for(const k of drop)delete n[k];
-     n.type=to;
-     // その種類が最低限必要にしているものを入れる（空のまま検証エラーにしない）
-     if(to==="join"&&!n.op){n.op="markdown";n.inputs=Object.assign({},n.inputs||{},
-       {items:{type:"any",cardinality:"many"}});}
-     if(to==="loop"&&!n.loop)n.loop={id:n.id,max:5};
-     if(to==="map"&&!n.map){n.map={id:n.id};n.order="input";n.onItemError="error";}
-     if(to==="cond"&&!n.ports){n.lang="expr";
-       n.ports=[{id:"c1",label:"10文字以上",expr:"len(value) >= 10"},{id:"c2",label:"それ以外",else:true}];}
-     if(to==="calc"&&!n.code){n.lang="expr";n.code="inputs[0]";}
-     if(to==="reduce"&&!n.op){n.op="best";n.path="score";}
-     if(to==="quorum"&&!n.condition){n.lang="expr";n.condition="value.score >= 80";n.required=2;}
-     if(to==="race"&&!n.condition){n.lang="expr";n.condition="value.score >= 80";
-       n.onNone="error";n.cancel="pending";n.start={mode:"any"};}
-     if(to==="memory"&&!n.rules){n.scope="run";n.rules=[{port:"in",op:"append"}];
-       n.emit="always";n.out="items";n.lang="expr";n.start={mode:"any"};}
-     if(to==="assert"&&!n.asserts){n.lang="expr";n.onFail="continue";
-       n.asserts=[{name:"点数が8以上",expr:"value.score >= 8",severity:"fail"}];}
-     if((to==="llm"||to==="tool")&&!n.provider&&!n.mock){
-       const ps=Object.keys(Ed.spec.providers||{});
-       if(ps.length)n.provider=ps[0];else n.mock={text:"(mock)"};}
+     retypeNode(n,to);
      syncFromCanvas();openNodeSheet(n.id);
      setHint(`${from} → ${to} に変えた`+(drop.length?`（消した: ${drop.join(", ")}）`:""));};}
   $("#sheetBody").querySelectorAll("[data-pc]").forEach(sl=>sl.onchange=()=>{
@@ -7472,6 +7440,48 @@ function askRouting(nodeId,cb){
     outs.forEach((x,ix)=>{if(!x.if&&!x.else){if(ix<outs.length-1){x.if="true==true";x.priority=ix;}else{x.else=true;x.priority=ix;}}});
     closeSheet();cb&&cb();};
 }
+/* ノードの種類を変える（エディタの「種類」と方眼の B 列が同じものを使う）。
+   dry=true なら何もせず「消えるキー」だけ返す。消えるキーは消して、その種類が最低限要るものを入れる */
+function retypeNode(n,to,dry,spec){
+  const perType={
+    llm:["provider","model","prompt","generation","schema","mock","onTruncate","onBadOutput","ports"],
+    tool:["provider","model","prompt","generation","schema","mock","onTruncate","onBadOutput","ports"],
+    input:["label","default"],output:[],pass:[],
+    join:["op","sep","labels","keys","prefix","suffix","template"],
+    loop:["loop","ports"],cond:["lang","ports"],calc:["lang","code"],
+    map:["map","order","onItemError","onItemErrorValue"],module:["module"],
+    reduce:["op","path","skipMissing"],
+    quorum:["lang","condition","required","requiredRatio","total","onBadItem"],
+    race:["lang","condition","onNone","onNoneValue","path","cancel","total","onBadItem"],
+    memory:["scope","rules","out","max","emit","lang","when","unique","initial"],
+    assert:["lang","asserts","onFail"]};
+  const COMMON=["id","type","inputs","start","merge","routing","onError","onErrorValue"];
+  const keep=new Set(COMMON.concat(perType[to]||[]));
+  const drop=Object.keys(n).filter(k=>!keep.has(k));
+  if(dry)return drop;
+  for(const k of drop)delete n[k];
+  n.type=to;
+  // その種類が最低限必要にしているものを入れる（空のまま検証エラーにしない）
+  if(to==="join"&&!n.op){n.op="markdown";n.inputs=Object.assign({},n.inputs||{},
+    {items:{type:"any",cardinality:"many"}});}
+  if(to==="loop"&&!n.loop)n.loop={id:n.id,max:5};
+  if(to==="map"&&!n.map){n.map={id:n.id};n.order="input";n.onItemError="error";}
+  if(to==="cond"&&!n.ports){n.lang="expr";
+    n.ports=[{id:"c1",label:"10文字以上",expr:"len(value) >= 10"},{id:"c2",label:"それ以外",else:true}];}
+  if(to==="calc"&&!n.code){n.lang="expr";n.code="inputs[0]";}
+  if(to==="reduce"&&!n.op){n.op="best";n.path="score";}
+  if(to==="quorum"&&!n.condition){n.lang="expr";n.condition="value.score >= 80";n.required=2;}
+  if(to==="race"&&!n.condition){n.lang="expr";n.condition="value.score >= 80";
+    n.onNone="error";n.cancel="pending";n.start={mode:"any"};}
+  if(to==="memory"&&!n.rules){n.scope="run";n.rules=[{port:"in",op:"append"}];
+    n.emit="always";n.out="items";n.lang="expr";n.start={mode:"any"};}
+  if(to==="assert"&&!n.asserts){n.lang="expr";n.onFail="continue";
+    n.asserts=[{name:"点数が8以上",expr:"value.score >= 8",severity:"fail"}];}
+  if((to==="llm"||to==="tool")&&!n.provider&&!n.mock){
+    const ps=Object.keys(((spec||Ed.spec).providers)||{});
+    if(ps.length)n.provider=ps[0];else n.mock={text:"(mock)"};}
+  return drop;
+}
 /* ノード追加 */
 function openAddSheet(){
   let h=head("ノードを足す")+'<div class="palette">';
@@ -7480,12 +7490,11 @@ function openAddSheet(){
   openSheet(h);bindClose();
   $("#sheetBody").querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{addNode(b.dataset.add);});  // addNode が続けて中身の編集を開く
 }
-function addNode(type){
-  const base={input:"in",llm:"llm",join:"jn",loop:"lp",cond:"cd",calc:"cl",
-    reduce:"rd",quorum:"qm",race:"rc",memory:"mem",assert:"chk",module:"mod",pass:"ps",map:"mp",output:"out"}[type]||"n";
-  const id=newId(base);
+/* 新しいノードの中身（エディタの「＋ ノード」と方眼の新しい行が同じものを使う） */
+function newNodeOf(type,id,spec){
+  spec=spec||Ed.spec;
   const n={id,type};
-  if(type==="llm"){const provs=Object.keys(Ed.spec.providers||{});
+  if(type==="llm"){const provs=Object.keys(spec.providers||{});
     if(provs.length)n.provider=provs[0];else n.mock={text:"(mock)"};
     n.prompt={system:"",template:{syntax:"mustache",mode:"interpolation_only",value:"{{{in}}}"}};
     delete n.prompt.system;}
@@ -7501,11 +7510,18 @@ function addNode(type){
     n.inputs={in:{type:"any",cardinality:"many"}};n.start={mode:"any"};}
   if(type==="memory"){n.scope="run";n.rules=[{port:"in",op:"append"}];
     n.emit="always";n.out="items";n.lang="expr";n.start={mode:"any"};}
-  if(type==="module")n.module=Object.keys(Ed.spec.modules||{})[0]||"";
+  if(type==="module")n.module=Object.keys(spec.modules||{})[0]||"";
   if(type==="map"){n.map={id};n.order="input";n.onItemError="error";
     n.inputs={in:{type:"any",cardinality:"many"}};}
   if(type==="assert"){n.lang="expr";n.onFail="continue";
     n.asserts=[{name:"点数が8以上",expr:"value.score >= 8",severity:"fail"}];}
+  return n;
+}
+function addNode(type){
+  const base={input:"in",llm:"llm",join:"jn",loop:"lp",cond:"cd",calc:"cl",
+    reduce:"rd",quorum:"qm",race:"rc",memory:"mem",assert:"chk",module:"mod",pass:"ps",map:"mp",output:"out"}[type]||"n";
+  const id=newId(base);
+  const n=newNodeOf(type,id);
   Ed.spec.nodes=Ed.spec.nodes||[];Ed.spec.nodes.push(n);
   const r=$("#cv").getBoundingClientRect();
   const c=toWorld(r.left+r.width/2,r.top+r.height/2);
@@ -7516,9 +7532,10 @@ function addNode(type){
 /* --- 画面まわりの配線 --- */
 $("#viewSeg").onclick=ev=>{const b=ev.target.closest("button");if(!b)return;
   document.querySelectorAll("#viewSeg button").forEach(x=>x.classList.toggle("on",x===b));
-  const j=b.dataset.v==="json";
-  $("#jsonView").style.display=j?"":"none";$("#editorView").style.display=j?"none":"";
-  if(!j)edRender();};
+  const v=b.dataset.v,j=v==="json";
+  $("#jsonView").style.display=j?"":"none";$("#editorView").style.display=v==="editor"?"":"none";
+  svShow(v==="sheet");
+  if(v==="editor")edRender();};
 $("#addNode").onclick=openAddSheet;
 $("#autoLay").onclick=()=>{autoLayout();syncFromCanvas();fitView();};
 $("#dirBtn").onclick=()=>{setDir(Ed.dir==="tb"?"lr":"tb");autoLayout();syncFromCanvas();fitView();};
@@ -7568,8 +7585,9 @@ const specName=()=>((Ed.spec.metadata||{}).name||"harness").replace(/[^\w一-龠
 const SHEET_IMPORT_KEY="hogan-sheet.import.v1";
 const SHEET_OK_TYPES=["input","output","llm","calc","map","join","reduce","assert","pass"];
 const SHEET_ADAPTERS=["webllm","openai_local"];
-function specToSheet(specIn,input){
+function specToSheet(specIn,input,opt){
   const problems=[],warns=[];
+  const embed=!!(opt&&opt.embed);              // 方眼タブ: LLM は harness の Provider で動かすので、mock も adapter も選ばない
   const no=(m,id)=>problems.push(id?`${id}: ${m}`:m);
   let spec;
   try{spec=expandModules(JSON.parse(JSON.stringify(specIn||{})));}
@@ -7588,15 +7606,16 @@ function specToSheet(specIn,input){
       no(`動き出す条件（start: ${n.start.mode}）は、届く順で値が変わるので方眼では動かせない`,n.id);
     if(n.routing&&n.routing.mode==="first_match")no("routing: first_match（条件で行き先を選ぶ）は方眼では動かせない",n.id);
     if(n.type==="llm"){
-      if(!n.provider)no(n.mock?"mock の LLM ノードは方眼では動かせない（provider を付ける）":"provider が無い",n.id);
+      if(!n.provider){if(!(embed&&n.mock))no(n.mock?"mock の LLM ノードは方眼シートでは動かせない（provider を付ける。方眼タブなら動く）":"provider が無い",n.id);}
       else{const d=(spec.providers||{})[n.provider];
         if(!d)no(`provider「${n.provider}」が providers に無い`,n.id);
-        else if(!SHEET_ADAPTERS.includes(d.adapter))no(`adapter「${d.adapter}」は方眼では動かせない（${SHEET_ADAPTERS.join(" / ")}）`,n.id);}
+        else if(!embed&&!SHEET_ADAPTERS.includes(d.adapter))no(`adapter「${d.adapter}」は方眼シートでは動かせない（${SHEET_ADAPTERS.join(" / ")}。方眼タブなら動く）`,n.id);}
       const t=(n.prompt||{}).template;
       if(t&&(t.syntax!=="mustache"||t.mode!=="interpolation_only"))no("prompt.template は syntax=mustache / mode=interpolation_only だけ",n.id);
       const all=[(n.prompt||{}).system,t&&t.value,(n.prompt||{}).prefix,(n.prompt||{}).suffix].filter(Boolean).join("\n");
       if(/\{\{\{?\s*run_input/.test(all))no("差し込みの run_input は方眼では使えない（線でつなぐ）",n.id);
       if(/\{\{\{?\s*inputs\.(?!in\b)/.test(all))no("差し込みの inputs.〇〇 は in だけ使える",n.id);
+      if(/\{\{\{?\s*vars\b/.test(all)&&Object.keys(spec.vars||{}).length)no("差し込みの vars は方眼では使えない（ハーネスに vars がある）",n.id);
       if(/\{\{\{?\s*inputs\./.test(all)&&edges.some(e=>e.to.node===n.id&&(e.to.port||"in")!=="in"))no("入口の名前が in でないときは、差し込みの inputs.〇〇 を使えない",n.id);
     }
     if(n.type==="assert"&&(n.lang==="js"||(n.asserts||[]).some(a=>a&&a.lang==="js")))no("点検の JavaScript は方眼では動かせない（式にする）",n.id);
@@ -7637,8 +7656,10 @@ function specToSheet(specIn,input){
   /* 並べる順（線の向き。Map に戻る線は数えない） */
   const fwd=edges.filter(e=>!e.loop&&!(e.map&&byId[e.to.node]&&byId[e.to.node].type==="map"));
   const indeg={};nodes.forEach(n=>indeg[n.id]=0);fwd.forEach(e=>indeg[e.to.node]++);
+  // 線の向きに並べる。どれを先にしてもよいときは、ノードの並び（JSON の順）が先のもの
+  const idx={};nodes.forEach((n,i)=>idx[n.id]=i);
   const order=[],ready=nodes.filter(n=>!indeg[n.id]).map(n=>n.id);
-  while(ready.length){const x=ready.shift();order.push(x);
+  while(ready.length){ready.sort((a,b)=>idx[a]-idx[b]);const x=ready.shift();order.push(x);
     for(const e of fwd)if(e.from.node===x&&--indeg[e.to.node]===0)ready.push(e.to.node);}
   if(order.length<nodes.length){no("線が輪になっている: "+nodes.filter(n=>!order.includes(n.id)).map(n=>n.id).join(", "));return{ok:false,problems,warns};}
   const anc={};                                            // 手前にある（先に値が決まる）ノード
@@ -7703,11 +7724,12 @@ function specToSheet(specIn,input){
       case"llm":{
         const g=byPort(id);if(Object.keys(g).length>1)no("入口が2つ以上の LLM ノードは方眼では動かせない（in だけにする）",id);
         const p=n.prompt||{};const inV=firstIn(n,ctx);
-        let user=p.template?`HTEMPLATE(${q(p.template.value||"")},${tplArgs(inV,ctx)})`:`HTEXT(${inV==null?'""':inV})`;
-        if(p.prefix)user=`${fill(p.prefix,inV,ctx)}&${q("\n\n")}&${user}`;
-        if(p.suffix)user=`${user}&${q("\n\n")}&${fill(p.suffix,inV,ctx)}`;
-        const cf={id};for(const k of["model","contextSize","overrides","generation","onTruncate","onBadOutput","onContextOverflow"])if(n[k]!=null)cf[k]=n[k];
-        return `LLMNODE(${q(n.provider)},${p.system?fill(p.system,inV,ctx):""},${user},${n.schema?qj(n.schema):'""'},${qj(cf)})`;}
+        const str=v=>v==null?"":q(v);
+        const cf={id};for(const k of["model","contextSize","overrides","generation","onTruncate","onBadOutput","onContextOverflow","mock"])if(n[k]!=null)cf[k]=n[k];
+        const args=[n.provider?q(n.provider):'""',str(p.system),p.template?q(p.template.value||""):"",inV==null?"":inV,
+          str(p.prefix),str(p.suffix),n.schema?qj(n.schema):"",qj(cf)];
+        if(ctx.map)args.push("_I+1");
+        return `HLLM(${args.join(",")})`;}
       case"calc":{const{pairs,names}=scopePairs(n,ctx);
         const ex=mapExtras(n,ctx,true).concat([q("@node"),q(id)]);
         if(n.lang==="js")return `JS(${[q(n.code||""),...pairs,...ex].join(",")})`;
@@ -7746,23 +7768,23 @@ function specToSheet(specIn,input){
   /* セル */
   const cells={},hd={b:1,bg:"#dfe7fb",bd:1};
   const put=(k,v,st)=>{cells[k]=Object.assign({v},st||{});};
-  put("A1","ノード",hd);put("B1","種類",hd);put("C1","値（数式）",hd);put("D1","メモ",hd);
+  put("A1","ノード",hd);put("B1","種類",hd);put("C1","値（数式）",hd);put("D1","名前（label）",hd);put("E1","メモ",hd);
   const memo=n=>{const m=[];
-    if(n.label&&n.label!==n.id)m.push(n.label);
-    if(n.type==="llm")m.push(`LLM（${n.provider}${n.model?" / "+n.model:""}）`);
+    if(n.type==="llm")m.push(n.provider?`LLM（${n.provider}${n.model?" / "+n.model:""}）`:"LLM（mock）");
     if(n.onError==="value"||n.onError==="null")m.push(`失敗したら ${n.onError==="null"?"null":"決めた値"}`);
     if(n.type==="map")m.push(`1件ずつ: ${order.filter(x=>inMap[x]===n.id).join(" → ")}`);
     return m.join(" · ");};
   const inp=input||{};
   for(const id of rows){const n=byId[id],r=rowOf[id];
     put("A"+r,id,{b:1});put("B"+r,n.type);
-    if(inMap[id]){put("D"+r,`${inMap[id]} の中で1件ずつ動く（式は ${inMap[id]} の行）${memo(n)?" · "+memo(n):""}`,{i:1});continue;}
+    if(n.label!=null&&n.label!=="")put("D"+r,String(n.label),{fmt:"text"});
+    if(inMap[id]){put("E"+r,`${inMap[id]} の中で1件ずつ動く（式は ${inMap[id]} の行）${memo(n)?" · "+memo(n):""}`,{i:1});continue;}
     if(n.type==="input"){
       const has=Object.prototype.hasOwnProperty.call(inp,id);const v=has?inp[id]:(n.default!=null?n.default:"");
       if(typeof v==="string")put("C"+r,v,{fmt:"text",bg:"#fff7d6"});else put("C"+r,"=HJSON("+qj(v)+")",{bg:"#fff7d6"});
-      put("D"+r,"入力（書き換えると、そこから先が計算し直しになる）"+(memo(n)?" · "+memo(n):""));continue;}
+      put("E"+r,"入力（書き換えると、そこから先が計算し直しになる）"+(memo(n)?" · "+memo(n):""));continue;}
     const x=wrapErr(n,nodeExpr(n,{map:null}),{map:null});
-    put("C"+r,"="+x);put("D"+r,memo(n));
+    put("C"+r,"="+x);if(memo(n))put("E"+r,memo(n));
   }
   if(problems.length)return{ok:false,problems,warns};
   /* 方眼での動き方の違い（事実だけ書く） */
@@ -7771,13 +7793,419 @@ function specToSheet(specIn,input){
   if(nodes.some(n=>n.routing&&n.routing.failurePolicy==="fail_fast"))
     warns.push("fail_fast: 方眼では、失敗したノードとそれに続く行だけがエラーになり、ほかの行は計算される（harness は実行ごと止める）");
   if(nodes.some(n=>n.type==="assert"&&n.onFail==="continue"))warns.push("点検の結果は点検の行に入る（harness の実行の記録には入らない）");
-  const used=[...new Set(llms.map(n=>n.provider))];
+  const used=[...new Set(llms.map(n=>n.provider).filter(Boolean))];
   const providers={};for(const k of used)providers[k]=JSON.parse(JSON.stringify(spec.providers[k]));
   const name=String((spec.metadata&&spec.metadata.name)||"ハーネス").slice(0,24);
   return{ok:true,problems,warns,providers,
-    sheet:{name,cells,nr:Math.max(100,rows.length+10),nc:26,cw:{0:130,1:70,2:320,3:260},harness:{name:(spec.metadata&&spec.metadata.name)||null,at:new Date().toISOString()}},
+    sheet:{name,cells,nr:Math.max(100,rows.length+10),nc:26,cw:{0:130,1:70,2:320,3:110,4:240},harness:{name:(spec.metadata&&spec.metadata.name)||null,at:new Date().toISOString()}},
     rows:rows.map(id=>({id,row:rowOf[id],type:byId[id].type,inMap:inMap[id]||null}))};
 }
+/* ---- 方眼 → ハーネス（方眼タブで書き換えたとき） ----
+   方眼の数式を読んで、ノードの中身と線に戻す。読めるのは specToSheet が書く形だけ
+   （HLLM・JS・HEXPR・HASSERT・HJOIN・HREDUCE・HMAP・ONERROR・参照・HPICK/HTRANSFORM/HTYPE・HMERGE）。
+   読めないもの・ハーネスにできないことは、理由を返して入れない（近いものに直して入れることはしない）。
+   数式に出てこないもの（図の位置・出口・routing・start など）は前の値をそのまま残す。 */
+const sheetErr=(m,row)=>({code:"SHEET_EDIT",row:row==null?null:row,message:m});
+const sheetColOf=s=>{let n=0;for(const ch of s.toUpperCase())n=n*26+(ch.charCodeAt(0)-64);return n-1;};
+function sheetParse(src){
+  const s=String(src),tk=[];let i=0;
+  const JPc="\\u3040-\\u30ff\\u3400-\\u9fff\\uff00-\\uffef";
+  const reRef=/^(?:[^\s!(),"]+!)?\$?([A-Za-z]{1,3})\$?(\d+)(?![\w(぀-ヿ㐀-鿿＀-￯])/;
+  const reName=new RegExp(`^[A-Za-z_${JPc}][\\w.${JPc}]*`);
+  while(i<s.length){const ch=s[i];
+    if(/\s/.test(ch)){i++;continue;}
+    if(ch==='"'){let j=i+1,v="";for(;;){if(j>=s.length)throw sheetErr('" が閉じていない');
+      if(s[j]==='"'){if(s[j+1]==='"'){v+='"';j+=2;continue;}break;}v+=s[j++];}
+      tk.push({t:"str",v});i=j+1;continue;}
+    const rest=s.slice(i);let m;
+    if((m=/^(\d+\.?\d*|\.\d+)(e[-+]?\d+)?/i.exec(rest))){tk.push({t:"num",v:parseFloat(m[0])});i+=m[0].length;continue;}
+    if((m=reRef.exec(rest))){if(m[0].includes("!"))throw sheetErr("別のシートは指せない: "+m[0]);
+      tk.push({t:"ref",c:sheetColOf(m[1]),r:+m[2]-1,raw:m[0]});i+=m[0].length;continue;}
+    if((m=reName.exec(rest))){tk.push({t:"name",v:m[0].toUpperCase()});i+=m[0].length;continue;}
+    if("(),&+-".includes(ch)){tk.push({t:"op",v:ch});i++;continue;}
+    throw sheetErr("この形は読めない: "+ch);}
+  let p=0;const pk=()=>tk[p],isOp=v=>tk[p]&&tk[p].t==="op"&&tk[p].v===v;
+  const need=v=>{if(!isOp(v))throw sheetErr(`${v} が足りない`);p++;};
+  function cat(){let l=add();while(isOp("&")){p++;l={k:"bin",o:"&",l,r:add()};}return l;}
+  function add(){let l=un();while(isOp("+")||isOp("-")){const o=tk[p++].v;l={k:"bin",o,l,r:un()};}return l;}
+  function un(){if(isOp("-")){p++;return{k:"neg",e:un()};}return prim();}
+  function prim(){const t=tk[p++];if(!t)throw sheetErr("式が途中で終わっている");
+    if(t.t==="str")return{k:"str",v:t.v};
+    if(t.t==="num")return{k:"num",v:t.v};
+    if(t.t==="ref")return{k:"ref",r:t.r,c:t.c,raw:t.raw};
+    if(t.t==="name"){if(isOp("(")){p++;const args=[];
+        if(!isOp(")"))for(;;){if(isOp(",")||isOp(")"))args.push({k:"empty"});else args.push(cat());if(isOp(",")){p++;continue;}break;}
+        need(")");return{k:"call",n:t.v,args};}
+      return{k:"name",n:t.v};}
+    if(t.t==="op"&&t.v==="("){const e=cat();need(")");return e;}
+    throw sheetErr("式の形が正しくない");}
+  const e=cat();if(p<tk.length)throw sheetErr("式の形が正しくない（余りがある）");return e;
+}
+/* 決まった文字（"…" と & でつないだもの）。空の引数は null（書いていない） */
+function sheetStr(a,what){
+  if(!a||a.k==="empty")return null;
+  if(a.k==="str")return a.v;
+  if(a.k==="num")return String(a.v);
+  if(a.k==="bin"&&a.o==="&"){const l=sheetStr(a.l,what),r=sheetStr(a.r,what);return(l==null?"":l)+(r==null?"":r);}
+  throw sheetErr(`${what} は "…" で書く（セルの参照や関数は使えない）`);
+}
+function sheetJSON(a,what){const t=sheetStr(a,what);if(t==null||t.trim()==="")return undefined;
+  try{return JSON.parse(t);}catch(e){throw sheetErr(`${what} の JSON が読めない: ${t.slice(0,40)}`);}}
+/* 種類ごとに、数式で決まるキー（ここに無いキーは前の値を残す） */
+const SHEET_MANAGED={
+  llm:["provider","prompt","schema","model","contextSize","overrides","generation","onTruncate","onBadOutput","onContextOverflow","mock","merge"],
+  calc:["lang","code"],assert:["asserts","onFail"],join:["op","sep","labels","keys","prefix","suffix","template"],
+  reduce:["op","path","skipMissing"],map:["onItemError","onItemErrorValue","merge"],output:["merge"],pass:["merge"],input:[]};
+const SHEET_LLM_CF=["model","contextSize","overrides","generation","onTruncate","onBadOutput","onContextOverflow","mock"];
+/* 前の並びを保って、新しいものを後ろに足す（JSON の見た目のキーの順を崩さない） */
+function sheetOrdered(old,fresh){const o={};
+  for(const k of Object.keys(old||{}))if(k in fresh)o[k]=fresh[k];
+  for(const k of Object.keys(fresh))if(!(k in o))o[k]=fresh[k];return o;}
+/* sheetToSpec: 方眼のセル全部と、前のハーネス・前の行の並びから、新しいハーネスを作る。
+   返すもの: {spec, runInput:{入力ノード: 文}, drafts:[行番号…], notes:[…]}。読めなければ throw {code:"SHEET_EDIT",row,message} */
+function sheetToSpec(cells,oldSpecIn,oldRows){
+  const old=JSON.parse(JSON.stringify(oldSpecIn||{}));
+  const raw=k=>{const c=cells[k];return c&&c.v!=null?String(c.v):"";};
+  const A=r=>raw("A"+(r+1)).trim(),B=r=>raw("B"+(r+1)).trim(),C=r=>raw("C"+(r+1)),D=r=>raw("D"+(r+1));
+  let maxR=0;for(const k of Object.keys(cells)){const m=/^([A-Z]+)(\d+)$/.exec(k);if(m&&raw(k)!=="")maxR=Math.max(maxR,+m[2]-1);}
+  // 書けるのは A〜D 列（E はメモで自動、1行目は見出し）
+  for(const k of Object.keys(cells)){const m=/^([A-Z]+)(\d+)$/.exec(k);if(!m)continue;
+    if(m[2]==="1")continue;if(!["A","B","C","D","E"].includes(m[1])&&raw(k)!=="")
+      throw sheetErr(`${k}: 書けるのは A〜D 列（A ノード名・B 種類・C 値の数式・D 名前）`,+m[2]-1);}
+  /* 名前を変えた行（同じ行の A が変わり、前の名前がどこにも無い） */
+  const prevAt={};for(const x of oldRows||[])prevAt[x.row-1]=x;
+  const oldIds=new Set((old.nodes||[]).map(n=>n.id));
+  const nowIds=new Set();for(let r=1;r<=maxR;r++)if(A(r))nowIds.add(A(r));
+  const ren={};
+  for(let r=1;r<=maxR;r++){const p=prevAt[r];if(!p)continue;const a=A(r);
+    if(a&&a!==p.id&&!oldIds.has(a)&&!nowIds.has(p.id)){
+      if(/[\s.]/.test(a))throw sheetErr(`ノード名「${a}」は使えない（空白・. は入れない）`,r);
+      ren[p.id]=a;}}
+  const spec=Object.keys(ren).length?remapNodeIds(old,ren):old;
+  if(Object.keys(ren).length&&spec.metadata&&spec.metadata.layout){const L=spec.metadata.layout;
+    for(const[a,b]of Object.entries(ren))if(L[a]){L[b]=L[a];delete L[a];}}
+  if(Object.keys(ren).length&&spec.metadata&&spec.metadata.sizes){const Z=spec.metadata.sizes;
+    for(const[a,b]of Object.entries(ren))if(Z[a]){Z[b]=Z[a];delete Z[a];}}
+  const byId={};(spec.nodes||[]).forEach(n=>byId[n.id]=n);
+  const prevRowOf={};for(const x of oldRows||[])prevRowOf[ren[x.id]||x.id]=x;
+  /* 行 → ノード。A が書いてあって B が無い・知らない種類の行は「書きかけ」（ノードにしない・消さない） */
+  const rowNode={},drafts=[],newNodes=[],seen=new Set();
+  for(let r=1;r<=maxR;r++){const a=A(r),b=B(r);if(!a&&!b&&!C(r).trim()&&!D(r))continue;
+    if(!a){if(!prevAt[r]&&(b||C(r).trim()||D(r)))drafts.push(r);continue;}   // ノードだった行の A を消した＝消す（書きかけではない）
+    if(seen.has(a))throw sheetErr(`ノード名「${a}」が2つの行にある`,r);seen.add(a);
+    if(byId[a]){rowNode[r]=a;continue;}
+    if(!b||!NODE_KINDS.some(k=>k.type===b)){drafts.push(r);continue;}
+    if(/[\s.]/.test(a))throw sheetErr(`ノード名「${a}」は使えない（空白・. は入れない）`,r);
+    const n=newNodeOf(b,a,spec);byId[a]=n;newNodes.push(n);rowNode[r]=a;}
+  const rowOfId={};for(const[r,id]of Object.entries(rowNode))rowOfId[id]=+r;
+  const removed=new Set((spec.nodes||[]).filter(n=>rowOfId[n.id]==null).map(n=>n.id));
+  /* 種類を変えた行（消えるキーがあるときは断る。エディタと同じく、消えるものを先に言う） */
+  for(const[r,id]of Object.entries(rowNode)){const n=byId[id],b=B(+r);
+    if(newNodes.includes(n)||!b||b===n.type)continue;
+    if(!NODE_KINDS.some(k=>k.type===b))throw sheetErr(`種類「${b}」は無い（${NODE_KINDS.map(k=>k.type).join(" / ")}）`,+r);
+    const drop=retypeNode(n,b,true);
+    if(drop.length)throw sheetErr(`${id} を ${n.type} → ${b} にすると消えるもの: ${drop.join(", ")}。種類はエディタ（ノードをタップ →種類）で変える`,+r);
+    retypeNode(n,b);}
+  /* 参照 → ノード */
+  const refNode=(a,row)=>{if(a.c!==2)throw sheetErr(`${a.raw}: 値は C 列にある（C${a.r+1} のように書く）`,row);
+    const id=rowNode[a.r];
+    if(id==null){const p=prevAt[a.r];if(p&&removed.has(ren[p.id]||p.id))return null;   // 消したノードへの線は消す
+      throw sheetErr(`${a.raw}: その行にノードが無い`,row);}
+    return id;};
+  /* 線1本ぶん（外から順に 型 → transform → pick… → 元） */
+  const edgeOf=(a,row,ctx)=>{let type=null,transform=null;const picks=[];let x=a;
+    if(x.k==="call"&&x.n==="HTYPE"){type=sheetStr(x.args[1],"型");x=x.args[0];}
+    if(x.k==="call"&&x.n==="HTRANSFORM"){transform=sheetStr(x.args[1],"transform");x=x.args[0];}
+    while(x.k==="call"&&x.n==="HPICK"){picks.unshift(sheetStr(x.args[1],"pick"));x=x.args[0];}
+    let from=null;
+    if(x.k==="ref")from=refNode(x,row);
+    else if(x.k==="name"&&x.n==="_ITEM"&&ctx.map)from=ctx.map;
+    else if(x.k==="name"&&/^_N\d+$/.test(x.n)&&ctx.locals&&ctx.locals[x.n])from=ctx.locals[x.n];
+    else throw sheetErr("線は C 列のセル（$C$5 など）を指す。HPICK / HTRANSFORM / HTYPE で包める",row);
+    if(from==null)return null;
+    if(picks.length>2)throw sheetErr("HPICK は2つまで（出口の取り出しと、線の取り出し）",row);
+    return{from,picks,transform,type};};
+  const listOf=(a,row,ctx)=>{          // 入口に来る線の並び
+    if(!a||a.k==="empty"||(a.k==="str"&&a.v===""))return{edges:[],many:false};
+    if(a.k==="call"&&a.n==="HJSON"&&sheetStr(a.args[0],"値")==="null")return{edges:[],many:false};
+    if(a.k==="call"&&a.n==="HMERGE"){const merge=sheetJSON(a.args[0],"受け取り方")||{};
+      return{edges:a.args.slice(1).map(x=>edgeOf(x,row,ctx)).filter(Boolean),many:true,merge};}
+    const e=edgeOf(a,row,ctx);return{edges:e?[e]:[],many:false};};
+  const pairsOf=(args,row,ctx)=>{const out=[];
+    for(let i=0;i<args.length;i+=2){const nm=sheetStr(args[i],"名前");if(nm==null)throw sheetErr("名前と値を組にして書く",row);
+      if(nm[0]==="@"||nm[0]==="#")continue;                 // 周回・Map の値・ノード名・式が読むノードは自動で付く
+      if(args[i+1]==null)throw sheetErr(`「${nm}」の値が無い`,row);
+      const e=edgeOf(args[i+1],row,ctx);if(e)out.push(Object.assign(e,{as:nm}));}
+    return out;};
+  /* ノードの式を読む → {fields, ports:{port:{edges,many,merge}}, type, body?} */
+  const parsed={},inEdges=[];
+  const readNode=(n,ast,row,ctx)=>{
+    const f={};let x=ast;
+    if(x.k==="call"&&x.n==="ONERROR"){const pol=sheetStr(x.args[1],"onError");
+      if(pol!=="value"&&pol!=="null")throw sheetErr('ONERROR の2つ目は "value" か "null"',row);
+      f.onError=pol;const v=sheetJSON(x.args[2],"代わりの値");if(pol==="value"&&v!==undefined)f.onErrorValue=v;x=x.args[0];}
+    const need=(name,lo)=>{if(!(x.k==="call"&&x.n===name))throw sheetErr(`${n.id}（${n.type}）の値は =${name}(…) で書く`+(n.type==="output"||n.type==="pass"?"（ここは手前の行の参照）":""),row);
+      if(x.args.length<lo)throw sheetErr(`${name} の引数が足りない`,row);};
+    const port1=()=>{const es=(spec.edges||[]).filter(e=>e.to.node===n.id&&!e.loop&&!(e.map&&n.type==="map"));
+      return(es[0]&&es[0].to.port)||"in";};
+    let ports={};
+    switch(n.type){
+      case"llm":{need("HLLM",4);const a=x.args;
+        const pv=sheetStr(a[0],"provider");if(pv)f.provider=pv;
+        const pr={};const sy=sheetStr(a[1],"system"),tp=sheetStr(a[2],"template"),pf=sheetStr(a[4],"prefix"),sf=sheetStr(a[5],"suffix");
+        if(sy!=null)pr.system=sy;
+        if(tp!=null)pr.template=Object.assign({},(n.prompt&&n.prompt.template)||{},{syntax:"mustache",mode:"interpolation_only",value:tp});
+        if(pf!=null)pr.prefix=pf;if(sf!=null)pr.suffix=sf;
+        if(Object.keys(pr).length||n.prompt)f.prompt=sheetOrdered(n.prompt,pr);
+        const sc=sheetJSON(a[6],"schema");if(sc!==undefined)f.schema=sc;
+        const cf=sheetJSON(a[7],"設定")||{};
+        for(const k of Object.keys(cf))if(k!=="id"&&!SHEET_LLM_CF.includes(k))throw sheetErr(`設定に「${k}」は書けない（${SHEET_LLM_CF.join(" / ")}）`,row);
+        for(const k of SHEET_LLM_CF)if(cf[k]!==undefined)f[k]=cf[k];
+        if(!f.provider&&!f.mock)throw sheetErr("provider か 設定の mock が要る",row);
+        const L=listOf(a[3],row,ctx);if(L.many&&(Object.keys(L.merge||{}).length||n.merge))f.merge=L.merge;
+        ports[port1()]=L;break;}
+      case"calc":{const js=x.k==="call"&&x.n==="JS";if(!js)need("HEXPR",1);
+        if(js)f.lang="js";else if(n.lang!==undefined)f.lang="expr";
+        f.code=sheetStr(x.args[0],"コード");if(f.code==null)f.code="";
+        ports.__pairs=pairsOf(x.args.slice(1),row,ctx);break;}
+      case"assert":{need("HASSERT",3);const as=sheetJSON(x.args[0],"点検の並び");
+        if(!Array.isArray(as))throw sheetErr("HASSERT の1つ目は点検の並び（JSON の配列）",row);
+        f.asserts=as;const of=sheetStr(x.args[1],"onFail");if(of)f.onFail=of;
+        const L=listOf(x.args[2],row,ctx);if(L.many&&(Object.keys(L.merge||{}).length||n.merge))f.merge=L.merge;
+        ports[port1()]=L;break;}
+      case"join":{need("HJOIN",1);const cf=sheetJSON(x.args[0],"結合の設定")||{};
+        for(const k of SHEET_MANAGED.join)if(cf[k]!==undefined)f[k]=cf[k];
+        ports.items={edges:x.args.slice(1).map(y=>edgeOf(y,row,ctx)).filter(Boolean),many:true};break;}
+      case"reduce":{need("HREDUCE",2);const cf=sheetJSON(x.args[0],"まとめの設定")||{};
+        for(const k of SHEET_MANAGED.reduce)if(cf[k]!==undefined)f[k]=cf[k];
+        const rest=x.args.slice(1);
+        if(rest.length===1&&rest[0].k==="call"&&rest[0].n==="HJSON")ports[port1()]={edges:[],many:false};
+        else{const es=rest.map(y=>edgeOf(y,row,ctx)).filter(Boolean);ports[port1()]={edges:es,many:es.length>1};}
+        break;}
+      case"output":case"pass":{const L=listOf(x,row,ctx);if(L.many&&(Object.keys(L.merge||{}).length||n.merge))f.merge=L.merge;
+        ports[port1()]=L;break;}
+      case"map":{need("HMAP",2);const cf=sheetJSON(x.args[2],"Map の設定")||{};
+        if(cf.onItemError!==undefined)f.onItemError=cf.onItemError;
+        if(cf.onItemErrorValue!==undefined)f.onItemErrorValue=cf.onItemErrorValue;
+        const L=listOf(x.args[0],row,ctx);if(L.many&&(Object.keys(L.merge||{}).length||n.merge))f.merge=L.merge;
+        ports[port1()]=L;
+        const lam=x.args[1];
+        if(!(lam&&lam.k==="call"&&lam.n==="LAMBDA"&&lam.args.length===3&&lam.args[0].k==="name"&&lam.args[0].n==="_ITEM"&&lam.args[1].k==="name"&&lam.args[1].n==="_I"))
+          throw sheetErr("HMAP の2つ目は LAMBDA(_ITEM,_I, LET(…)) で書く",row);
+        const let_=lam.args[2];
+        if(!(let_.k==="call"&&let_.n==="LET"&&let_.args.length>=3&&let_.args.length%2===1))throw sheetErr("Map の中は LET(_N1, 1つ目のノード, _N2, …, 戻す値) で書く",row);
+        // Map の中のノードは、Map の行のすぐ下の行（式は書かない）
+        const body=[];for(let r=row+1;r<=maxR;r++){const id=rowNode[r];if(!id)break;
+          const pr=prevRowOf[id];if(!(pr&&pr.inMap===n.id))break;body.push({id,r});}
+        const binds=(let_.args.length-1)/2;
+        if(binds!==body.length)throw sheetErr(`Map の中のノードは ${body.length} 個（${body.map(b=>b.id).join(", ")}）。LET の組は同じ数にする（Map の中のノードを足す・消すのはエディタで）`,row);
+        const locals={};const inner={map:n.id,locals};
+        body.forEach((b,i)=>{const nm=let_.args[i*2];
+          if(!(nm.k==="name"&&nm.n==="_N"+(i+1)))throw sheetErr(`LET の ${i+1}組目の名前は _N${i+1}`,row);
+          if(C(b.r).trim())throw sheetErr(`${b.id} は ${n.id} の中のノード。式は ${n.id} の行の LET に書く（この行の C は空にする）`,b.r);
+          readNode(byId[b.id],let_.args[i*2+1],row,inner);locals["_N"+(i+1)]=b.id;});
+        const back=edgeOf(let_.args[let_.args.length-1],row,inner);
+        if(!back||!body.some(b=>b.id===back.from))throw sheetErr("LET の最後（戻す値）は Map の中のノード（_N1…）",row);
+        parsed[n.id+"\u0000back"]=back;break;}
+      default:throw sheetErr(`種類「${n.type}」は方眼では書けない`,row);
+    }
+    parsed[n.id]={f,ports,row,ctx};
+  };
+  const runInput={};
+  for(const[rs,id]of Object.entries(rowNode)){const r=+rs,n=byId[id];
+    const lab=D(r);
+    if(lab!=="")n.label=lab;else if(!newNodes.includes(n))delete n.label;
+    if(n.type==="input"){runInput[id]=C(r);continue;}
+    const pr=prevRowOf[id];if(pr&&pr.inMap)continue;            // Map の中は Map の行で読む
+    const c=C(r);
+    if(!c.trim()){if(newNodes.includes(n)){parsed[id]={f:null,ports:{},row:r,ctx:{}};continue;}
+      throw sheetErr(`${id} の値（C${r+1}）が空。消すときは A 列のノード名を消す`,r);}
+    if(c[0]!=="=")throw sheetErr(`${id} の値（C${r+1}）は = で始まる数式にする`,r);
+    readNode(n,sheetParse(c.slice(1)),r,{map:null});}
+  /* 線を組み直す（前の線と同じものは、前の線のキーを残す） */
+  const oldEdges=(spec.edges||[]).filter(e=>!removed.has(e.from.node)&&!removed.has(e.to.node));
+  const used=new Set(),edges=[];
+  const portPickResolve=(fromId,picks,oldE)=>{const fn=byId[fromId];
+    const ports=(fn&&fn.ports&&fn.ports.length)?fn.ports:null;
+    if(!ports)return{port:oldE?oldE.from.port:"out",pick:picks[0]||null,extra:picks[1]};
+    // 出口を分けたノード: 内側の HPICK が出口の取り出し
+    const inner=picks[0]||"";
+    const cands=ports.filter(p=>(p.pick||"")===inner);
+    if(!cands.length)throw sheetErr(`${fromId} の出口に取り出し「${inner}」が無い（出口: ${ports.map(p=>p.id+"="+(p.pick||"")).join(", ")}）`);
+    let port=cands[0].id;
+    if(oldE&&cands.some(p=>p.id===(oldE.from.port||"out")))port=oldE.from.port||"out";
+    else if(oldE&&(oldE.from.port||"out")==="out"&&cands[0]===ports[0])port=oldE.from.port||"out";
+    return{port,pick:picks[1]||null};};
+  const mkEdge=(ed,toId,toPort,extra)=>{
+    const cand=oldEdges.filter(e=>!used.has(e)&&e.from.node===ed.from&&e.to.node===toId&&(toPort==null||(e.to.port||"in")===toPort)
+      &&((extra&&extra.back)?!!e.map:!e.map));
+    const oldE=cand.find(e=>ed.as!=null&&e.as===ed.as)||cand.find(e=>(e.pick||null)===(ed.picks[ed.picks.length-1]||null))||cand[0]||null;
+    if(oldE)used.add(oldE);
+    const fn=byId[ed.from];
+    let pick=null,fport="out";
+    if(fn&&fn.ports&&fn.ports.length){const r=portPickResolve(ed.from,ed.picks,oldE);fport=r.port;pick=r.pick;}
+    else{if(ed.picks.length>1)throw sheetErr(`${ed.from} は出口を分けていないので HPICK は1つ`);
+      pick=ed.picks[0]||null;fport=oldE?(oldE.from.port||"out"):"out";}
+    const e=oldE?JSON.parse(JSON.stringify(oldE)):{from:{node:ed.from,port:"out"},to:{node:toId,port:toPort||"in"}};
+    e.from.node=ed.from;e.from.port=fport;e.to.node=toId;if(toPort)e.to.port=toPort;
+    if(pick)e.pick=pick;else delete e.pick;
+    if(ed.transform)e.transform=ed.transform;else delete e.transform;
+    return{e,oldE};};
+  for(const n of [...(spec.nodes||[]).filter(n=>!removed.has(n.id)),...newNodes]){
+    const P=parsed[n.id];if(!P||!P.f&&!Object.keys(P.ports).length)continue;
+    const mapOf=n.type==="map";
+    if(P.ports.__pairs){                       // 計算: 名前の付いた線（並びがそのまま position）
+      const list=P.ports.__pairs;const out=[];
+      list.forEach((ed,i)=>{const{e,oldE}=mkEdge(ed,n.id,null);
+        delete e.as;const dflt=varNameOf(e,i);
+        if(oldE&&oldE.as===ed.as)e.as=ed.as;else if(ed.as!==dflt)e.as=ed.as;
+        if(list.length>1||(oldE&&oldE.position!=null))e.position=i;else delete e.position;
+        if(ed.from===P.ctx.map)e.mapRole="body";
+        if(ed.type){const q=e.to.port||"in";n.inputs=n.inputs||{};n.inputs[q]=Object.assign({},n.inputs[q]||{},{type:ed.type});}
+        out.push(e);});
+      edges.push(...out);continue;}
+    for(const[port,L]of Object.entries(P.ports)){
+      L.edges.forEach((ed,i)=>{const{e,oldE}=mkEdge(ed,n.id,port);
+        if(L.edges.length>1||(oldE&&oldE.position!=null))e.position=i;else delete e.position;
+        if(ed.from===P.ctx.map)e.mapRole="body";
+        else if(byId[ed.from]&&byId[ed.from].type==="map"&&!P.ctx.map)e.mapRole="done";
+        if(ed.type){n.inputs=n.inputs||{};n.inputs[port]=Object.assign({},n.inputs[port]||{},{type:ed.type});}
+        edges.push(e);});
+      if(L.many){n.inputs=n.inputs||{};n.inputs[port]=n.inputs[port]?Object.assign({},n.inputs[port],{cardinality:"many"}):{type:"any",cardinality:"many"};}
+      else if(n.inputs&&n.inputs[port]&&n.inputs[port].cardinality==="many"&&n.type!=="join")delete n.inputs[port].cardinality;
+      const ip=n.inputs&&n.inputs[port];
+      const mine=edges.filter(x=>x.to.node===n.id&&(x.to.port||"in")===port&&!x.map);
+      if(ip&&ip.type&&ip.type!=="any"&&!L.edges.some(ed=>ed.type)&&!mine.some(o=>o.validation&&o.validation.typeCheck==="bypass"))delete ip.type;}
+    if(mapOf){const back=parsed[n.id+"\u0000back"];
+      const{e,oldE}=mkEdge(back,n.id,null,{back:true});
+      e.map={id:mapIdOf(n)};e.to.port=oldE?(oldE.to.port||"in"):"in";
+      if(oldE&&oldE.position!=null)e.position=oldE.position;
+      else{const k=(P.ports[Object.keys(P.ports)[0]]||{edges:[]}).edges.length;if(k)e.position=k;}
+      edges.push(e);}
+  }
+  /* ノードの中身を入れ替える（数式で決まるキーだけ。前の並びを保つ） */
+  for(const n of [...(spec.nodes||[]),...newNodes]){const P=parsed[n.id];if(!P||!P.f)continue;
+    const keep={};for(const k of Object.keys(n))if(!(SHEET_MANAGED[n.type]||[]).includes(k)&&k!=="onError"&&k!=="onErrorValue")keep[k]=n[k];
+    const fresh=Object.assign({},keep,P.f);
+    const o=sheetOrdered(n,fresh);for(const k of Object.keys(n))delete n[k];Object.assign(n,o);}
+  /* 並び: 前の線の順を保ち、新しい線は後ろへ */
+  const order=e=>{const i=(spec.edges||[]).findIndex(x=>JSON.stringify([x.from,x.to])===JSON.stringify([e.from,e.to]));return i<0?1e9:i;};
+  spec.edges=[...edges].map((e,i)=>({e,i,o:order(e)})).sort((a,b)=>a.o-b.o||a.i-b.i).map(x=>x.e);
+  spec.nodes=[...(spec.nodes||[]).filter(n=>!removed.has(n.id)),...newNodes];
+  if(spec.metadata&&spec.metadata.layout)for(const id of removed)delete spec.metadata.layout[id];
+  if(spec.metadata&&spec.metadata.sizes)for(const id of removed)delete spec.metadata.sizes[id];
+  return{spec,runInput,drafts,renamed:ren,removed:[...removed],added:newNodes.map(n=>n.id)};
+}
+/* ==================================================================
+   方眼タブ（エディタ・JSON と並ぶ、3つ目の書き方）
+   いまのハーネスを1行1ノードの数式（方眼シート）で見せる。方眼で直すと、図と JSON にもすぐ入る。
+   方眼は sheet.html?embed=harness を枠（iframe）で開いたもの。やりとりは postMessage:
+     → hs-load（作ったシート）/ hs-reject（入れなかった理由）/ hs-llm-result（LLM の答え）
+     ← hs-ready / hs-edit（直したセル全部）/ hs-llm（LLM を呼んで）/ hs-llm-abort
+   LLM はこのページの Provider と ModelManager で動かす（方眼の中で engine を作らない）。
+   ================================================================== */
+var SV={shown:false,ready:false,last:null,focus:null,drafts:{},llm:new Map(),loaded:false};   // var: 開いた直後（この行より前）に呼ばれても読める
+function svFrame(){return $("#svFrame");}
+function svPost(m){const f=svFrame();if(f&&f.contentWindow&&SV.ready)f.contentWindow.postMessage(m,"*");}
+function svShow(on){
+  SV.shown=on;$("#sheetView").style.display=on?"":"none";
+  if(!on)return;
+  if(!SV.loaded){SV.loaded=true;svFrame().src="sheet.html?embed=harness";}
+  svRefresh();
+}
+function svRefresh(){
+  if(!SV.shown)return;
+  if(!SV.fromEdit)SV.drafts={};                 // 方眼の外（図・JSON・例）で変わったら、書きかけの行は持ち越さない
+  SV.fromEdit=false;
+  const res=specToSheet(Ed.spec,inputForRun(),{embed:true});
+  const pb=$("#svProblems"),fr=svFrame();
+  if(!res.ok){SV.last=null;fr.style.display="none";pb.hidden=false;
+    pb.textContent=`このハーネスは方眼では書けないところがある（${res.problems.length}件）。エディタか JSON で書く:\n`
+      +res.problems.map(p=>"・"+p).join("\n");
+    $("#svMsg").textContent="";return;}
+  pb.hidden=true;fr.style.display="";
+  // 書きかけの行（A と B がそろっていない行）は消さずに戻す
+  const cells=res.sheet.cells;let tail=res.rows.length+2;
+  for(const[r,row]of Object.entries(SV.drafts)){let at=+r;
+    if(["A","B","C","D"].some(c=>cells[c+(at+1)]))at=tail++ -1;
+    for(const[c,v]of Object.entries(row))cells[c+(at+1)]={v};}
+  SV.last=res;
+  $("#svMsg").textContent=`${res.rows.length}行（1行が1ノード）。A ノード名・B 種類・C 値の数式・D 名前を直すと、図と JSON にすぐ入る。`
+    +`空いた行に A と B を書くとノードが増え、A を消すとノードが消える。`;
+  svPost({type:"hs-load",sheet:res.sheet,providers:Ed.spec.providers||{},focus:SV.focus});
+  SV.focus=null;
+}
+function svEdit(m){
+  if(!SV.last)return;
+  const cells={};for(const[k,v]of Object.entries(m.cells||{}))cells[k]={v};
+  try{
+    const r=sheetToSpec(cells,Ed.spec,SV.last.rows);
+    const inp=Object.assign({},inputForRun(),r.runInput);
+    const chk=specToSheet(r.spec,inp,{embed:true});
+    if(!chk.ok)throw sheetErr(chk.problems.join(" / "));
+    // 書きかけの行を覚える
+    SV.drafts={};for(const row of r.drafts){const o={};for(const c of["A","B","C","D"]){const x=cells[c+(row+1)];if(x&&x.v)o[c]=x.v;}SV.drafts[row]=o;}
+    const before=JSON.stringify(Ed.spec);
+    const editedId=(()=>{const a=cells["A"+(m.at.r+1)];return a&&a.v?String(a.v).trim():null;})();
+    for(const[id,t]of Object.entries(r.runInput))if(runInput[id]!==t)putInput(id,t);
+    if(JSON.stringify(r.spec)!==before){
+      Ed.spec=r.spec;
+      const L=layout();let y=0;for(const p of Object.values(L))y=Math.max(y,p.y||0);
+      for(const id of r.added)if(!L[id])L[id]=freeSpot(20,y+122,id);
+      const row=chk.rows.find(x=>x.id===editedId);
+      SV.focus=row?{row:row.inMap?chk.rows.find(x=>x.id===row.inMap).row-1:row.row-1,col:m.at.c}:null;
+      SV.fromEdit=true;setSpecObj(Ed.spec);
+      setHint("方眼で直した"+(r.added.length?`（足した: ${r.added.join(", ")}）`:"")+(r.removed.length?`（消した: ${r.removed.join(", ")}）`:"")
+        +(Object.keys(r.renamed).length?`（名前を変えた: ${Object.entries(r.renamed).map(([a,b])=>a+"→"+b).join(", ")}）`:""));
+    }else{SV.fromEdit=true;svRefresh();}
+  }catch(e){
+    svPost({type:"hs-reject",reason:(e&&e.row!=null?`${e.row+1}行目: `:"")+errText(e)});
+  }
+}
+async function svLLM(m){
+  const reply=o=>svPost(Object.assign({type:"hs-llm-result",id:m.id},o));
+  const ac=new AbortController();SV.llm.set(m.id,ac);
+  let ran=false;
+  try{
+    const r=await exclusive("方眼の LLM",async()=>{ran=true;
+      const def=Object.assign({},m.def||{});const adapter=PROVIDERS[def.adapter];
+      if(!adapter)throw{code:"PROVIDER_ERROR",retryable:false,message:"未知のadapter: "+def.adapter};
+      const model=m.model||def.model||null;
+      const mdef=Object.assign({},def,{adapter:adapter.id,model});
+      let handle=null;
+      if(adapter.ensureLoaded)handle=await ModelManager.ensureLoaded(mdef,adapter,ac.signal,
+        pr=>reply({progress:`読み込み ${Math.round(((pr&&pr.progress)||0)*100)}%`}));
+      const b=m.bridge||{};
+      /* 落ちても残る記録にも、ふつうの実行と同じく推論1回ぶんを残す（どのノードの何回目で消えたか） */
+      await bbEnsureRun(Ed.spec,"方眼",inputForRun());
+      const nid=(b.node&&b.node.id)||"方眼";
+      BB.calls=(BB.calls||0)+1;const t0=Date.now();
+      const mt=(m.generation&&m.generation.maxTokens)!=null?m.generation.maxTokens:null;
+      bbSlot("last",{n:nid,i:BB.calls,m:model,mt,msgs:(m.messages||[]).map(x=>`[${x.role}] ${String(x.content==null?"":x.content)}`).join("\n")});
+      const call={n:nid,i:BB.calls,mdl:model,ch:(m.messages||[]).reduce((a,x)=>a+String(x.content==null?"":x.content).length,0),mt,via:"方眼"};
+      bbOpen("call",Object.assign({},call,{heap:bbHeap()}));
+      try{const out=await adapter.invoke({input:{messages:m.messages},model,generation:m.generation||{},schema:m.schema||null,
+        signal:ac.signal,handle,providerDef:def,node:b.node||{},inputs:b.inputs||{},ex:{iteration:b.iteration||1},onToken:()=>{}});
+        bbClose("call",Object.assign({},call,{ms:Date.now()-t0,heap:bbHeap()}));return out;}
+      catch(err){bbClose("call",Object.assign({},call,{ms:Date.now()-t0,err:String((err&&(err.code||err.message))||err).slice(0,80),heap:bbHeap()}));
+        if(err&&err.providerState==="needs_reset"&&adapter.ensureLoaded){try{await ModelManager.resetFor(mdef,adapter);}catch(_){}}throw err;}
+    });
+    if(!ran)return reply({ok:false,err:{code:"BUSY",retryable:true,message:"いま別の操作（実行など）の途中なので呼ばなかった。終わってからもう一度"}});
+    if(r&&r.cancelled)return reply({ok:true,out:{cancelled:true,partial:r.partial||""}});
+    reply({ok:true,out:{output:r.output,usage:r.usage||null}});
+  }catch(e){
+    if(isAbort(e))return reply({ok:true,out:{cancelled:true,partial:""}});
+    reply({ok:false,err:{code:(e&&e.code)||"PROVIDER_ERROR",message:errText(e),truncated:!!(e&&e.truncated),
+      partialText:e&&e.partialText,usage:(e&&e.usage)||null,providerState:e&&e.providerState,stage:e&&e.stage}});
+  }finally{SV.llm.delete(m.id);}
+}
+addEventListener("message",ev=>{
+  const f=svFrame();if(!f||ev.source!==f.contentWindow)return;const m=ev.data||{};
+  if(m.type==="hs-ready"){SV.ready=true;svRefresh();}
+  else if(m.type==="hs-edit")svEdit(m);
+  else if(m.type==="hs-llm")svLLM(m);
+  else if(m.type==="hs-llm-abort"){const ac=SV.llm.get(m.id);if(ac)try{ac.abort();}catch(_){}}
+});
 function openSheetConvert(){
   const res=specToSheet(Ed.spec,inputForRun());
   let h=head("方眼で動かす");
@@ -8390,7 +8818,8 @@ function renderIO(){
         +`<textarea data-in="${esc(n.id)}" style="min-height:54px"></textarea>`;
       wi.appendChild(l);l.querySelector("textarea").value=runInput[n.id];
     }
-    wi.querySelectorAll("[data-in]").forEach(t=>{t.oninput=()=>{runInput[t.dataset.in]=t.value;};});
+    wi.querySelectorAll("[data-in]").forEach(t=>{t.oninput=()=>{runInput[t.dataset.in]=t.value;
+      if(SV&&SV.shown){clearTimeout(SV.inT);SV.inT=setTimeout(svRefresh,400);}};});
     if(ins.length>1){const d=document.createElement("div");d.className="mini";d.id="ioMulti";
       d.textContent="起点になるのは最初の入力ノード（"+ins[0].id+"）だけ。他の入力は prompt の {{{run_input."+ins[1].id+"}}} で読める。";
       wi.appendChild(d);}
@@ -9227,7 +9656,7 @@ window.__dbg={run:()=>cur,spec:()=>Ed.spec,samples:()=>sampleNow.slice(),
     processOneWorkItem,resumeRun,startRun,makeRun,memStore,
     // Provider を差し替えて画面ごと試せるようにする（自動テスト用。JSONは触らずに済む）
     PROVIDERS,ModelManager,ABSENT,CP_STAT,estTokensMin,contextWindowOf,stateViolations,retryExecution,
-    workerProbeSrc,bbWorkerEvent,exclusive,probeResume,ENG_SEQ:()=>ENG_SEQ,specToSheet,inputForRun}};
+    workerProbeSrc,bbWorkerEvent,exclusive,probeResume,ENG_SEQ:()=>ENG_SEQ,specToSheet,inputForRun,sheetToSpec,sheetParse,newNodeOf,retypeNode,SV:()=>SV,svRefresh}};
 
 /* ---- 使い方（？ボタン） ---- */
 const HELP_TEXT=`# Harness Studio の使い方
@@ -9581,21 +10010,32 @@ v0.39.0 からは、**ページを開いてからの全部**（実行より前�
 
 どのタブも「全部コピー」と「文で保存」ができる。
 
-## 14.7 方眼で動かす（表計算の数式にする）
+## 14.7 方眼タブ（表計算の数式で書く・動かす）
 
-上の「**方眼で動かす**」を押すと、いまのハーネスを**方眼シート（表計算・sheet.html）の数式**にして開ける。
+「ハーネス編集」の **エディタ / JSON / 方眼** の3つ目。いまのハーネスを**1行1ノードの数式**で見せる。
+**方眼で直すと、図と JSON にすぐ入る**（エディタ・JSON と同じ「書く場所」の1つ）。
 
-- **1行が1ノード**。A列にノード名、B列に種類、**C列に値（数式）**、D列にメモ。線はセルの参照（\`$C$5\` など）になる。
-- 入力ノードの行（黄色）を書き換えると、そこから先の行が計算し直しになる。
-- 方眼シートの上に出る「**▶ ハーネスを実行**」で、そのシートの LLM だけを上から順に呼ぶ。計算ノード（JavaScript）は自動で動く。
-- ノードの中身の扱い（差し込み・合流・pick・計算・点検・結合・まとめ）は、**このページと同じコード**で動く
-  （写したものが一字一句同じかを、自動テストで毎回確かめている）。
-- 方眼シートの中に**新しいシートとして足す**。今あるシートには触らない。
-- **同じに動かせないハーネスは変換しない**（ループ・条件分岐・先着・多数決・記憶・mock の LLM・条件付きの線・ループの線・
-  届く順で値が変わる受け取り方など）。そのときは理由を1つずつ出す。近いものに置き換えて動かすことはしない。
-- 方眼での動き方の違い（押す前に画面にも出る）:
-  LLM は「▶ ハーネスを実行」を押してから動く／同じ文を送る呼び出しは1回にまとまる（答えを覚えておく）／
-  fail_fast でも、失敗したノードに続く行だけがエラーになり、ほかの行は計算される。
+- **A 列**: ノード名（書き換えると名前が変わり、線・式の中の名前もついてくる）
+- **B 列**: 種類
+- **C 列**: 値（数式）。LLM は \`=HLLM(provider, system, template, 入ってきた値, prefix, suffix, schema, 設定)\`、
+  計算は \`=JS(コード, 名前, 値, …)\` / \`=HEXPR(式, …)\`、Map は \`=HMAP(…)\` など。**線はセルの参照**（\`$C$5\` など）で、
+  参照を書き換えるとつなぎ先が変わる。
+- **D 列**: 名前（label）。**E 列**はメモ（自動。直せない）
+- **ノードを足す**: 空いた行に A（名前）と B（種類）を書く。中身はエディタの「＋ ノード」と同じ既定で始まる。
+  A だけ書いた行は「書きかけ」として残る（まだノードにしない）。
+- **ノードを消す**: A のノード名を消す（そのノードへの線も消える）。
+- **入力の行**（黄色）は実行の入力（入出力の欄と同じ）。ハーネスの JSON は変えない。
+- **改行のあるセル**（プロンプトやコード）は、選んで直そうとすると改行を残せる欄が開く。
+- **入れないもの**: 読めない数式（\`=SUM(…)\` など、ハーネスにできないこと）・A〜D 列の外・
+  消えるキーがある種類の変更（エディタで変える）・Map の中のノードを足す/消す（エディタで）。
+  そのときはセルを元に戻し、理由を出す（勝手に直して入れない）。
+- **方眼の中で実行**: 上の「**▶ ハーネスを実行**」で、LLM を上から順に呼ぶ。LLM は**このページの Provider とモデル**で動く
+  （方眼の中で別にモデルを読まない）。落ちても残る記録にも、ふつうの実行と同じく推論1回ずつが残る。
+- **書けないハーネス**（ループ・条件分岐・先着・多数決・記憶・条件付きの線・ループの線など）は、表を出さずに理由を出す。
+  エディタか JSON で書く。
+
+方眼シートを**別のページ**として開きたいときは「**方眼で動かす**」ボタン（方眼シートに新しいシートとして足す）。
+そちらは方眼シートの中で LLM を動かすので、mock の LLM と wllama は使えない。
 
 詳しい対応は「詳しい動き」の 58.5。
 
@@ -12331,7 +12771,7 @@ JSON を書くだけでは存在が分からないが、画面にあるもの。
 - ノードの**右下のつまみ**で大きさを変えられる（図の見た目だけ。Runtime は見ない）。
 - **実行前の警告** … 「ループに入る線が無い」「ループの繰り返す先が無い」など、
   配線から確実に分かるものはその場で赤く出る。直せるものはボタンが付く。
-- **エディタ / JSON** の切り替え。JSON に貼ったものは**その場で図になる**。
+- **エディタ / JSON / 方眼** の切り替え。JSON に貼ったものは**その場で図になる**。方眼で直したものも図と JSON にすぐ入る。
 
 **自己テスト（開発・診断用）**
 - ページのいちばん下に、Runtime と Provider の**自己テストの結果**が出る（\`75/75 PASS\` など）。
@@ -12344,16 +12784,17 @@ JSON を書くだけでは存在が分からないが、画面にあるもの。
 - それぞれ「**全部コピー**」と「**文で保存**」ができる。
   外部のLLMに渡すときは、このタブごと渡せばよい。
 
-## 58.5 方眼で動かす（ハーネス → 方眼シートの数式）
+## 58.5 方眼（ハーネス ⇔ 方眼シートの数式）
 
-「方眼で動かす」は、ハーネスを方眼シート（sheet.html）の**数式**にする。1行＝1ノード、C列がそのノードの値。
+方眼タブと「方眼で動かす」は、ハーネスを方眼シート（sheet.html）の**数式**にする。1行＝1ノード、C列がそのノードの値。
+方眼タブでは逆向き（数式 → ハーネス）も行う。
 値の決まり: **text の値はふつうの文字列**。**JSON の値**は、数・真偽はそのまま数・真偽、
 文字列・配列・オブジェクト・null はセルに JSON の文で見える（"5" と 5 は混ざらない）。
 
 | ノード | 数式 |
 |---|---|
 | input | 文字をそのまま（この行を書き換えると先が計算し直し） |
-| llm | \`=LLMNODE(provider, system, 本文, schema, 設定)\`。本文は \`HTEMPLATE(template, 入ってきた値)\` と prefix / suffix を \`"\\n\\n"\` でつないだもの |
+| llm | \`=HLLM(provider, system, template, 入ってきた値, prefix, suffix, schema, 設定)\`。空の引数は「書いていない」。送る文は harness の buildMessages（写したもの）で作る。設定は model / contextSize / overrides / generation / onTruncate / onBadOutput / onContextOverflow / mock |
 | calc（JavaScript） | \`=JS(コード, 名前, 値, …)\`。名前は calc と同じ決め方（as → pick → ノード名 → in1…）。Worker で動かし3秒で打ち切る |
 | calc（式） | \`=HEXPR(式, 名前, 値, …, "#ノード名", 値)\`。\`ノード名.out\` / \`.type\` は "#ノード名" で渡した値 |
 | map | \`=HMAP(配列, LAMBDA(_ITEM,_I, LET(中のノード…, 戻る値)), 設定)\`。中のノードは Map の行の下にメモだけの行で並ぶ |
@@ -12366,18 +12807,37 @@ JSON を書くだけでは存在が分からないが、画面にあるもの。
 JavaScript の Worker の中身・文脈の窓の見積もりは、このページの関数を写したもの（\`tools/sync-harness-copy.mjs\`）。
 onTruncate（use / retry）・onBadOutput（retry）・onContextOverflow も同じ決め方で動く。
 
-**変換しないもの**（理由を出して止める）: loop / cond / race / quorum / memory / tool の各ノード、mock の LLM（provider を付ける）、
-wllama、ループの線・if / else の線、routing.mode:"first_match"、start が all 以外で入口が2本以上、onError:"skip"、
+**変換しないもの**（理由を出して止める）: loop / cond / race / quorum / memory / tool の各ノード、
+ループの線・if / else の線、routing.mode:"first_match"、start が all 以外で入口が2本以上、onError:"skip"、
 「複数受け取る」になっていない入口に線が2本以上（harness では先に届いた1本だけを使う）、入口が2つ以上の LLM、
-差し込みの run_input、式の run / input、式が読むノードが手前に無い（線でつなげば読める）、
+差し込みの run_input（と、ハーネスに vars があるときの vars）、式の run / input、式が読むノードが手前に無い（線でつなげば読める）、
 \`ノード名.status\` など out / type 以外、点検の JavaScript、Map の中の Map、Map の中と外を直接つなぐ線。
+「方眼で動かす」（別のページ）だけは、さらに mock の LLM と wllama も断る（方眼シートの中で LLM を動かすため）。
+方眼タブは LLM をこのページで動かすので、どちらも書ける。
+
+**方眼タブで直したとき**（方眼 → ハーネス）:
+- 読むのは上の表の形だけ。数式からはノードの中身（その種類で数式が決めるキー）と、そのノードに入る線を作る。
+  数式に出てこないもの（図の位置・出口 ports・routing・start・線の validation など）は前の値をそのまま残す。
+- A 列の名前を変えた行は名前の変更（線・式の中の名前・図の位置がついてくる）。A を消した行はノードの削除
+  （そのノードからの線も消える）。空いた行に A と B があればノードを足す（エディタの「＋ ノード」と同じ既定）。
+- 線: 参照の並びが position。計算ノードの名前は、既定の名前（as → pick → ノード名 → in1…）と同じなら as を書かない。
+  HPICK が2つなら内側が出口の取り出し、外側が線の pick。
+- 入れたあとはエディタと同じ整え方（normalizeSpec）を通し、もう一度方眼に直して表を作り直す。
+- 断るとき: 読めない数式・ハーネスにできないこと・作ったハーネスが方眼で書けなくなるとき（輪になる・検査で止まる）・
+  消えるキーがある種類の変更・Map の中のノードの数を変える・A〜D 列の外・2つの行に同じ名前。セルは元に戻り、理由が出る。
+- 確かめ方（自動テスト \`harness-sheetview.mjs\`）: ハーネス → 方眼 → ハーネス が**一字一句同じ**（v13.1 と、方眼で書ける例全部）。
+  名前・system・Map の中・名前の変更・足す・つなぐ・消す・断る・入力・改行・元に戻す・方眼の中の実行（mock の答えが harness と同じ）・開き直し。
+
+**方眼タブの LLM**: 方眼の中では LLM を呼ばず、送る文・generation・schema をこのページへ渡して、このページの Provider と
+ModelManager で動かす（engine を2つ作らない）。動かすのは「動かす操作は同時に1つだけ」の決まりの中（実行の途中なら断り、
+その答えは失敗にしない）。needs_reset なら engine を捨てる。推論1回ずつを落ちても残る記録に残す（via: 方眼）。
 
 **方眼での動き方の違い**（変換の画面にも出る）:
 - LLM は「▶ ハーネスを実行」を押してから、そのシートの分だけを1本ずつ呼ぶ。
 - 答えは provider の設定・送る文・形・切れたときの扱いごとに覚える。**同じ文を送る呼び出しは1回にまとまる**（harness は毎回呼ぶ）。
 - fail_fast: 失敗したノードとそれに続く行だけがエラーになり、ほかの行は計算される（harness は実行ごと止める）。
 - 点検の結果は点検の行に入る（実行の記録には入らない）。
-- 落ちても残る記録（ブラックボックス）と GPU の見張りは方眼シートには無い。
+- 「方眼で動かす」で開いた方眼シートには、落ちても残る記録（ブラックボックス）と GPU の見張りは無い（方眼タブの LLM は記録に残る）。
 
 確かめ方（自動テスト \`sheet-harness-equiv.mjs\`）: 実ハーネス v13.1 を同じスタブ（OpenAI 互換）につないで、
 harness と方眼の両方で走らせ、**送った文の集まり・同じ文を呼んだ回数・各ノードの値・出力が同じ**ことを確かめている

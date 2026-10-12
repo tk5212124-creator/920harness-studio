@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.41.0 ハーネスを方眼シートの数式で動かす
+## 1. 現状 — v0.42.0 方眼タブ（数式で書くと図と JSON に入る）
 
 | 段階 | 状態 |
 |---|---|
@@ -73,7 +73,8 @@ iPhone でもPCでも同じ操作。
 | 落ちる前の記録だけで追える・開き直しても消えない v0.39.0（記録はページを開いてからの全部を2000枠に残す＝実行より前にしたことも残る・時刻はページを開いてからの ms にそろえ端末の時計も入れる／wasm のメモリ（作った・増やす前・増やした後）を Worker とメインで記録／メインと Worker の心拍（どちらがいつまで生きていたか）・Worker が詰まった時間／engine を作った・捨てた／読み出した文の頭に「記録から数えたこと」／いま開いているハーネスを端末に置いて開き直しても戻す＝切り分けの読み込み直しで例に戻っていた／「ファイルから」で選ぶファイルを絞らない＝iPhone で書き出したファイルが出てこなかった・.txt（AIに渡す1枚）も戻せる＝それまで読めなかった／診断結果をコピー・保存） | 実装済み |
 | 開くたびに本物のモデルを読んでいたのを止める v0.40.0（実機の記録で「実行の前から GPU 804MB・wasm 240MB・engine を10個作った」・開くのに27秒。自己テスト65が「JSONで書く」の例（webllm の Qwen2.5）をそのまま走らせていて、WebGPU のある端末では開くたびに本物のモデルを読み込んで推論していた＝ふだんのテストは WebGPU の無い Chromium なので気づけなかった → mock に替えた写しで走らせる。HTTP＋本物の WebGPU で開いて「自己テストが本物を読まない」を毎回確かめるテストを足した／`ModelManager.reset()` が engine を忘れるだけで Worker ごと残していた → 止めてから忘れる／切り分けが実行と重なると、断られたのに「完走」と書き、記録を上書きし、0.4秒後に読み込み直して実行を止めていた → 始めずに「続ける／やめる」を出す／いま開いている画面の記録を「途中で消えた」と書いていた） | 実装済み |
 | GPU を失ったら engine を読み直す v0.40.1（v0.40.0 の実機で初めて最後まで走ったが、回答生成が `map async was not successful`、続く回答Judge が `The current Object has already been disposed` で失敗していた。同梱の WebLLM は GPU の device を失うと中の instance を片付けるのに、アプリはその engine を使い続けていた → この2つの失敗でも engine を捨てて次は読み直す。エラーの種類は `MODEL_INFERENCE_FAILED` のまま。stub で同じ順番を再現し、直す前は失敗・直した後は回答Judge が動くことを確かめた） | 実装済み |
-| **ハーネスを方眼シートの数式で動かす v0.41.0（「方眼で動かす」＝1行1ノードの数式にして方眼シート（sheet.html）で開く。線はセルの参照、入力のセルを書き換えると先が計算し直し。ノードの中身の扱いは harness.html の関数を写して使い、一字一句同じかをテストで固定。実ハーネス v13.1 を同じスタブにつないで、送った文・呼んだ回数・各ノードの値・出力が harness と同じことを確かめた。同じに動かせないもの（ループ・条件・先着など）は理由を付けて変換しない）** | **いまここ** |
+| ハーネスを方眼シートの数式で動かす v0.41.0（「方眼で動かす」＝1行1ノードの数式にして方眼シート（sheet.html）で開く。線はセルの参照、入力のセルを書き換えると先が計算し直し。ノードの中身の扱いは harness.html の関数を写して使い、一字一句同じかをテストで固定。実ハーネス v13.1 を同じスタブにつないで、送った文・呼んだ回数・各ノードの値・出力が harness と同じことを確かめた。同じに動かせないもの（ループ・条件・先着など）は理由を付けて変換しない） | 実装済み |
+| **方眼タブ v0.42.0（ハーネス編集に エディタ / JSON / 方眼 の3つ目。1行1ノードの数式で見せ、方眼で直すと図と JSON にすぐ入る＝数式からノードの中身と線を作る逆変換。A 列で名前の変更・空いた行に A と B でノードを足す・A を消すと削除・読めない数式は理由を出して入れない。ハーネス → 方眼 → ハーネス が一字一句同じ（v13.1 と例）。方眼の中の LLM はこのページの Provider で動かし engine を2つ作らない・落ちても残る記録にも残る。LLM ノードは HLLM＝引数がそのままノードの設定、送る文は harness の buildMessages を写して作る。改行のあるセルは改行を残せる欄で直す＝v0.41.0 の方眼シートでは数式バーで直すと改行が消えていた）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -932,29 +933,36 @@ provider cpu = wllama url "https://…/qwen2.5-0.5b-instruct-q4_k_m.gguf" contex
 | 片付け | 別のGGUFを読むと前のを `exit()` する（同時に1つだけ） |
 | 同梱本体 | `vendor/wllama/index.js` が実ブラウザから読め、wasm も互換ビルドも 200 |
 
-## 4.6 方眼で動かす（ハーネスを表計算の数式にする）
+## 4.6 方眼タブ（数式で書いて動かす）／方眼で動かす
 
-画面の「**方眼で動かす**」で、いまのハーネスを方眼シート（`sheet.html`）の数式にして、新しいシートとして開く
-（今あるシートには触らない）。
+「ハーネス編集」の **エディタ / JSON / 方眼** の3つ目。いまのハーネスを方眼シート（`sheet.html`）の1行1ノードの数式で見せ、
+**方眼で直すと図と JSON にすぐ入る**。
 
-| A ノード | B 種類 | C 値（数式） | D メモ |
-|---|---|---|---|
-| in | input | 雨の日に家でできることを3つ挙げて。 | 入力（書き換えると先が計算し直し） |
-| 契約 | calc | `=JS("const q=String(inputs[0]??'');…","in1",$C$2,"@node","契約")` | |
-| 概念分解 | llm | `=ONERROR(LLMNODE("local","質問を…",HTEMPLATE("質問:\n{{{in.question}}}",$C$3)&"\n\n"&"…","{schema}","{設定}"),"value","{…}",$C$3)` | |
-| 関連度1Map | map | `=HMAP($C$7,LAMBDA(_ITEM,_I,LET(_N1,…Judge…,_N2,…結合…,_N2)),"{設定}")` | 1件ずつ: Judge → 結合 |
+| A ノード | B 種類 | C 値（数式） | D 名前 | E メモ |
+|---|---|---|---|---|
+| in | input | 雨の日に家でできることを3つ挙げて。 | 質問 | 入力（書き換えると先が計算し直し） |
+| 契約 | calc | `=JS("const q=String(inputs[0]??'');…","in1",$C$2,"@node","契約")` | | |
+| 概念分解 | llm | `=ONERROR(HLLM("local","質問を…","質問:⏎{{{in.question}}}",$C$3,,"conceptTokensだけを…","{schema}","{設定}"),"value","{…}",$C$3)` | | |
+| 関連度1Map | map | `=HMAP($C$7,LAMBDA(_ITEM,_I,LET(_N1,…Judge…,_N2,…結合…,_N2)),"{設定}")` | | 1件ずつ: Judge → 結合 |
 
-- 線は `$C$行` の参照。出口の pick・線の pick・transform・型は `HPICK` / `HTRANSFORM` / `HTYPE` で包む。
+- 線は `$C$行` の参照。参照を書き換えるとつなぎ先が変わる。出口の pick・線の pick・transform・型は `HPICK` / `HTRANSFORM` / `HTYPE` で包む。
+- A 列を書き換えると名前の変更、空いた行に A と B でノードを足す（エディタの「＋ ノード」と同じ既定）、A を消すと削除。
+- 入力の行は実行の入力（JSON は変えない）。改行のあるセルは、改行を残せる欄で直す。
+- 読めない数式・ハーネスにできないこと・消えるキーがある種類の変更などは、セルを戻して理由を出す（勝手に直して入れない）。
+- 「▶ ハーネスを実行」で方眼の中で動かす。LLM は**このページの Provider と ModelManager** で動かす（方眼の中で engine を作らない）。
+  動かす操作は同時に1つだけの決まりの中で動き、落ちても残る記録にも推論1回ずつが残る。
 - 値: text はふつうの文字列。JSON は数・真偽ならそのまま、ほかはセルに JSON の文で見える（"5" と 5 は混ざらない）。
-- シートの上の「**▶ ハーネスを実行**」で、そのシートの LLM だけを1本ずつ呼ぶ。計算ノード（JavaScript）は Worker で自動で動く（3秒で打ち切り）。
-- ノードの中身の扱い（差し込み・merge・pick・transform・型・Join・Reduce・式・点検の式・JavaScript の Worker の中身・文脈の窓の見積もり）は
-  `harness.html` の関数を `tools/sync-harness-copy.mjs` で写したもの。`node tools/sync-harness-copy.mjs --check` で一字一句同じかを確かめる。
-  onTruncate（use / retry）・onBadOutput（retry）・onContextOverflow・onError（value / null）・Map の onItemError も同じ決め方。
-- **変換しないもの**（理由を1つずつ出して止める。近いものに置き換えない）: loop / cond / race / quorum / memory / tool、mock の LLM、wllama、
-  ループの線・if / else の線、first_match、start が all 以外で入口2本以上、onError:"skip"、「複数受け取る」でない入口に線2本以上、
-  入口が2つ以上の LLM、差し込みの run_input、式の run / input、手前に無いノードを読む式、Map の中の Map など。
+- ノードの中身の扱い（差し込み・送る文の組み立て（buildMessages）・merge・pick・transform・型・Join・Reduce・式・点検の式・
+  JavaScript の Worker の中身・文脈の窓の見積もり）は `harness.html` の関数を `tools/sync-harness-copy.mjs` で写したもの
+  （`--check` で一字一句同じかを確かめる）。onTruncate・onBadOutput・onContextOverflow・onError（value / null）・Map の onItemError も同じ決め方。
+- **書けないもの**（表を出さず理由を出す）: loop / cond / race / quorum / memory / tool、ループの線・if / else の線、first_match、
+  start が all 以外で入口2本以上、onError:"skip"、「複数受け取る」でない入口に線2本以上、入口が2つ以上の LLM、
+  差し込みの run_input、式の run / input、手前に無いノードを読む式、Map の中の Map など。
 - **方眼での動き方の違い**: LLM は押してから動く／同じ文を送る呼び出しは1回にまとまる（答えを覚える）／
-  fail_fast でも失敗に続く行だけがエラーになる／点検の結果は点検の行に入る／落ちても残る記録と GPU の見張りは無い。
+  fail_fast でも失敗に続く行だけがエラーになる／点検の結果は点検の行に入る。
+
+「**方眼で動かす**」ボタンは、同じシートを方眼シートの**別のページ**に新しいシートとして足す。
+そちらは方眼シートの中で LLM を動かすので mock の LLM と wllama は使えず、落ちても残る記録と GPU の見張りも無い。
 
 ## 5. 4つの adapter
 
@@ -1246,6 +1254,7 @@ node tests/harness-selftest-gpu.mjs # 開くたびに回る自己テストが本
 node tests/harness-fileimport.mjs   # 書き出した .json / .hsl / .txt を「ファイルから」で戻す（拡張子違い・BOM・共有リンクだけ・文字でないファイル）
 node tests/sheet.mjs                # 方眼シート — 配列・こぼれ・LET/LAMBDA・ループ・=LLM()・ハーネスの関数（JSON の値・ONERROR・HMAP・JS の打ち切り）
 node tests/sheet-harness-equiv.mjs  # 「方眼で動かす」— 実ハーネス v13.1 を harness と方眼で走らせ、送った文・回数・各ノードの値・出力が同じか（切れる・JSON でない回も）
+node tests/harness-sheetview.mjs    # 方眼タブ — 往復が一字一句同じ・方眼で直すと図と JSON に入る（名前・system・Map の中・名前の変更・足す・つなぐ・消す・断る・入力・改行・元に戻す）・方眼の中の実行・開き直し
 node tools/sync-harness-copy.mjs --check   # 方眼シートに写した関数が harness.html と一字一句同じか
 MODEL_DIR=<重みの場所> node tests/harness-real-llm.mjs   # 本物のモデルで実際に推論する（重みが無ければSKIP）
 ```
