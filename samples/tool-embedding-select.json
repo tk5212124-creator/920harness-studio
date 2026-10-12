@@ -129,8 +129,8 @@
     },
     {
       "id": "near",
-      "type": "tool",
-      "tool": {
+      "type": "embedding",
+      "embedding": {
         "kind": "similarity",
         "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
         "query": "{{{run_input.in}}}",
@@ -140,8 +140,8 @@
     },
     {
       "id": "uniq",
-      "type": "tool",
-      "tool": {
+      "type": "embedding",
+      "embedding": {
         "kind": "dedupe",
         "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
         "textKey": "text",
@@ -150,8 +150,8 @@
     },
     {
       "id": "pick",
-      "type": "tool",
-      "tool": {
+      "type": "embedding",
+      "embedding": {
         "kind": "mmr",
         "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
         "query": "{{{run_input.in}}}",

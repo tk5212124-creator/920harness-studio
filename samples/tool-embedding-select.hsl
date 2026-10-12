@@ -15,12 +15,12 @@ node ideas: llm local
   prompt "質問: {{{run_input.in}}}\n概念: {{{in}}}\n観点を8個まで。"
   gen {"maxTokens":200}
   schema {"type":"object","required":["candidates"],"properties":{"candidates":{"type":"array","items":{"type":"string"}}}}
-node near: tool
-  set tool {"kind":"similarity","model":"Xenova/paraphrase-multilingual-MiniLM-L12-v2","query":"{{{run_input.in}}}","candidatesKey":"candidates","topK":8}
-node uniq: tool
-  set tool {"kind":"dedupe","model":"Xenova/paraphrase-multilingual-MiniLM-L12-v2","textKey":"text","threshold":0.9}
-node pick: tool
-  set tool {"kind":"mmr","model":"Xenova/paraphrase-multilingual-MiniLM-L12-v2","query":"{{{run_input.in}}}","candidatesKey":"kept","textKey":"text","k":4,"lambda":0.7}
+node near: embedding
+  set embedding {"kind":"similarity","model":"Xenova/paraphrase-multilingual-MiniLM-L12-v2","query":"{{{run_input.in}}}","candidatesKey":"candidates","topK":8}
+node uniq: embedding
+  set embedding {"kind":"dedupe","model":"Xenova/paraphrase-multilingual-MiniLM-L12-v2","textKey":"text","threshold":0.9}
+node pick: embedding
+  set embedding {"kind":"mmr","model":"Xenova/paraphrase-multilingual-MiniLM-L12-v2","query":"{{{run_input.in}}}","candidatesKey":"kept","textKey":"text","k":4,"lambda":0.7}
 node judge: llm local
   system "候補の中から、質問に答えるのに本当に役立つ観点だけを選ぶ。relevance は意味の近さの目安で、正しさではない。"
   prompt "質問: {{{run_input.in}}}\n候補: {{{in}}}"

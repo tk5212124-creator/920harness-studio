@@ -681,7 +681,7 @@ const LLMCore={
      text の値 … ふつうの文字列
      JSON の値 … 数・真偽はそのまま数・真偽。文字列・配列・オブジェクト・null は {json:値}（セルには JSON の文で見える）
    ノードの中身の扱い（差し込み・合流・pick・型・結合・まとめ・式）は harness.html から写した関数（HX）をそのまま使う。 */
-/*#HARNESS-COPY — harness.html v0.45.0 から写した（手で直さない。tools/sync-harness-copy.mjs で作り直す）*/
+/*#HARNESS-COPY — harness.html v0.46.0 から写した（手で直さない。tools/sync-harness-copy.mjs で作り直す）*/
 const HX=(()=>{
 const ABSENT=Symbol("absent");
 const OPS2=["&&","||","==","!=","<=",">="],OPS1=["+","-","*","/","%","<",">"];

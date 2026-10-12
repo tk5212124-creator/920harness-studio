@@ -191,30 +191,54 @@ const A = ['https://api.example.test'];
 await paste({ metadata: { name: 'ed', version: '1' }, nodes: [{ id: 'in', type: 'input' }, { id: 'o', type: 'output' }], edges: [{ from: { node: 'in', port: 'out' }, to: { node: 'o', port: 'in' } }] });
 await tap('#viewSeg button[data-v="editor"]');
 const paletteHas = (await p.locator('#addNode').count()) === 1;
-{ await tap('#addNode'); await p.waitForTimeout(200);
-  const btn = p.locator('[data-add="tool"]'); R['U パレットに Tool'] = await btn.count();
-  await btn.first().tap(); await p.waitForTimeout(400); }
-let sp1 = await spec(); const toolNode = sp1.nodes.find(n => n.type === 'tool');
-R['U 足したノード'] = toolNode;
-await tap('#shClose').catch(() => {});
+// パレットから Web・Embedding・ツールを1つずつ足す（Web と Embedding は独立した種類）
+const addKind = async type => { await tap('#addNode'); await p.waitForTimeout(200);
+  const c = await p.locator(`[data-add="${type}"]`).count(); await p.locator(`[data-add="${type}"]`).first().tap(); await p.waitForTimeout(400);
+  await tap('#shClose').catch(() => {}); const sp = await spec(); return { count: c, node: sp.nodes[sp.nodes.length - 1] }; };
+const addW = await addKind('web'), addE = await addKind('embedding'), addT = await addKind('tool');
+R['U パレット'] = { web: addW, embedding: addE, tool: addT };
+const toolNode = addE.node;
 await tap(`.nd[data-id="${toolNode.id}"]`);
+const subtitle = await p.locator(`.nd[data-id="${toolNode.id}"]`).textContent();
+await p.selectOption('select[data-f="__tkind"]', 'dedupe'); await p.waitForTimeout(300);
 await p.selectOption('select[data-f="__tkind"]', 'similarity'); await p.waitForTimeout(300);
-await p.fill('input[data-f="tool.threshold"]', '0.4'); await p.waitForTimeout(200);
-await p.selectOption('select[data-f="tool.model"]', 'mock'); await p.waitForTimeout(300);
+await p.fill('input[data-f="embedding.threshold"]', '0.4'); await p.waitForTimeout(200);
+await p.selectOption('select[data-f="embedding.model"]', 'mock'); await p.waitForTimeout(300);
 const kindOpts = await p.locator('select[data-f="__tkind"] option').allTextContents();
 const sheetTxt = await p.locator('#sheetBody').textContent();
 await tap('#shClose').catch(() => {});
-sp1 = await spec(); const tn = sp1.nodes.find(n => n.id === toolNode.id);
+await tap(`.nd[data-id="${addW.node.id}"]`);
+const webOpts = await p.locator('select[data-f="__tkind"] option').allTextContents();
+await p.fill('input[data-f="web.query"]', '{{{in}}} 歴史'); await p.waitForTimeout(200);
+await tap('#shClose').catch(() => {});
+await tap(`.nd[data-id="${addT.node.id}"]`);
+const toolOpts = await p.locator('select[data-f="__tkind"] option').allTextContents();
+await tap('#shClose').catch(() => {});
+let sp1 = await spec(); const tn = sp1.nodes.find(n => n.id === toolNode.id), wn = sp1.nodes.find(n => n.id === addW.node.id);
 const rt = await p.evaluate(sp => { const E = __dbg.eng; const h = E.specToHSL(sp); const back = E.hslToSpec(h);
-  return { hsl: h.split('\n').filter(l => l.includes('tool')), back }; }, sp1);
+  return { hsl: h.split('\n').filter(l => /set (web|embedding|tool)/.test(l)), back }; }, sp1);
 { const c = o => JSON.stringify(o, (k, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(x => [x, v[x]])) : v);
   rt.same = c(rt.back.nodes) === c(sp1.nodes); delete rt.back; }
-const legacyRev = await p.evaluate(() => __dbg.eng.reviewSpec({ nodes: [{ id: 'in', type: 'input' }, { id: 't', type: 'tool', tool: { kind: 'wikipedia', foo: 1 }, provider: 'x' }, { id: 'o', type: 'output' }],
+// 古い type:"tool" に Web の kind を書いたもの（v0.45.0 の書き方）も、そのまま開けて動く。種類を Web に変えると設定を持っていく
+await paste({ metadata: { name: 'old', version: '1' }, nodes: [{ id: 'in', type: 'input' }, { id: 't', type: 'tool', tool: { kind: 'wikipedia', lang: 'ja', limit: 2 } }, { id: 'o', type: 'output' }],
+  edges: [{ from: { node: 'in', port: 'out' }, to: { node: 't', port: 'in' } }, { from: { node: 't', port: 'out' }, to: { node: 'o', port: 'in' } }] });
+await tap('#viewSeg button[data-v="editor"]'); await tap('.nd[data-id="t"]');
+const oldOpts = await p.locator('select[data-f="__tkind"] option').allTextContents();
+const oldNote = await p.locator('#sheetBody').textContent();
+await p.selectOption('select[data-f="__ntype"]', 'web'); await p.waitForTimeout(400);
+await tap('#shClose').catch(() => {});
+const moved = (await spec()).nodes.find(n => n.id === 't');
+const legacyRev = await p.evaluate(() => __dbg.eng.reviewSpec({ nodes: [{ id: 'in', type: 'input' }, { id: 't', type: 'web', web: { kind: 'wikipedia', foo: 1 }, provider: 'x' }, { id: 'o', type: 'output' }],
   edges: [{ from: { node: 'in', port: 'out' }, to: { node: 't', port: 'in' } }, { from: { node: 't', port: 'out' }, to: { node: 'o', port: 'in' } }] }).map(x => x.message));
-R['U 設定'] = { tool: tn.tool, 選べる種類: kindOpts, HSL: rt, 診断: legacyRev };
-ok.U = paletteHas && R['U パレットに Tool'] === 1 && toolNode.tool.kind === 'wikipedia' && tn.tool.kind === 'similarity' && tn.tool.threshold === 0.4
-  && tn.tool.model === 'mock' && tn.tool.query === '{{{run_input.in}}}' && kindOpts.length === 7 && /正しさや確率ではない/.test(sheetTxt)
-  && rt.same && legacyRev.some(m => m.includes('foo')) && legacyRev.some(m => m.includes('provider'));
+R['U 設定'] = { embedding: tn.embedding, web: wn.web, 図の2行目: subtitle, 選べる種類: { embedding: kindOpts, web: webOpts, tool: toolOpts, 古いtool: oldOpts },
+  HSL: rt, 古いtoolをWebに: moved, 診断: legacyRev };
+ok.U = paletteHas && addW.count === 1 && addE.count === 1 && addT.count === 1
+  && addW.node.type === 'web' && addW.node.web.kind === 'wikipedia' && addE.node.type === 'embedding' && addE.node.embedding.kind === 'similarity'
+  && addT.node.type === 'tool' && addT.node.tool.kind === 'file' && /Embedding/.test(subtitle) && !/provider未設定/.test(subtitle)
+  && tn.embedding.kind === 'similarity' && tn.embedding.threshold === 0.4 && tn.embedding.model === 'mock' && tn.embedding.query === '{{{run_input.in}}}'
+  && kindOpts.length === 4 && webOpts.length === 2 && toolOpts.length === 1 && wn.web.query === '{{{in}}} 歴史' && /正しさや確率ではない/.test(sheetTxt)
+  && rt.same && oldOpts.length === 2 && /Web/.test(oldNote) && moved.type === 'web' && moved.web.kind === 'wikipedia' && moved.web.limit === 2 && moved.tool === undefined
+  && legacyRev.some(m => m.includes('foo')) && legacyRev.some(m => m.includes('provider'));
 
 // ---- P: 実行のときの許可（画面から） ----
 await p.evaluate(() => { __dbg.eng.TOOL_PERM.mem = null; try { localStorage.removeItem('harness_tool_net_v1'); } catch (_) {} });
@@ -342,7 +366,7 @@ await tap('#exSeg3 button[data-ex="exT2"]');
 let s2 = await spec();
 const mocks = { concepts: { fixed: { concepts: ['富士山', '高さ'] } }, ideas: { fixed: { candidates: ['富士山の標高', '富士山の高さは何メートルか', '富士山の高さは何メートルか', '富士山の登山道', '日本の山の高さ比べ', '猫の飼い方'] } },
   judge: { fixed: { use: ['富士山の標高'], reason: 'r' } }, answer: { echoPrompt: true }, check: { fixed: { ok: true } } };
-for (const n of s2.nodes) { if (mocks[n.id]) { delete n.provider; n.mock = mocks[n.id]; } if (n.tool && n.tool.model) n.tool.model = T; }
+for (const n of s2.nodes) { if (mocks[n.id]) { delete n.provider; n.mock = mocks[n.id]; } const c = n.embedding || n.tool; if (c && c.model) c.model = T; }
 delete s2.providers;
 await paste(s2);
 await tap('#run'); const stI1 = await state();

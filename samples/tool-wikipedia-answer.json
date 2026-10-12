@@ -41,8 +41,8 @@
     },
     {
       "id": "wiki",
-      "type": "tool",
-      "tool": {
+      "type": "web",
+      "web": {
         "kind": "wikipedia",
         "lang": "ja",
         "query": "{{{in}}}",

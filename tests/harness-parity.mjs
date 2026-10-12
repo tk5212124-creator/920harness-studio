@@ -86,6 +86,18 @@ const NODE_CASES = [
     ['__tkind', 'tool.model', 'tool.candidatesKey', 'tool.textKey', 'tool.threshold']],
   ['tool mmr', { id: 'X', type: 'tool', tool: { kind: 'mmr', model: 'mock', query: 'q', queryKey: 'qq', candidatesKey: 'c', textKey: 't', k: 3, lambda: 0.5, threshold: 0.1 } },
     ['__tkind', 'tool.model', 'tool.query', 'tool.queryKey', 'tool.candidatesKey', 'tool.textKey', 'tool.k', 'tool.lambda', 'tool.threshold']],
+  // Web・Embedding は独立した種類（設定は種類と同じ名前のキー）
+  ['web wikipedia', { id: 'X', type: 'web', web: { kind: 'wikipedia', lang: 'ja', query: '{{{in}}}', limit: 3, content: 'extract', extractChars: 300, timeoutMs: 5000, maxBytes: 100000, retries: 1 } },
+    ['__tkind', 'web.lang', 'web.query', 'web.limit', 'web.content', 'web.extractChars', 'web.timeoutMs', 'web.maxBytes', 'web.retries']],
+  ['web http_json', { id: 'X', type: 'web', web: { kind: 'http_json', url: 'https://api.example.test/x', params: { q: '{{{in}}}' }, pick: 'items', timeoutMs: 5000, maxBytes: 100000, retries: 1 } },
+    ['__tkind', 'web.url', 'web.params', 'web.pick', 'web.timeoutMs', 'web.maxBytes', 'web.retries']],
+  ['embedding embed', { id: 'X', type: 'embedding', embedding: { kind: 'embed', model: 'mock', textKey: 't', candidatesKey: 'c' } }, ['__tkind', 'embedding.model', 'embedding.textKey', 'embedding.candidatesKey']],
+  ['embedding similarity', { id: 'X', type: 'embedding', embedding: { kind: 'similarity', model: 'mock', query: 'q', queryKey: 'qq', candidatesKey: 'c', textKey: 't', threshold: 0.3, topK: 3 } },
+    ['__tkind', 'embedding.model', 'embedding.query', 'embedding.queryKey', 'embedding.candidatesKey', 'embedding.textKey', 'embedding.threshold', 'embedding.topK']],
+  ['embedding dedupe', { id: 'X', type: 'embedding', embedding: { kind: 'dedupe', model: 'mock', candidatesKey: 'c', textKey: 't', threshold: 0.9 } },
+    ['__tkind', 'embedding.model', 'embedding.candidatesKey', 'embedding.textKey', 'embedding.threshold']],
+  ['embedding mmr', { id: 'X', type: 'embedding', embedding: { kind: 'mmr', model: 'mock', query: 'q', queryKey: 'qq', candidatesKey: 'c', textKey: 't', k: 3, lambda: 0.5, threshold: 0.1 } },
+    ['__tkind', 'embedding.model', 'embedding.query', 'embedding.queryKey', 'embedding.candidatesKey', 'embedding.textKey', 'embedding.k', 'embedding.lambda', 'embedding.threshold']],
   ['routing（出口2本）', { id: 'X', type: 'llm', mock: { text: 'a' }, routing: { mode: 'parallel', failurePolicy: 'fail_fast' } }, ['routing.mode', 'routing.failurePolicy']],
 ];
 const missing = [];
@@ -121,10 +133,10 @@ for (const [name, node, want] of NODE_CASES) {
   await tap('#shClose');
 }
 // Tool の一覧が Runtime の TOOL_KEYS と食い違っていないか（Runtime が読むキーを足したのにここを足し忘れると落ちる）
-{ const tk = await p.evaluate(() => ({ keys: __dbg.eng.TOOL_KEYS, kinds: __dbg.eng.TOOL_KINDS }));
+{ const tk = await p.evaluate(() => ({ keys: __dbg.eng.TOOL_KEYS, types: __dbg.eng.TOOL_TYPE_KINDS }));
   const lack = [];
-  for (const k of tk.kinds) { const c = NODE_CASES.find(([n]) => n === 'tool ' + k);
-    const want = c ? c[2] : []; for (const key of tk.keys[k] || []) if (!want.includes('tool.' + key)) lack.push(k + '.' + key); }
+  for (const [ty, ks] of Object.entries(tk.types)) for (const k of ks) { const c = NODE_CASES.find(([n]) => n === ty + ' ' + k);
+    const want = c ? c[2] : []; for (const key of tk.keys[k] || []) if (!want.includes(ty + '.' + key)) lack.push(ty + ':' + k + '.' + key); }
   R['Tool のキーの一覧'] = lack.length ? '確かめていない: ' + lack.join(', ') : 'TOOL_KEYS と同じ';
   if (lack.length) missing.push('TOOL_KEYS → ' + lack.join(', ')); }
 ok.nodeKeys = missing.length === 0;

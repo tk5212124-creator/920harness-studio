@@ -63,8 +63,8 @@ R['③ 出口'] = { ports: a3.ports, 図の出口: await p.locator('.nd[data-id=
 ok.split = a3.ports.length === 2 && a3.ports[0].pick === 'score' && a3.ports[1].pick === 'items'
   && R['③ 出口'].図の出口 === 2 && R['③ 出口'].ラベル.join() === 'score,items'
   && R['③ 出口'].つなぎ替えた線.join() === 'p1' && (await vErr()) === ''
-  && R['③ 出口'].選択肢.slice(0, 3).join() === '値ぜんぶ,score,items'   // そのあとに「値のほか」（入ってきた値・送った文・エラー情報）が続く（v0.44.0）
-  && R['③ 出口'].選択肢.slice(3).every(t => /^(入ってきた値|送った文|エラー情報)/.test(t))
+  && R['③ 出口'].選択肢.slice(0, 3).join() === '値ぜんぶ,score,items'   // そのあとに「値のほか」（入ってきた値・送った文・返した原文・エラー情報）が続く（v0.44.0・原文は v0.46.0）
+  && R['③ 出口'].選択肢.slice(3).every(t => /^(入ってきた値|送った文|返した原文|エラー情報)/.test(t))
   && (await p.locator('[data-pf="take"]').count()) === 0;   // リストの何番目、は選ばせない
 
 // ④ 2つ目の出口から線を引く（出口ごとにちがう値が流れる）

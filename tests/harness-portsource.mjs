@@ -42,7 +42,8 @@ const optsC = await p.locator('[data-pf="key"][data-i="0"] option').allTextConte
 await tap('#shClose').catch(() => {});
 R['① 選べるもの'] = { LLM: optsA, 計算: optsC };
 ok.options = optsA.some(t => t.startsWith('送った文')) && optsA.some(t => t.startsWith('エラー情報')) && optsA.some(t => t.startsWith('入ってきた値'))
-  && !optsC.some(t => t.startsWith('送った文')) && optsC.some(t => t.startsWith('エラー情報'));
+  && !optsC.some(t => t.startsWith('送った文')) && optsC.some(t => t.startsWith('エラー情報'))
+  && optsA.some(t => t.startsWith('返した原文')) && !optsC.some(t => t.startsWith('返した原文'));
 
 // ② 選ぶと JSON と図に入る（A の出口: 1=値・2=送った文・3=エラー情報）
 await tap('.nd[data-id="A"]');

@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.45.0 Tool ノード（Wikipedia・HTTP・ファイル・端末の中の Embedding）
+## 1. 現状 — v0.46.0 Web・Embedding を独立したノードに／返した原文の出口
 
 | 段階 | 状態 |
 |---|---|
@@ -77,7 +77,8 @@ iPhone でもPCでも同じ操作。
 | 方眼タブ v0.42.0（ハーネス編集に エディタ / JSON / 方眼 の3つ目。1行1ノードの数式で見せ、方眼で直すと図と JSON にすぐ入る＝数式からノードの中身と線を作る逆変換。A 列で名前の変更・空いた行に A と B でノードを足す・A を消すと削除・読めない数式は理由を出して入れない。ハーネス → 方眼 → ハーネス が一字一句同じ（v13.1 と例）。方眼の中の LLM はこのページの Provider で動かし engine を2つ作らない・落ちても残る記録にも残る。LLM ノードは HLLM＝引数がそのままノードの設定、送る文は harness の buildMessages を写して作る。改行のあるセルは改行を残せる欄で直す＝v0.41.0 の方眼シートでは数式バーで直すと改行が消えていた） | 実装済み |
 | 1セル1ノード v0.43.0（方眼タブを作り直した: 1つのセルが1つのノードで、セルは図と同じ並び。式は `=NODE.種類(設定…)`（関数名がノードの種類、引数がそのノードの設定。失敗したときの扱いも設定の中）。入ってくる値はほかのノードのセルの参照。ノードの名前は式に書かずセルに付け、選ぶと出る。空いたセルに書くとノードが増え、消すと消え、切り取って貼ると図の位置も動く。往復は一字一句同じ） | 実装済み |
 | 出口が運ぶもの v0.44.0（出口に `source` を足した: 値のほかに、入ってきた値・送った文（LLM / tool に送ったもの。エラーに関係なく）・エラー情報（code・stage・message…。失敗したときだけ）も出口から流せる。どの種類のノードでも（request は LLM / tool）。onError:"skip" の失敗では値以外の出口にだけ流れる。エラー情報の出口があるのに onError が止めるなら検証で止める。自己テスト 96〜98） | 実装済み |
-| **Tool ノード v0.45.0（`type:"tool"` に `tool:{kind}`: Wikipedia 検索・HTTP の JSON・ファイル読込・端末の中の Embedding（近さ・重複除去・MMR）。外への通信はこの端末で許可した接続先だけ・転送は追わない・ファイルの中身が外へ出るかもしれないときは明示の許可。時間・大きさ・件数・やり直しに上限。使用量は LLM・Tool の通信・Embedding を分けて数え、記録に通信ごとの時間と結果を残す。Transformers.js を同梱し専用 Worker の CPU で動かす。古い `type:"tool"` はそのまま LLM の道。自己テスト 99〜102・`harness-tools.mjs`）** | **いまここ** |
+| Tool ノード v0.45.0（`type:"tool"` に `tool:{kind}`: Wikipedia 検索・HTTP の JSON・ファイル読込・端末の中の Embedding（近さ・重複除去・MMR）。外への通信はこの端末で許可した接続先だけ・転送は追わない・ファイルの中身が外へ出るかもしれないときは明示の許可。時間・大きさ・件数・やり直しに上限。使用量は LLM・Tool の通信・Embedding を分けて数え、記録に通信ごとの時間と結果を残す。Transformers.js を同梱し専用 Worker の CPU で動かす。古い `type:"tool"` はそのまま LLM の道。自己テスト 99〜102・`harness-tools.mjs`） | 実装済み |
+| **Web・Embedding を独立したノードに v0.46.0（`type:"web"` + `web:{kind}`・`type:"embedding"` + `embedding:{kind}`。動く道は Tool と同じ。ツールはファイルを読む種類に。v0.45.0 の `type:"tool"` もそのまま動き、種類を変えると設定を持っていく。出口に「返した原文」（`source:"raw"`＝モデルが返した文そのまま。形に合わない失敗でも流れる）とエラー情報の `raw` を足した。エラー文・送った文・返した原文の出し方を使い方3タブに書き、載せた例を自己テストで本文から動かす。自己テスト 103〜105）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -757,7 +758,7 @@ A -> まとめ from_port "p2"      items（リスト）が流れる
 
 ---
 
-### 出口が運ぶもの（入ってきた値・送った文・エラー情報）
+### 出口が運ぶもの（入ってきた値・送った文・返した原文・エラー情報）
 
 出口は値の一部だけでなく、**値のほかのもの**も運べる（JSON の `ports[].source`。画面は出口のプルダウンの「値のほか」）。
 分析するハーネス（送った文と答えを並べて点検する・失敗の種類ごとに直し方を変える）へ線を引ける。
@@ -766,17 +767,26 @@ A -> まとめ from_port "p2"      items（リスト）が流れる
 |---|---|---|
 | `value`（既定） | ノードの出力 | 成功・onError が value / null の失敗（決めた値） |
 | `input` | このノードが受け取った値（どの線から来たか付き） | 成功・onError で先へ進む失敗 |
-| `request` | LLM / tool に送ったもの（messages・model・generation・schema。切り詰めない） | 同上（送る文を作る前の失敗では流れない） |
-| `error` | 失敗の中身（code・stage・message・retryable・handledAs・attempt・truncated・partial…） | 失敗したときだけ |
+| `request` | **送った文**。LLM に送ったもの（messages・model・generation・schema。切り詰めない）。Web / Embedding / ツールは送った問い合わせ | 同上（送る文を作る前の失敗では流れない） |
+| `raw` | **返した原文**。モデルが返した文そのまま（`{text, complete}`。JSON に直す前・コードの囲みも残る）。LLM だけ | 成功・onError で先へ進む失敗（JSON にならない・形に合わない・切れた回も。何も返さなかった失敗では流れない） |
+| `error` | **エラー情報**。失敗の中身（code・stage・message（エラー文）・retryable・handledAs・attempt・truncated・partial・raw（モデルが返した文）…） | 失敗したときだけ |
+
+エラー文・送った文・返した原文をそれぞれ出力に出す（画面では、ノードをタップ →「出口を分けて、項目ごとに渡す」→ 出口のプルダウンの「値のほか」）:
 
 ```json
-"onError": "skip",
-"ports": [{"id":"v","label":"値"},{"id":"req","label":"送った文","source":"request"},{"id":"err","label":"エラー","source":"error"}]
+"onError": "null",
+"routing": {"mode": "parallel", "failurePolicy": "fail_fast"},
+"ports": [{"id":"v","label":"値"},
+          {"id":"err","label":"エラー文","source":"error","pick":"message"},
+          {"id":"req","label":"送った文","source":"request","pick":"messages"},
+          {"id":"raw","label":"返した原文","source":"raw","pick":"text"}]
 ```
+
+使い方の「読みもの」8.9・「JSONで書く」8（そのまま貼って動く例。自己テスト105で本文から取り出して動かしている）・「詳しい動き」12-1 に書いてある。
 
 - `onError:"skip"` の失敗では、値の出口には流れず、値以外の出口にだけ流れる（ノードは stopped のまま）。
 - `error` の出口があって `onError` が止める（既定）なら、検証で止める（流れない出口を黙って作らない）。
-- `pick` も効く（例: `{"source":"request","pick":"messages"}`）。使える種類: llm / tool / calc / join / reduce / assert / pass / quorum / race / memory（`request` は llm / tool だけ）。
+- `pick` も効く（例: `{"source":"request","pick":"messages"}`）。使える種類: llm / web / embedding / tool / calc / join / reduce / assert / pass / quorum / race / memory（`request` は llm / web / embedding / tool、`raw` は llm だけ）。
 - 方眼では書けない（理由を出す）。
 
 ## 2.8 条件分岐（cond）
@@ -998,9 +1008,23 @@ provider cpu = wllama url "https://…/qwen2.5-0.5b-instruct-q4_k_m.gguf" contex
 「**方眼で動かす**」ボタンは、同じシートを方眼シートの**別のページ**に新しいシートとして足す。
 そちらは方眼シートの中で LLM を動かすので mock の LLM と wllama は使えず、落ちても残る記録と GPU の見張りも無い。
 
-## 4.7 ツールノード（Wikipedia・HTTP・ファイル・端末の中の Embedding）
+## 4.7 Web ノード・Embedding ノード・ツール（Wikipedia・HTTP・端末の中の Embedding・ファイル）
 
-`type:"tool"` に `tool:{"kind":…}` を書くと、LLM を呼ばずに**決まった処理を実際に動かす**（出力はいつも JSON）。
+LLM を呼ばずに**決まった処理を実際に動かす**ノード（出力はいつも JSON）。「＋ ノード」の **Web** / **Embedding** / **ツール** から足し、
+ノードをタップして「何をするか」を選ぶ。設定は**種類と同じ名前のキー**に書く:
+
+```json
+{"id":"調べる","type":"web","web":{"kind":"wikipedia","lang":"ja","query":"{{{in}}}","limit":3}}
+{"id":"近い順","type":"embedding","embedding":{"kind":"similarity","query":"{{{run_input.in}}}","candidatesKey":"candidates","topK":5}}
+{"id":"資料","type":"tool","tool":{"kind":"file","format":"json"}}
+```
+
+| 種類 | kind |
+|---|---|
+| `web` | `wikipedia` / `http_json` |
+| `embedding` | `similarity` / `dedupe` / `mmr` / `embed` |
+| `tool` | `file`（v0.45.0 で書いた `type:"tool"` の Wikipedia・HTTP・Embedding もそのまま動く。種類を変えると設定を持っていく） |
+
 `tool` を書いていない古い `type:"tool"` は、これまでどおり LLM と同じ道で動く。
 
 | kind | すること |
@@ -1299,7 +1323,7 @@ runtime が気づいているが、`console.error` に出すだけでアプリ�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト102件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す + 出口が運ぶもの（入ってきた値・送った文・エラー情報） + Tool（Wikipedia・HTTP JSON・Embedding の mock・古い type:"tool"））
+node tests/harness-runtime.mjs      # 自己テスト105件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す + 出口が運ぶもの（入ってきた値・送った文・エラー情報） + Tool（Wikipedia・HTTP JSON・Embedding の mock・古い type:"tool"） + Web・Embedding の種類 + 返した原文 + 使い方の例をそのまま動かす）
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
