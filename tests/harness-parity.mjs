@@ -73,6 +73,19 @@ const NODE_CASES = [
     ['scope', 'out', 'max', 'emit', 'when', '__unique', '__initial', 'rules']],
   ['assert', { id: 'X', type: 'assert', lang: 'expr', onFail: 'error', asserts: [{ name: 'a', expr: 'true==true', severity: 'warn' }] }, ['lang', 'onFail', 'asserts']],
   ['module', { id: 'X', type: 'module', module: 'M' }, ['module']],
+  // Tool（type:"tool" + tool:{kind}）。種類ごとに Runtime が読むキー（TOOL_KEYS）が全部画面にある
+  ['tool wikipedia', { id: 'X', type: 'tool', tool: { kind: 'wikipedia', lang: 'ja', query: '{{{in}}}', limit: 3, content: 'extract', extractChars: 300, timeoutMs: 5000, maxBytes: 100000, retries: 1 } },
+    ['__tkind', 'tool.lang', 'tool.query', 'tool.limit', 'tool.content', 'tool.extractChars', 'tool.timeoutMs', 'tool.maxBytes', 'tool.retries']],
+  ['tool http_json', { id: 'X', type: 'tool', tool: { kind: 'http_json', url: 'https://api.example.test/x', params: { q: '{{{in}}}' }, pick: 'items', timeoutMs: 5000, maxBytes: 100000, retries: 1 } },
+    ['__tkind', 'tool.url', 'tool.params', 'tool.pick', 'tool.timeoutMs', 'tool.maxBytes', 'tool.retries']],
+  ['tool file', { id: 'X', type: 'tool', tool: { kind: 'file', format: 'json', maxBytes: 1000 } }, ['__tkind', 'tool.format', 'tool.maxBytes']],
+  ['tool embed', { id: 'X', type: 'tool', tool: { kind: 'embed', model: 'mock', textKey: 't', candidatesKey: 'c' } }, ['__tkind', 'tool.model', 'tool.textKey', 'tool.candidatesKey']],
+  ['tool similarity', { id: 'X', type: 'tool', tool: { kind: 'similarity', model: 'mock', query: 'q', queryKey: 'qq', candidatesKey: 'c', textKey: 't', threshold: 0.3, topK: 3 } },
+    ['__tkind', 'tool.model', 'tool.query', 'tool.queryKey', 'tool.candidatesKey', 'tool.textKey', 'tool.threshold', 'tool.topK']],
+  ['tool dedupe', { id: 'X', type: 'tool', tool: { kind: 'dedupe', model: 'mock', candidatesKey: 'c', textKey: 't', threshold: 0.9 } },
+    ['__tkind', 'tool.model', 'tool.candidatesKey', 'tool.textKey', 'tool.threshold']],
+  ['tool mmr', { id: 'X', type: 'tool', tool: { kind: 'mmr', model: 'mock', query: 'q', queryKey: 'qq', candidatesKey: 'c', textKey: 't', k: 3, lambda: 0.5, threshold: 0.1 } },
+    ['__tkind', 'tool.model', 'tool.query', 'tool.queryKey', 'tool.candidatesKey', 'tool.textKey', 'tool.k', 'tool.lambda', 'tool.threshold']],
   ['routing（出口2本）', { id: 'X', type: 'llm', mock: { text: 'a' }, routing: { mode: 'parallel', failurePolicy: 'fail_fast' } }, ['routing.mode', 'routing.failurePolicy']],
 ];
 const missing = [];
@@ -107,6 +120,13 @@ for (const [name, node, want] of NODE_CASES) {
   if (bad.length) missing.push(name + ' → ' + bad.join(', '));
   await tap('#shClose');
 }
+// Tool の一覧が Runtime の TOOL_KEYS と食い違っていないか（Runtime が読むキーを足したのにここを足し忘れると落ちる）
+{ const tk = await p.evaluate(() => ({ keys: __dbg.eng.TOOL_KEYS, kinds: __dbg.eng.TOOL_KINDS }));
+  const lack = [];
+  for (const k of tk.kinds) { const c = NODE_CASES.find(([n]) => n === 'tool ' + k);
+    const want = c ? c[2] : []; for (const key of tk.keys[k] || []) if (!want.includes('tool.' + key)) lack.push(k + '.' + key); }
+  R['Tool のキーの一覧'] = lack.length ? '確かめていない: ' + lack.join(', ') : 'TOOL_KEYS と同じ';
+  if (lack.length) missing.push('TOOL_KEYS → ' + lack.join(', ')); }
 ok.nodeKeys = missing.length === 0;
 
 // ── つながりのキー

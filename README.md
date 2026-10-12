@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.44.0 出口で送った文・エラー情報を渡す
+## 1. 現状 — v0.45.0 Tool ノード（Wikipedia・HTTP・ファイル・端末の中の Embedding）
 
 | 段階 | 状態 |
 |---|---|
@@ -76,7 +76,8 @@ iPhone でもPCでも同じ操作。
 | ハーネスを方眼シートの数式で動かす v0.41.0（「方眼で動かす」＝1行1ノードの数式にして方眼シート（sheet.html）で開く。線はセルの参照、入力のセルを書き換えると先が計算し直し。ノードの中身の扱いは harness.html の関数を写して使い、一字一句同じかをテストで固定。実ハーネス v13.1 を同じスタブにつないで、送った文・呼んだ回数・各ノードの値・出力が harness と同じことを確かめた。同じに動かせないもの（ループ・条件・先着など）は理由を付けて変換しない） | 実装済み |
 | 方眼タブ v0.42.0（ハーネス編集に エディタ / JSON / 方眼 の3つ目。1行1ノードの数式で見せ、方眼で直すと図と JSON にすぐ入る＝数式からノードの中身と線を作る逆変換。A 列で名前の変更・空いた行に A と B でノードを足す・A を消すと削除・読めない数式は理由を出して入れない。ハーネス → 方眼 → ハーネス が一字一句同じ（v13.1 と例）。方眼の中の LLM はこのページの Provider で動かし engine を2つ作らない・落ちても残る記録にも残る。LLM ノードは HLLM＝引数がそのままノードの設定、送る文は harness の buildMessages を写して作る。改行のあるセルは改行を残せる欄で直す＝v0.41.0 の方眼シートでは数式バーで直すと改行が消えていた） | 実装済み |
 | 1セル1ノード v0.43.0（方眼タブを作り直した: 1つのセルが1つのノードで、セルは図と同じ並び。式は `=NODE.種類(設定…)`（関数名がノードの種類、引数がそのノードの設定。失敗したときの扱いも設定の中）。入ってくる値はほかのノードのセルの参照。ノードの名前は式に書かずセルに付け、選ぶと出る。空いたセルに書くとノードが増え、消すと消え、切り取って貼ると図の位置も動く。往復は一字一句同じ） | 実装済み |
-| **出口が運ぶもの v0.44.0（出口に `source` を足した: 値のほかに、入ってきた値・送った文（LLM / tool に送ったもの。エラーに関係なく）・エラー情報（code・stage・message…。失敗したときだけ）も出口から流せる。どの種類のノードでも（request は LLM / tool）。onError:"skip" の失敗では値以外の出口にだけ流れる。エラー情報の出口があるのに onError が止めるなら検証で止める。自己テスト 96〜98）** | **いまここ** |
+| 出口が運ぶもの v0.44.0（出口に `source` を足した: 値のほかに、入ってきた値・送った文（LLM / tool に送ったもの。エラーに関係なく）・エラー情報（code・stage・message…。失敗したときだけ）も出口から流せる。どの種類のノードでも（request は LLM / tool）。onError:"skip" の失敗では値以外の出口にだけ流れる。エラー情報の出口があるのに onError が止めるなら検証で止める。自己テスト 96〜98） | 実装済み |
+| **Tool ノード v0.45.0（`type:"tool"` に `tool:{kind}`: Wikipedia 検索・HTTP の JSON・ファイル読込・端末の中の Embedding（近さ・重複除去・MMR）。外への通信はこの端末で許可した接続先だけ・転送は追わない・ファイルの中身が外へ出るかもしれないときは明示の許可。時間・大きさ・件数・やり直しに上限。使用量は LLM・Tool の通信・Embedding を分けて数え、記録に通信ごとの時間と結果を残す。Transformers.js を同梱し専用 Worker の CPU で動かす。古い `type:"tool"` はそのまま LLM の道。自己テスト 99〜102・`harness-tools.mjs`）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -997,6 +998,46 @@ provider cpu = wllama url "https://…/qwen2.5-0.5b-instruct-q4_k_m.gguf" contex
 「**方眼で動かす**」ボタンは、同じシートを方眼シートの**別のページ**に新しいシートとして足す。
 そちらは方眼シートの中で LLM を動かすので mock の LLM と wllama は使えず、落ちても残る記録と GPU の見張りも無い。
 
+## 4.7 ツールノード（Wikipedia・HTTP・ファイル・端末の中の Embedding）
+
+`type:"tool"` に `tool:{"kind":…}` を書くと、LLM を呼ばずに**決まった処理を実際に動かす**（出力はいつも JSON）。
+`tool` を書いていない古い `type:"tool"` は、これまでどおり LLM と同じ道で動く。
+
+| kind | すること |
+|---|---|
+| `wikipedia` | MediaWiki の公式 API（APIキー不要）で検索。題名・URL・pageid・抜粋（本文の冒頭も取れる）。件数・時間に上限 |
+| `http_json` | 書いた URL（https）に GET して JSON を取る。パラメータに入ってきた値を差し込める。`pick` で取り出す |
+| `file` | 利用者が選んだファイル（UTF-8 の文字・JSON）を読む。名前・大きさ・種類も返す |
+| `embed` / `similarity` / `dedupe` / `mmr` | 端末の中の Embedding モデルで、文を意味のベクトルにする・近い順に並べる・意味の重複を除く・関連と多様性で選ぶ |
+
+- **外への通信は、この端末で許可した接続先（origin）にだけ行く。** 実行のときに「〇〇へ通信する。許可する？」と聞き、許可はこのブラウザの
+  `localStorage` にだけ残る（Spec には書く場所が無い＝取り込んだハーネスだけでは通信しない）。接続先は設定だけで決まり、LLM の答えで変わらない。
+  転送（リダイレクト）は追わない。
+- ファイルは実行のときに選ぶ。ファイルを読むノードと外への通信が同じハーネスにあると、中身が外へ出るかもしれないことを言って**明示の許可**をもらう。
+- 時間（〜30秒）・大きさ（返事〜5MB・ファイル〜10MB）・件数（Wikipedia 〜20件・Embedding 1回512文）・やり直し（〜3回。429・5xx・時間切れ・届かないときだけ）に上限。
+- 失敗は名前の付いた code（`TOOL_PERMISSION_REQUIRED` / `TOOL_TIMEOUT` / `TOOL_HTTP_ERROR` / `TOOL_CORS_BLOCKED`（推定）/ `TOOL_UNREACHABLE`（推定）/
+  `TOOL_OFFLINE` / `TOOL_TOO_LARGE` / `TOOL_BAD_JSON` / `TOOL_REDIRECT_BLOCKED` / `TOOL_FILE_*` / `TOOL_BAD_ENCODING` / `EMBED_*`）。
+  `onError`・エラー情報の出口・Retry・Resume はほかのノードと同じ。
+- **使用量を分けて数える**: LLM の推論（`apiCalls`・トークン）／Tool の通信（`toolCalls`）／Embedding（`embedTexts` 計算した文・`embedCalls` Worker に送った回数・`embedCacheHits` 覚えていた文）。
+  記録（Trace）の `attempts[].tool` に、通信ごとの時間・状態・バイト数、やり直し、モデル、読み込み時間、件数が残る。
+
+### Embedding のしくみ
+
+- **Transformers.js 4.2.0**（`vendor/transformers/`・Apache-2.0）＋ ONNX Runtime Web の WebAssembly（MIT）を同梱。CDN は使わない。
+- 生成の LLM（`ModelManager`・WebGPU）とは別に **`EmbeddingManager`** が持ち、**専用の Worker（`embed-worker.js`）で CPU（WebAssembly・スレッド1本）**で動かす。GPU を取り合わない。
+- 初めて使うときに読み込み、あとは使い回す。同じ文は1回だけ計算する（ページを開いている間 5000文まで）。16文ずつ送り、間で中断を見る。片付けると Worker ごと終わる。
+- モデルは**このサイトの `models/embed/<モデル名>/` を先に探し、無ければ huggingface.co** から取る。取ったものはブラウザのキャッシュに残る。**文は外へ送らない。APIキー不要・無料。**
+- 既定は `Xenova/paraphrase-multilingual-MiniLM-L12-v2`（384次元・Apache-2.0・q8 で約120MB＝目安）。`Xenova/multilingual-e5-small`（384次元・MIT・`query:` / `passage:` を自動で付ける）も選べる。
+  **この検証環境からは huggingface.co に届かないので、本物のモデルの読み込み・日本語での近さ・メモリ・速さは確かめていない。**
+- score はコサイン類似度（正規化したベクトルの内積）。**意味の近さの目安で、正しさや確率ではない。** ベクトルは大きいので LLM へは渡さない。
+- MMR は「λ×基準との近さ −（1−λ）×選んだものとの近さの最大」が大きい順に選ぶ。
+
+### 例
+
+上の例の帯の「**Tool: Wikipediaで調べて答える**」（入力 → Wikipedia → 資料だけで答える LLM → 出力）と
+「**Tool: Embeddingで候補を選ぶ**」（入力 → 概念 → 観点の候補 → 近さ → 重複除去 → MMR → 判定 → 回答 → 点検 → 出力）。
+同じものを `samples/*.json` / `samples/*.hsl` に置いてある。答えはどちらも LLM が作る（決まった答えは書いていない）。
+
 ## 5. 4つの adapter
 
 | adapter | 中身 | 料金 | 必要なもの |
@@ -1258,7 +1299,7 @@ runtime が気づいているが、`console.error` に出すだけでアプリ�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト98件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す + 出口が運ぶもの（入ってきた値・送った文・エラー情報））
+node tests/harness-runtime.mjs      # 自己テスト102件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す + 出口が運ぶもの（入ってきた値・送った文・エラー情報） + Tool（Wikipedia・HTTP JSON・Embedding の mock・古い type:"tool"））
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
@@ -1277,7 +1318,10 @@ node tests/harness-portsource.mjs   # 出口が運ぶもの — プルダウン�
 node tests/harness-calc.mjs         # 計算ノード（式/JavaScript）・条件分岐ノード・ループのJSモード・使い方の？とJSONタブ
 node tests/harness-race.mjs         # 先着（race）— 足す・中身を決める・実行して候補が止まる・記録・診断・使い方3タブ
 node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱い・毎周たまる・記録・診断・使い方3タブ
-node tests/harness-parity.mjs       # 画面とJSONの対応（JSONの全キーに画面の欄があるか・画面の操作がJSONに入るか）
+node tests/harness-parity.mjs       # 画面とJSONの対応（JSONの全キーに画面の欄があるか・画面の操作がJSONに入るか・Tool の種類ごとのキー）
+node tests/harness-tools.mjs        # Tool — Wikipedia（成功・0件・HTTP エラー・CORS・届かない・時間切れ・中断・許可していない接続先・JSON でない・オフライン）・
+                                    #   HTTP JSON（差し込み・上限・転送を追わない）・XSS・Retry/Resume・エディタ・許可・ファイル・
+                                    #   Embedding（同梱の Transformers.js を本物の Worker で・テスト用の極小モデル）・例の2つの流れ・samples
 node tests/harness-realspec.mjs     # 実際に使う大きいハーネス（23ノード/21回推論）を JSON 無改変で画面から実行（OOM・GPU を失ったときも走りきる）
 node tests/harness-blackbox.mjs     # 推論の途中でレンダラを本当にクラッシュさせ、落ちた場所が残って読めるか
 node tests/harness-invariants.mjs   # 終わった Run に「動いていないのに running」が残らない（10通り＋Retry＋実ハーネス）

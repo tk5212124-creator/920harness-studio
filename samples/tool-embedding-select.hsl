@@ -1,0 +1,68 @@
+# hsl/1
+harness "Embeddingで候補を選ぶ" v1
+
+provider local = webllm model "SmolLM2-360M-Instruct-q4f16_1-MLC" useWorker true indexedDB true generation {"maxTokens":120,"temperature":0.7}
+
+node in: input
+  set label "質問"
+node concepts: llm local
+  system "質問に含まれる大事な概念を短い語で取り出す。"
+  prompt "質問: {{{in}}}"
+  gen {"maxTokens":120}
+  schema {"type":"object","required":["concepts"],"properties":{"concepts":{"type":"array","items":{"type":"string"}}}}
+node ideas: llm local
+  system "質問に答えるときに使えそうな観点を、思いつくだけ短い文で挙げる（似たものがあってもよい）。"
+  prompt "質問: {{{run_input.in}}}\n概念: {{{in}}}\n観点を8個まで。"
+  gen {"maxTokens":200}
+  schema {"type":"object","required":["candidates"],"properties":{"candidates":{"type":"array","items":{"type":"string"}}}}
+node near: tool
+  set tool {"kind":"similarity","model":"Xenova/paraphrase-multilingual-MiniLM-L12-v2","query":"{{{run_input.in}}}","candidatesKey":"candidates","topK":8}
+node uniq: tool
+  set tool {"kind":"dedupe","model":"Xenova/paraphrase-multilingual-MiniLM-L12-v2","textKey":"text","threshold":0.9}
+node pick: tool
+  set tool {"kind":"mmr","model":"Xenova/paraphrase-multilingual-MiniLM-L12-v2","query":"{{{run_input.in}}}","candidatesKey":"kept","textKey":"text","k":4,"lambda":0.7}
+node judge: llm local
+  system "候補の中から、質問に答えるのに本当に役立つ観点だけを選ぶ。relevance は意味の近さの目安で、正しさではない。"
+  prompt "質問: {{{run_input.in}}}\n候補: {{{in}}}"
+  gen {"maxTokens":160}
+  schema {"type":"object","required":["use"],"properties":{"use":{"type":"array","items":{"type":"string"}},"reason":{"type":"string"}}}
+node answer: llm local
+  system "選ばれた観点を使って質問に答える。"
+  prompt "質問: {{{run_input.in}}}\n使う観点: {{{in}}}"
+  suffix "日本語で4文以内。"
+  gen {"maxTokens":220}
+  route parallel failure fail_fast
+node check: llm local
+  system "答えが質問に答えているか・観点から外れていないかを点検する。"
+  prompt "質問: {{{run_input.in}}}\n答え: {{{in}}}"
+  gen {"maxTokens":120}
+  schema {"type":"object","required":["ok"],"properties":{"ok":{"type":"boolean"},"problems":{"type":"string"}}}
+node both: join
+  op markdown
+  labels ["答え","点検"]
+  inputs {"items":{"type":"any","cardinality":"many"}}
+node out: output
+
+in -> concepts
+concepts -> ideas pick "concepts"
+ideas -> near
+near -> uniq pick "top"
+uniq -> pick
+pick -> judge pick "selected"
+judge -> answer pick "use"
+answer -> check
+answer -> both.items position 0
+check -> both.items position 1
+both -> out
+
+layout in 20,20
+layout concepts 20,142
+layout ideas 20,264
+layout near 20,386
+layout uniq 20,508
+layout pick 20,630
+layout judge 20,752
+layout answer 20,874
+layout check 20,996
+layout both 20,1118
+layout out 20,1240

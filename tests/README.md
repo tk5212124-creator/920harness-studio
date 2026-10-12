@@ -3,7 +3,7 @@
 `harness.html` は1枚のHTMLなので、テストは Playwright でページを開いて中の関数を直接叩く形にしてある。
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト98件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口 + 条件/計算 + 動く順番 + 動き出す条件 + エラーの扱い + 実行の記録 + 使い方のJSON + 出力の形と差し込み + まとめる/多数決/点検 + モジュール + Map + 多数決の確定 + 日本語pick + 詳しい動きの例 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着(race) + 検証の適用範囲 + 記憶(memory) + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す + 出口が運ぶもの（入ってきた値・送った文・エラー情報））
+node tests/harness-runtime.mjs      # 自己テスト102件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口 + 条件/計算 + 動く順番 + 動き出す条件 + エラーの扱い + 実行の記録 + 使い方のJSON + 出力の形と差し込み + まとめる/多数決/点検 + モジュール + Map + 多数決の確定 + 日本語pick + 詳しい動きの例 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着(race) + 検証の適用範囲 + 記憶(memory) + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す + 出口が運ぶもの（入ってきた値・送った文・エラー情報） + Tool（Wikipedia・HTTP JSON・Embedding の mock・古い type:"tool"））
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
@@ -17,7 +17,13 @@ node tests/harness-calc.mjs         # 計算ノード・条件分岐ノード・
 node tests/harness-modexp.mjs       # モジュール（部分ハーネスの再利用）と「くらべる（実験）」
 node tests/harness-race.mjs         # 先着（race）— 足す・中身を決める・実行して候補が止まる・記録・診断・使い方3タブ
 node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱い・毎周たまる・記録・診断・使い方3タブ
-node tests/harness-parity.mjs       # 画面とJSONの対応（片方だけでできることを作らない、を機械で固定）
+node tests/harness-parity.mjs       # 画面とJSONの対応（片方だけでできることを作らない、を機械で固定。Tool は TOOL_KEYS と突き合わせる）
+node tests/harness-tools.mjs        # Tool — 外への通信は Playwright で横取り（CORS と届かないは本物の別オリジン・閉じた番号）。
+                                    #   Wikipedia の成功・0件・HTTP エラーとやり直し・CORS・届かない・時間切れ・中断・許可していない接続先・JSON でない・オフライン／
+                                    #   HTTP JSON の差し込み・大きさの上限・転送を追わない／XSS／Retry・Resume で通信をやり直さない／エディタ・HSL 往復・古い type:"tool"／
+                                    #   実行のときの許可（断る・許す・取り消す）／ファイル（JSON・大きすぎ・UTF-8 でない・選んでいない・外へ出るかもしれない）／
+                                    #   Embedding は同梱の Transformers.js を本物の Worker で（tests/fixtures/embed/test/tiny-embed＝テスト用の極小モデル。意味は分からない）／
+                                    #   例の2つの流れ（LLM は mock）／samples が例と同じ
 node tests/harness-realspec.mjs     # 実ハーネスを JSON 無改変で画面から実行（KVを積まない・OOMから戻る・GPU を失っても次は読み直す）
 node tests/harness-invariants.mjs   # 終わった Run に「動いていないのに running」が残らない
                                     #   （ChatGPT の10通り＋Retry＋実ハーネス v13.1 を画面から）

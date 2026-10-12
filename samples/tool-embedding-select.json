@@ -1,0 +1,386 @@
+{
+  "metadata": {
+    "name": "Embeddingで候補を選ぶ",
+    "version": "1",
+    "layout": {
+      "in": {
+        "x": 20,
+        "y": 20
+      },
+      "concepts": {
+        "x": 20,
+        "y": 142
+      },
+      "ideas": {
+        "x": 20,
+        "y": 264
+      },
+      "near": {
+        "x": 20,
+        "y": 386
+      },
+      "uniq": {
+        "x": 20,
+        "y": 508
+      },
+      "pick": {
+        "x": 20,
+        "y": 630
+      },
+      "judge": {
+        "x": 20,
+        "y": 752
+      },
+      "answer": {
+        "x": 20,
+        "y": 874
+      },
+      "check": {
+        "x": 20,
+        "y": 996
+      },
+      "both": {
+        "x": 20,
+        "y": 1118
+      },
+      "out": {
+        "x": 20,
+        "y": 1240
+      }
+    }
+  },
+  "providers": {
+    "local": {
+      "adapter": "webllm",
+      "model": "SmolLM2-360M-Instruct-q4f16_1-MLC",
+      "useWorker": true,
+      "indexedDB": true,
+      "generation": {
+        "maxTokens": 120,
+        "temperature": 0.7
+      }
+    }
+  },
+  "nodes": [
+    {
+      "id": "in",
+      "type": "input",
+      "label": "質問"
+    },
+    {
+      "id": "concepts",
+      "type": "llm",
+      "provider": "local",
+      "generation": {
+        "maxTokens": 120
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "concepts"
+        ],
+        "properties": {
+          "concepts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "prompt": {
+        "system": "質問に含まれる大事な概念を短い語で取り出す。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "質問: {{{in}}}"
+        }
+      }
+    },
+    {
+      "id": "ideas",
+      "type": "llm",
+      "provider": "local",
+      "generation": {
+        "maxTokens": 200
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "candidates"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "prompt": {
+        "system": "質問に答えるときに使えそうな観点を、思いつくだけ短い文で挙げる（似たものがあってもよい）。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "質問: {{{run_input.in}}}\n概念: {{{in}}}\n観点を8個まで。"
+        }
+      }
+    },
+    {
+      "id": "near",
+      "type": "tool",
+      "tool": {
+        "kind": "similarity",
+        "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+        "query": "{{{run_input.in}}}",
+        "candidatesKey": "candidates",
+        "topK": 8
+      }
+    },
+    {
+      "id": "uniq",
+      "type": "tool",
+      "tool": {
+        "kind": "dedupe",
+        "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+        "textKey": "text",
+        "threshold": 0.9
+      }
+    },
+    {
+      "id": "pick",
+      "type": "tool",
+      "tool": {
+        "kind": "mmr",
+        "model": "Xenova/paraphrase-multilingual-MiniLM-L12-v2",
+        "query": "{{{run_input.in}}}",
+        "candidatesKey": "kept",
+        "textKey": "text",
+        "k": 4,
+        "lambda": 0.7
+      }
+    },
+    {
+      "id": "judge",
+      "type": "llm",
+      "provider": "local",
+      "generation": {
+        "maxTokens": 160
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "use"
+        ],
+        "properties": {
+          "use": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "prompt": {
+        "system": "候補の中から、質問に答えるのに本当に役立つ観点だけを選ぶ。relevance は意味の近さの目安で、正しさではない。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "質問: {{{run_input.in}}}\n候補: {{{in}}}"
+        }
+      }
+    },
+    {
+      "id": "answer",
+      "type": "llm",
+      "provider": "local",
+      "generation": {
+        "maxTokens": 220
+      },
+      "prompt": {
+        "system": "選ばれた観点を使って質問に答える。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "質問: {{{run_input.in}}}\n使う観点: {{{in}}}"
+        },
+        "suffix": "日本語で4文以内。"
+      },
+      "routing": {
+        "mode": "parallel",
+        "failurePolicy": "fail_fast"
+      }
+    },
+    {
+      "id": "check",
+      "type": "llm",
+      "provider": "local",
+      "generation": {
+        "maxTokens": 120
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "problems": {
+            "type": "string"
+          }
+        }
+      },
+      "prompt": {
+        "system": "答えが質問に答えているか・観点から外れていないかを点検する。",
+        "template": {
+          "syntax": "mustache",
+          "mode": "interpolation_only",
+          "value": "質問: {{{run_input.in}}}\n答え: {{{in}}}"
+        }
+      }
+    },
+    {
+      "id": "both",
+      "type": "join",
+      "op": "markdown",
+      "labels": [
+        "答え",
+        "点検"
+      ],
+      "inputs": {
+        "items": {
+          "type": "any",
+          "cardinality": "many"
+        }
+      }
+    },
+    {
+      "id": "out",
+      "type": "output"
+    }
+  ],
+  "edges": [
+    {
+      "from": {
+        "node": "in",
+        "port": "out"
+      },
+      "to": {
+        "node": "concepts",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "concepts",
+        "port": "out"
+      },
+      "to": {
+        "node": "ideas",
+        "port": "in"
+      },
+      "pick": "concepts"
+    },
+    {
+      "from": {
+        "node": "ideas",
+        "port": "out"
+      },
+      "to": {
+        "node": "near",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "near",
+        "port": "out"
+      },
+      "to": {
+        "node": "uniq",
+        "port": "in"
+      },
+      "pick": "top"
+    },
+    {
+      "from": {
+        "node": "uniq",
+        "port": "out"
+      },
+      "to": {
+        "node": "pick",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "pick",
+        "port": "out"
+      },
+      "to": {
+        "node": "judge",
+        "port": "in"
+      },
+      "pick": "selected"
+    },
+    {
+      "from": {
+        "node": "judge",
+        "port": "out"
+      },
+      "to": {
+        "node": "answer",
+        "port": "in"
+      },
+      "pick": "use"
+    },
+    {
+      "from": {
+        "node": "answer",
+        "port": "out"
+      },
+      "to": {
+        "node": "check",
+        "port": "in"
+      }
+    },
+    {
+      "from": {
+        "node": "answer",
+        "port": "out"
+      },
+      "to": {
+        "node": "both",
+        "port": "items"
+      },
+      "position": 0
+    },
+    {
+      "from": {
+        "node": "check",
+        "port": "out"
+      },
+      "to": {
+        "node": "both",
+        "port": "items"
+      },
+      "position": 1
+    },
+    {
+      "from": {
+        "node": "both",
+        "port": "out"
+      },
+      "to": {
+        "node": "out",
+        "port": "in"
+      }
+    }
+  ]
+}
