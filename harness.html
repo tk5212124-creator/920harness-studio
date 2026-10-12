@@ -5912,6 +5912,7 @@ function nodeSub(n){
   if(n.type==="module")return "モジュール "+(n.module||"(未選択)")+st;
   if(n.type==="pass")return "そのまま通す"+st;
   if(n.type==="map")return "1件ずつ"+st;
+  if(isToolExec(n))return "ツール"+(EMBED_KINDS.includes(n.tool.kind)?"（Embedding）":"")+st;
   const pv=n.provider?n.provider:(n.mock?"mock":"(provider未設定)");
   const r=n.routing&&n.routing.mode?" / "+n.routing.mode:"";
   return pv+r+st;
