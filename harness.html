@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Harness Studio — 方眼タブ（1セル1ノード） v0.43.0</title>
+<title>Harness Studio — 出口で送った文・エラー情報を渡す v0.44.0</title>
 <style>
 :root{--ink:#1a1c1f;--sub:#5c6167;--line:#d9dde2;--bg:#fbfcfd;--panel:#fff;--ok:#1f7a4d;--err:#b3401f;--accent:#2b5c8a;--code-bg:#f4f6f8;--warn:#8a6d1f}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
@@ -118,7 +118,7 @@ td.n{text-align:right}.s-success{color:var(--ok)}.s-error{color:var(--err)}.s-ca
 .diag{font-family:ui-monospace,Menlo,monospace;font-size:11px;line-height:1.6;background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;margin:8px 0 0}
 .tot{display:flex;gap:14px;flex-wrap:wrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--sub)}.tot b{color:var(--ink);font-weight:600}
 </style></head><body><div class="wrap">
-<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.43.0 · 方眼タブ＝1つのセルが1つのノード（=NODE.種類）</span></h1>
+<h1>Harness Studio <span style="color:var(--sub);font-size:14px">v0.44.0 · 出口で「送った文」「エラー情報」「入ってきた値」も渡せる</span></h1>
 <div class="tag">Gemma / Qwen / Llama を端末に落として動かす · タップとドラッグで組む · HSLで書き出して外部LLMに渡し、返答を口に入れると図になる · Runtimeは adapter 種別を知らない</div>
 <div id="resumeBanner" class="banner warn"></div>
 
@@ -1546,7 +1546,7 @@ function bbRead(){
 function bbClear(){for(let i=0;i<BB_CAP;i++)bbDel(String(i));
   ["h","open","cur","in","last","gen","lprg","step","gpu","spec","hb","whb"].forEach(bbDel);
   BB.head=0;BB.n=0;BB.slotAt={};BB.slotPct={};}
-const HARNESS_BUILD="0.43.0";
+const HARNESS_BUILD="0.44.0";
 /* ---- 取り置き（前の回の記録を、消える前に別の置き場へ移す）----
    v0.36.0 まで: 開いたときに前回の記録を**メモリへ**移し、置き場からは消していた。
    そのため (1) もう一度読み込まれると（iOS の自動再読み込み・版の読み込み直し）証拠が消え、
@@ -2501,6 +2501,9 @@ async function invokeNode(spec,run,node,inputs,ex,ctl,log){
   let bbInCall=false,bbCT0=0,bbCall=null;      // 落ちても残る記録用（推論1回ぶんの見出し）
   /* 実際にモデルへ送った文を残す（「なぜこの答えになったのか」はここを見ないと分からない）。
      checkpoint が膨らまないように1通 4000字で切る。 */
+  if(wantsSource(node,"request"))ex._srcRequest={node:node.id,provider:node.provider||(node.mock?"mock":null),adapter:adapter.id,model,
+    generation:Object.assign({},gen||{}),schema:schema||null,
+    messages:(msgs.messages||[]).map(m=>({role:m.role,content:String(m.content==null?"":m.content)}))};
   attempt.request={provider:node.provider||(node.mock?"mock":null),adapter:adapter.id,model,
     maxTokens:(gen&&gen.maxTokens)!=null?gen.maxTokens:null,temperature:(gen&&gen.temperature)!=null?gen.temperature:null,
     schema:schema?JSON.stringify(schema):null,
@@ -2699,6 +2702,17 @@ function validate(spec){const errs=[];if(!spec.nodes||!Array.isArray(spec.nodes)
     }
     // ここから下はどの種類にも効く（以前はモデルを呼ぶノード以外に届いていなかった）
     if(n.onError&&!ERROR_POLICIES.includes(n.onError))errs.push("エラーのときの扱いが不正（error / value / null / skip）: "+n.id);
+    // 出口が運ぶもの（ports[].source）
+    for(const q of n.ports||[]){
+      if(q.source===undefined||q.source==="value")continue;
+      if(!PORT_SOURCES.includes(q.source)){errs.push(`出口 "${q.id}" の source が不正（value / input / request / error）: ${n.id}`);continue;}
+      if(!PORT_SOURCE_TYPES.includes(n.type)){errs.push(`種類 ${n.type} の出口は値しか運べない（source は使えない）: ${n.id}`);continue;}
+      if(q.source==="request"&&n.type!=="llm"&&n.type!=="tool")errs.push(`送った文（source:"request"）の出口は LLM / tool ノードだけ: ${n.id}`);
+      const es=(spec.edges||[]).filter(e=>e.from.node===n.id&&portDefOf(n,e.from.port)===q);
+      if(es.some(e=>e.if||e.else||e.loop))errs.push(`値以外の出口（${q.id}）から if / else / ループの線は出せない: ${n.id}`);
+      if(q.source==="error"&&es.length&&(errorPolicyOf(n)==="error"||!ERROR_POLICIES.includes(errorPolicyOf(n))))
+        errs.push(`エラー情報の出口（${q.id}）があるのに onError が error（止める）なので、その出口には流れない。onError を value / null / skip にする: ${n.id}`);
+    }
     if(n.type==="map"){
       const body=mapBodyEdges(spec,n.id),fin=mapDoneEdges(spec,n.id),back=mapBackEdges(spec,n);
       if(!body.length)errs.push("Mapの1件ずつ流す先が無い（Mapノードから線を1本出す）: "+n.id);
@@ -3706,6 +3720,33 @@ function portRV(node,rv,port){
   if(!pd)throw{code:"REFERENCE_ERROR",retryable:false,message:`${node?node.id:"?"} に出口 "${port}" が無い`};
   return pickValue(rv,pd.pick);
 }
+/* ---- 出口が運ぶもの（ports[].source） ----
+   value（既定）… ノードの出力。pick で一部を取り出せる（これまでどおり）
+   input        … このノードが受け取った値（どの線から来たか付き）
+   request      … LLM / tool に送ったもの（messages・model・generation・schema）。送る前に失敗したときは流れない
+   error        … 失敗の中身（code・stage・message・retryable…）。失敗したときだけ流れる
+   input / request は成功でも失敗でも流れる（失敗は onError が value / null / skip で先へ進むときだけ。error＝止めるなら Run ごと止まる）。
+   error は onError が value / null / skip のときの失敗で流れる（validate で、error の出口があって onError が止めるなら止める）。
+   onError:"skip" の失敗では、値の出口には何も流れず、input / request / error の出口だけに流れる。
+   どれも pick で一部を取り出せる（例: request の出口で pick "messages"）。 */
+const PORT_SOURCES=["value","input","request","error"];
+const PORT_SOURCE_TYPES=["llm","tool","calc","join","reduce","assert","pass","quorum","race","memory"];   // 出口を値以外にできる種類
+function portDefOf(node,port){
+  if(!port||port==="out")return (node&&node.ports&&node.ports.length)?node.ports[0]:null;
+  return outPortsOf(node).find(x=>x.id===port)||null;
+}
+const portSourceOf=(node,port)=>{const p=portDefOf(node,port);return (p&&p.source)||"value";};
+const hasSidePorts=n=>!!(n&&n.ports&&n.ports.some(p=>p.source&&p.source!=="value"));
+const wantsSource=(n,src)=>!!(n&&n.ports&&n.ports.some(p=>p.source===src));
+/* その実行が持っている「値以外」のもの。無ければ undefined（＝その出口には流さない） */
+function sideValueOf(ex,src){
+  if(src==="input")return ex._srcInput;
+  if(src==="request")return ex._srcRequest;
+  if(src==="error")return ex._srcError;
+  return undefined;
+}
+const inputsView=inputs=>{const o={};for(const[k,v]of Object.entries(inputs||{}))
+  o[k]=Array.isArray(v)?v.map(x=>x?x.value:null):(v?v.value:null);return o;};
 /* エラーを必ず読める文にする（[object Object] を絶対に出さない） */
 function errText(e){
   if(e==null)return "（理由不明）";
@@ -3748,6 +3789,10 @@ function applyNodeErrorPolicy(run,spec,ex,node,err,store,log,at){
   const pol=errorPolicyOf(node);
   if(pol==="error"||!ERROR_POLICIES.includes(pol))return null;
   errRec(run,ex,err,pol);
+  if(wantsSource(node,"error"))ex._srcError={node:ex.nodeId,code:err.code||"ERROR",stage:err.stage||null,
+    message:errText(err),retryable:!!err.retryable,handledAs:pol,attempt:(ex.attempts||[]).length,
+    truncated:!!err.truncated,partial:err.partialText==null?null:String(err.partialText),usage:(err&&err.usage)||null,
+    iteration:ex.iteration==null?null:ex.iteration};
   log&&log("err",`\u2717 ${ex.nodeId}: ${err.code||"ERROR"}${err.stage?"("+err.stage+")":""} ${err.message||""}`);
   log&&log("err",`  \u2192 このノードの設定（onError=${pol}）: ${ERROR_POLICY_TEXT[pol]}`);
   const usage=(err&&err.usage)||null;
@@ -3761,6 +3806,12 @@ function applyNodeErrorPolicy(run,spec,ex,node,err,store,log,at){
     const gid=findBranchGroupId(run,ex);
     if(gid&&run.branchGroups[gid]&&run.branchGroups[gid].branches[ex.execId])
       run.branchGroups[gid].branches[ex.execId].status="stopped";
+    // 値以外の出口（入ってきた値・送った文・エラー情報）があれば、そこにだけ流す
+    const sideEs=hasSidePorts(node)?(spec.edges||[]).filter(e=>e.from.node===ex.nodeId&&!e.loop
+      &&portSourceOf(node,e.from.port)!=="value"&&sideValueOf(ex,portSourceOf(node,e.from.port))!==undefined):[];
+    if(sideEs.length){ex._sideOnly=true;run.workQueue[at]={execId:ex.execId,phase:"route"};
+      log&&log("dim",`  ${ex.nodeId} の値の出口には何も流れない。値以外の出口（${[...new Set(sideEs.map(e=>e.from.port||"out"))].join(", ")}）にだけ流す`);
+      if(store)store.save(run);return{kind:"stopped"};}
     run.workQueue=run.workQueue.filter(w=>w.execId!==ex.execId);
     const waiting=(spec.edges||[]).filter(e=>e.from.node===ex.nodeId).map(e=>e.to.node);
     if(waiting.length)log&&log("dim",`  ${ex.nodeId} の先（${[...new Set(waiting)].join(", ")}）には何も流れない`);
@@ -3940,6 +3991,7 @@ async function processOneWorkItem(spec,run,store,log,ctl){
     log&&log("dim",`  ${node.id} ${ctxTag(ex)} 開始 ${clockOf(attempt.startedAt)}`);
     let rv,usage;
     try{const inputs=resolveInputsForExec(run,spec,ex);
+      if(wantsSource(node,"input"))ex._srcInput={inputs:inputsView(inputs),from:(ex._used||[]).map(u=>({node:u.from,port:u.port,position:u.position,pick:u.pick}))};
       if(node.type==="output"){const k=Object.keys(inputs)[0];let rvOut=(k!==undefined&&inputs[k]!==undefined)?inputs[k]:null;
         if(Array.isArray(rvOut))rvOut=mergeToRV(rvOut,node.merge);      // 複数の線が入っているとき
         run.result=rvOut;
@@ -4063,7 +4115,7 @@ async function processOneWorkItem(spec,run,store,log,ctl){
   try{outcome=await routeExec(spec,run,ex,byId,loopEntries,log);}catch(err){
     failRun(run,ex.nodeId,err,store,false);return{kind:"failed"};}
   if(outcome.kind==="paused"){run.status="paused";if(store)store.save(run);return{kind:"paused"};}
-  run.workQueue.splice(at,1);ex.status="completed";
+  run.workQueue.splice(at,1);ex.status=ex._sideOnly?"stopped":"completed";   // skip の失敗は、値以外の出口に流しても stopped のまま
   settleBranchGroup(run,findBranchGroupId(run,ex));   // この実行で分岐グループの仕事が終わったなら確定する
   // 先着が決まったので、まだ動いていない候補を止める（待ち行列を触るのはここまで来てから）
   if(isRaceNode(node)&&ex._raceRec){
@@ -4276,7 +4328,14 @@ async function routeCondNode(spec,run,ex,node,log){
 }
 async function routeExec(spec,run,ex,byId,loopEntries,log){
   run.routeSeq=(run.routeSeq||0)+1;      // ここで配る線は「同時に届いた」とみなす
-  const node=byId[ex.nodeId];const outEdges=(spec.edges||[]).filter(e=>e.from.node===node.id);
+  const node=byId[ex.nodeId];let outEdges=(spec.edges||[]).filter(e=>e.from.node===node.id);
+  /* 値以外の出口: 持っているものだけ流す（error は失敗したときだけ）。skip の失敗では値の出口には流さない */
+  const side=hasSidePorts(node);
+  if(side)outEdges=outEdges.filter(e=>{const src=portSourceOf(node,e.from.port);
+    if(src==="value")return !ex._sideOnly;
+    return sideValueOf(ex,src)!==undefined;});
+  const rvFor=e=>{if(!side)return ex._rv;const src=portSourceOf(node,e.from.port);
+    return src==="value"?ex._rv:{type:"json",value:sideValueOf(ex,src)};};
   if(isLoopNode(node))return await routeLoopNode(spec,run,ex,node,log);
   if(isMapNode(node))return await routeMapNode(spec,run,ex,node,log);
   if(node.type==="cond")return await routeCondNode(spec,run,ex,node,log);
@@ -4313,7 +4372,7 @@ async function routeExec(spec,run,ex,byId,loopEntries,log){
     if(!policy)throw{code:"UNSPECIFIED_ROUTING",message:`${node.id}: 出口が2本以上あるのに routing.failurePolicy が無い`};
     run.branchGroups[act]={activationId:act,sourceExecId:ex.execId,failurePolicy:policy,status:"running",branches:{},failures:[]};
   }
-  for(const e of outEdges){const tctx=resolveTargetContext(run,spec,{...ex,activationId:act},e,loopEntries);makeDelivery(run,spec,e,ex._rv,ex.execId,tctx);
+  for(const e of outEdges){const tctx=resolveTargetContext(run,spec,{...ex,activationId:act},e,loopEntries);makeDelivery(run,spec,e,rvFor(e),ex.execId,tctx);
     const nx=enqueueTo(run,spec,e,tctx);
     if(outEdges.length>1&&nx){nx.branchGroupId=act;run.branchGroups[act].branches[nx.execId]={rootExecId:nx.execId,nodeId:e.to.node,status:"running"};}}
   if(outEdges.length>1)log&&log("route",`↳ fan-out(${act},${run.branchGroups[act].failurePolicy}): ${outEdges.map(e=>e.to.node).join(", ")}`);
@@ -5783,14 +5842,23 @@ function splitFields(n){
     return h;
   }
   h+=`<div class="fld"><span>出口（上から順に図に並ぶ）</span><div>`;
+  // 値のほかに運べるもの（ports[].source）。種類によって選べるものが違う
+  const srcOpts=PORT_SOURCE_TYPES.includes(n.type)?[{v:"input",t:"入ってきた値（このノードが受け取ったもの）"},
+    ...((n.type==="llm"||n.type==="tool")?[{v:"request",t:"送った文（LLM に送ったもの・エラーに関係なく）"}]:[]),
+    {v:"error",t:"エラー情報（失敗したときだけ）"}]:[];
   ps.forEach((q,i)=>{
-    const pr=parsePickSafe(q.pick);
-    const extra=(pr.key&&!keys.includes(pr.key))?`<option value="${esc(pr.key)}" selected>${esc(pr.key)}</option>`:"";
+    const pr=parsePickSafe(q.pick);const src=q.source&&q.source!=="value"?q.source:"";
+    const extra=(!src&&pr.key&&!keys.includes(pr.key))?`<option value="${esc(pr.key)}" selected>${esc(pr.key)}</option>`:"";
     h+=`<div class="ordrow"><b>${i+1}</b>`
       +`<input type="text" data-pf="label" data-i="${i}" value="${esc(q.label||"")}" placeholder="${i+1}" style="flex:0 1 90px;min-width:50px">`
-      +`<select data-pf="key" data-i="${i}" style="flex:1"><option value=""${pr.key?"":" selected"}>値ぜんぶ</option>`
-        +keys.map(k=>`<option value="${esc(k)}"${pr.key===k?" selected":""}>${esc(k)}</option>`).join("")+extra+`</select>`
+      +`<select data-pf="key" data-i="${i}" style="flex:1"><option value=""${!src&&!pr.key?" selected":""}>値ぜんぶ</option>`
+        +keys.map(k=>`<option value="${esc(k)}"${!src&&pr.key===k?" selected":""}>${esc(k)}</option>`).join("")+extra
+        +(srcOpts.length||src?`<optgroup label="値のほか">`+srcOpts.map(o=>`<option value="@${o.v}"${src===o.v?" selected":""}>${esc(o.t)}</option>`).join("")
+          +(src&&!srcOpts.some(o=>o.v===src)?`<option value="@${esc(src)}" selected>${esc(src)}（この種類では使えない）</option>`:"")+`</optgroup>`:"")
+        +`</select>`
       +`<button data-pfdel="${i}">削除</button></div>`;
+    if(src==="error"&&(errorPolicyOf(n)==="error"))h+=`<div class="ordrow"><b></b><span class="mini" style="color:var(--bad,#b3261e)">`
+      +`エラー情報の出口は、下の「エラーが起きたとき」を「決めた値を出して先へ進む」「null を出して先へ進む」「このノードだけ止めて…」のどれかにすると流れる（いまは止める）。</span></div>`;
     // 出口の名前（線の from.port）と、取り出し方を手で書く欄。JSONで書けるものは画面でも書けるようにする
     h+=`<div class="ordrow"><b></b><span class="mini">名前</span>`
       +`<input type="text" data-pf="id" data-i="${i}" value="${esc(q.id||"")}" placeholder="p${i+1}" style="flex:0 1 90px;min-width:50px">`
@@ -5798,12 +5866,15 @@ function splitFields(n){
       +`<input type="text" data-pf="pick" data-i="${i}" value="${esc(q.pick||"")}" placeholder="キー名 / キー名.0 / キー名.1..3 / 0" style="flex:1"></div>`;
   });
   h+=`</div></div><div class="mini"><button id="pfAdd">＋ 出口を足す</button>`
-    +` いまの出口: <code>${esc(ps.map((q,i)=>(q.id||"p"+(i+1))+"/"+(q.label||String(i+1))+"="+(q.pick||"ぜんぶ")).join(" / "))}</code>`
+    +` いまの出口: <code>${esc(ps.map((q,i)=>(q.id||"p"+(i+1))+"/"+(q.label||String(i+1))+"="+(q.source&&q.source!=="value"?(SRC_LABEL[q.source]||q.source)+(q.pick?"."+q.pick:""):(q.pick||"ぜんぶ"))).join(" / "))}</code>`
     +`<br><b>名前</b>は線の「出口の名前」で選ぶときの名前（JSONの <code>from.port</code>）。`
     +`<b>取り出し方</b>は上のプルダウンで選べる形以外も書ける`
-    +`（<code>items.0</code>＝1つ目 / <code>items.1..3</code>＝2〜4つ目 / <code>items.1..</code>＝2つ目以降 / <code>0</code>＝配列の1つ目）。</div>`;
+    +`（<code>items.0</code>＝1つ目 / <code>items.1..3</code>＝2〜4つ目 / <code>items.1..</code>＝2つ目以降 / <code>0</code>＝配列の1つ目）。`
+    +(srcOpts.length?`<br><b>値のほか</b>: 入ってきた値・${n.type==="llm"||n.type==="tool"?"送った文・":""}エラー情報も出口にできる`
+      +`（JSONの <code>ports[].source</code>）。分析するハーネスへ線を引ける。エラー情報は失敗したときだけ流れる。`:"")+`</div>`;
   return h;
 }
+const SRC_LABEL={input:"入ってきた値",request:"送った文",error:"エラー情報"};
 function parsePickSafe(pick){
   let q=null;try{q=parsePick(pick);}catch(_){}
   if(!q)return{key:"",take:"all"};
@@ -6741,8 +6812,13 @@ function openNodeSheet(id){
         const v=el.value.trim();
         if(v)q.pick=v;else delete q.pick;
         syncFromCanvas();return;}
-      const was=parsePickSafe(q.pick).key;
+      const was=q.source&&q.source!=="value"?SRC_LABEL[q.source]:parsePickSafe(q.pick).key;
       const k=el.value;
+      // 値のほか（入ってきた値・送った文・エラー情報）
+      if(k[0]==="@"){q.source=k.slice(1);delete q.pick;
+        if(!q.label||q.label===was||q.label===String(i+1))q.label=SRC_LABEL[q.source];
+        syncFromCanvas();openNodeSheet(n.id);return;}
+      delete q.source;
       if(k)q.pick=k;else delete q.pick;
       // 名前を触っていない（前の項目名のまま）なら、名前も新しい項目名に合わせる
       if(!q.label||q.label===was)q.label=k||String(i+1);
@@ -7606,6 +7682,7 @@ function specToSheet(specIn,input,opt){
   for(const n of nodes){
     if(!SHEET_OK_TYPES.includes(n.type)){no(`種類「${n.type}」は方眼では動かせない（動かせるのは ${SHEET_OK_TYPES.join(" / ")}）`,n.id);continue;}
     if(n.onError==="skip")no(`onError:"skip" は方眼では動かせない（value / null / error にする）`,n.id);
+    if(hasSidePorts(n))no(`値以外の出口（入ってきた値・送った文・エラー情報）は方眼では書けない（エディタか JSON で書く）`,n.id);
     if(n.start&&n.start.mode&&n.start.mode!=="all"&&edges.filter(e=>e.to.node===n.id&&!e.loop).length>1)
       no(`動き出す条件（start: ${n.start.mode}）は、届く順で値が変わるので方眼では動かせない`,n.id);
     if(n.routing&&n.routing.mode==="first_match")no("routing: first_match（条件で行き先を選ぶ）は方眼では動かせない",n.id);
@@ -9689,6 +9766,9 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 **(4) 入ってきた値のどれを使うか** — 手前のノードが項目を宣言しているとき、線ごとに「score だけ」のように選べる。
 
 **(5) 出力の渡し方（出口）** — まとめて1つの出口から渡す（既定）／出口を分けて項目ごとに渡す。分けると図のノードに出口が増え、線ごとにちがう項目が流れる。
+出口のプルダウンの「**値のほか**」で、**入ってきた値**・**送った文**（LLM に送ったもの。エラーに関係なく）・**エラー情報**（失敗したときだけ）も出口にできる。
+そこから分析用のハーネスへ線を引ける（送った文と答えを並べて点検する・失敗の種類ごとに直し方を変える、など）。
+エラー情報の出口は、(7) を「止める」以外にしたときに流れる。
 
 **(6) 出口が2本以上あるときの扱い** — **並列**（全部に流す。片方が失敗したら兄弟を止める＝fail_fast）／**条件で1本だけ選ぶ**（if / else）。2本目を繋いだ時点で並列が入る。
 
@@ -9919,6 +9999,7 @@ LLM を「1回聞いて終わり」ではなく、**いくつものノードを�
 - 実行ログには**ノードごとの開始時刻と終了時刻**（hh:mm:ss.mmm）と掛かった時間が出る。どこで待たされているかはここで分かる。
 - 進めなくなったとき・出力に届かず終わったときは、**どのノードが何を待っていたか**を名指しで出す。そのノードの「動き出す条件」を見る。
 - ノードごとに「**エラーが起きたとき**」を決められる（止める／決めた値を出す／null を出す／そのノードだけ止めて先へ進む）。どれを選んでも、エラーはログと記録に残る。
+- **エラーの中身を次のノードへ渡す**: 出口を分けて「エラー情報」を選ぶ。code（種類）・stage（段階）・message・retryable などが JSON で流れるので、条件分岐で種類ごとに直し方を変えられる。
 - 使用量は**失敗した呼び出しも数える**（実際にモデルを動かしているため）。
 - 版が古いと画面の上にお知らせが出る。リロードすると新しくなる。
 
@@ -9990,6 +10071,7 @@ v0.39.0 からは、**ページを開いてからの全部**（実行より前�
 | **モデルの置き場（providers）** … 足す・名前を変える・消す・adapter ごとの設定ぜんぶ | このハーネスの設定 → モデルの置き場 |
 | **モジュール** … 名前を変える・版・メモ・消す | このハーネスの設定 → モジュール |
 | 出口を分ける（**出口の名前**と**取り出し方**。範囲も手で書ける） | ノードをタップ →「出力の渡し方」を分ける |
+| 出口が運ぶもの（**入ってきた値・送った文・エラー情報**。JSON の \`ports[].source\`） | 同じ所の出口のプルダウン →「値のほか」 |
 | ノードの**種類**・ID・中身ぜんぶ | ノードをタップ |
 | **入口ごとの受け取り方**（1つだけ／複数まとめて・型） | ノードをタップ →「入口ごとの受け取り方」 |
 | mock（テスト用）の返し方 | ノードをタップ → Provider を mock にすると出る |
@@ -10495,6 +10577,18 @@ const HELP_JSON=`# JSONで書く（設定の全部）
   - 書かないと、出した値まるごと。
 - 線は \`"from":{"node":"評価","port":"p1"}\` と、どの出口から出るかを書く。
 - cond ノードでは \`ports\` が条件（\`expr\` / \`else\`）になる。
+- 出口が運ぶものを \`source\` で選べる（書かなければ \`"value"\`＝これまでどおり）:
+  - \`"value"\` … ノードの出力（\`pick\` で一部）
+  - \`"input"\` … このノードが受け取った値（\`{"inputs":{"in":…},"from":[{"node":"…","port":"in",…}]}\`）
+  - \`"request"\` … LLM / tool に送ったもの（\`{"messages":[…],"model":…,"generation":{…},"schema":…}\`）。LLM / tool ノードだけ
+  - \`"error"\` … 失敗の中身（\`{"code":"…","stage":"…","message":"…","retryable":…,"handledAs":"value","attempt":1,"truncated":…,"partial":…}\`）。**失敗したときだけ**流れる
+  ~~~
+  "onError":"skip",
+  "ports":[{"id":"v","label":"値"},{"id":"req","label":"送った文","source":"request"},{"id":"err","label":"エラー","source":"error"}]
+  ~~~
+  - \`input\` / \`request\` は成功でも失敗でも流れる。\`error\` の出口を使うときは \`onError\` を \`value\` / \`null\` / \`skip\` にする（止めると Run ごと止まるので流れない。検証で止める）。
+  - \`onError:"skip"\` の失敗では、値の出口には何も流れず、値以外の出口にだけ流れる。
+  - 使える種類: llm / tool / calc / join / reduce / assert / pass / quorum / race / memory。値以外の出口から if / else / ループの線は出せない。
 
 ## 9. routing（出口が2本以上のとき）
 
@@ -11132,6 +11226,27 @@ X はちょうど1回動いて両方を読む。
 ~~~
 
 知らない出口名を書くと **実行前の検証で落ちる**。
+
+### 12-1. 出口が運ぶもの（\`source\`）
+
+出口は値の一部だけでなく、**値のほかのもの**も運べる。分析するハーネス（送った文と答えを並べて点検する・失敗の種類ごとに直し方を変える）へ線を引ける。
+
+| \`source\` | 運ぶもの | いつ流れる |
+|---|---|---|
+| \`value\`（既定） | ノードの出力 | 成功したとき・onError が value / null の失敗のとき（決めた値） |
+| \`input\` | このノードが受け取った値 \`{inputs:{入口:値}, from:[{node, port, position, pick}]}\` | 成功・onError で先へ進む失敗（value / null / skip） |
+| \`request\` | LLM / tool に送ったもの \`{node, provider, adapter, model, generation, schema, messages}\`（切り詰めない） | 同上。ただし送る文を作る前に失敗したら流れない |
+| \`error\` | 失敗の中身 \`{node, code, stage, message, retryable, handledAs, attempt, truncated, partial, usage, iteration}\` | 失敗したとき（onError が value / null / skip）だけ |
+
+- \`pick\` も効く（例: \`{"source":"request","pick":"messages"}\`、\`{"source":"error","pick":"code"}\`）。
+- \`onError:"skip"\` の失敗: 値の出口には流れず、値以外の出口にだけ流れる。ノードの状態は \`stopped\` のまま。
+- \`onError:"error"\`（止める・既定）のときに \`error\` の出口があると、**検証で止める**（流れない出口を黙って作らない）。
+- 値以外の出口からの線も、ふつうの線と同じく分岐グループ（fail_fast など）に入る。
+- 使える種類: llm / tool / calc / join / reduce / assert / pass / quorum / race / memory。
+  \`request\` は llm / tool だけ。loop / cond / map / input / output / module の出口は値だけ。
+- 記憶（memory）が「出さない」と決めた回は、値以外の出口にも流れない。
+- Map の1件の失敗を \`onItemError\` で扱ったとき（ノードの onError が error のまま）は、エラー情報の出口には流れない。
+- 方眼（方眼タブ・方眼で動かす）では書けない（表を出さずに理由を出す）。
 
 ## 13. pick（値の切り出し）
 
@@ -15009,6 +15124,33 @@ export async function CreateMLCEngine(model,opt){
     &&a2&&a2.code==="MODEL_INFERENCE_FAILED"&&a2.reset==="needs_reset"
     &&a3&&a3.code==="MODEL_INFERENCE_FAILED"&&a3.reset===null
     &&a4&&a4.code==="RESOURCE_EXHAUSTED"&&a4.reset==="needs_reset");}
+ // 96〜98 出口が運ぶもの（ports[].source）: 値・入ってきた値・送った文・エラー情報
+ {const mk=(mock,onError)=>({nodes:[{id:"in",type:"input"},
+     Object.assign({id:"a",type:"llm",mock,routing:{mode:"parallel",failurePolicy:"fail_fast"},
+       prompt:{system:"S",template:{syntax:"mustache",mode:"interpolation_only",value:"Q={{{in}}}"}},
+       ports:[{id:"v",label:"値"},{id:"req",source:"request"},{id:"err",source:"error"},{id:"inp",source:"input",pick:"inputs"}]},
+       onError?{onError,onErrorValue:{fb:1}}:{}),
+     {id:"ov",type:"output"},{id:"oreq",type:"output"},{id:"oerr",type:"output"},{id:"oin",type:"output"}],
+    edges:[{from:{node:"in",port:"out"},to:{node:"a",port:"in"}},
+      {from:{node:"a",port:"v"},to:{node:"ov",port:"in"}},{from:{node:"a",port:"req"},to:{node:"oreq",port:"in"}},
+      {from:{node:"a",port:"err"},to:{node:"oerr",port:"in"}},{from:{node:"a",port:"inp"},to:{node:"oin",port:"in"}}]});
+  const outs=run=>Object.fromEntries(["ov","oreq","oerr","oin"].map(id=>{const h=(run.nodeRuns[id]||[]).slice(-1)[0];return[id,h?h.out.value:undefined];}));
+  const r1=await fullRun(mk({raw:"答え"},"value"),{in:"雨"}),o1=outs(r1);
+  ok("96 成功: 値の出口に答え・送った文の出口に messages・入ってきた値の出口に受け取った値（pick も効く）・エラー情報の出口には流れない",
+    r1.status==="success"&&o1.ov==="答え"&&o1.oreq&&o1.oreq.messages[0].content==="S"&&o1.oreq.messages[1].content==="Q=雨"
+    &&o1.oin&&o1.oin.in==="雨"&&o1.oerr===undefined);
+  const r2=await fullRun(mk({fail:"generic"},"value"),{in:"雨"}),o2=outs(r2);
+  const r3=await fullRun(mk({fail:"generic"},"skip"),{in:"雨"}),o3=outs(r3);
+  const a3=Object.values(r3.executions).find(x=>x.nodeId==="a");
+  ok("97 失敗: value なら値の出口に決めた値・エラー情報の出口に code と段階。skip なら値の出口には流れず、送った文・エラー情報・入ってきた値だけ流れる（ノードは stopped のまま）",
+    r2.status==="success"&&JSON.stringify(o2.ov)==='{"fb":1}'&&o2.oerr&&o2.oerr.code==="PROVIDER_ERROR"&&o2.oerr.handledAs==="value"&&o2.oerr.node==="a"
+    &&o2.oreq&&o2.oreq.messages.length===2
+    &&r3.status==="success"&&o3.ov===undefined&&o3.oerr&&o3.oerr.code==="PROVIDER_ERROR"&&o3.oerr.handledAs==="skip"&&o3.oreq&&o3.oin&&o3.oin.in==="雨"&&a3.status==="stopped");
+  const v1=validate(mk({fail:"generic"},null)),bad=mk({raw:"x"},"value");
+  bad.nodes.push({id:"c",type:"calc",lang:"expr",code:"1",ports:[{id:"r",source:"request"},{id:"z",source:"zzz"}]});
+  const v2=validate(bad);
+  ok("98 検査: エラー情報の出口があるのに onError が止めるなら止める／送った文は LLM・tool だけ／知らない source",
+    v1.some(m=>m.includes("エラー情報の出口"))&&v2.some(m=>m.includes("送った文"))&&v2.some(m=>m.includes("source が不正")));}
  }catch(e){out.push(`<span class="fail">FAIL</span>  自己テストが例外で停止: ${errText(e)}`);}
  render();
  BB.mute=false;bbClear();          // 自己テストの分は輪に残さない（本物の実行の記録を守る）

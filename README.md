@@ -23,7 +23,7 @@ iPhone でもPCでも同じ操作。
 
 ---
 
-## 1. 現状 — v0.43.0 方眼タブ（1つのセルが1つのノード）
+## 1. 現状 — v0.44.0 出口で送った文・エラー情報を渡す
 
 | 段階 | 状態 |
 |---|---|
@@ -75,7 +75,8 @@ iPhone でもPCでも同じ操作。
 | GPU を失ったら engine を読み直す v0.40.1（v0.40.0 の実機で初めて最後まで走ったが、回答生成が `map async was not successful`、続く回答Judge が `The current Object has already been disposed` で失敗していた。同梱の WebLLM は GPU の device を失うと中の instance を片付けるのに、アプリはその engine を使い続けていた → この2つの失敗でも engine を捨てて次は読み直す。エラーの種類は `MODEL_INFERENCE_FAILED` のまま。stub で同じ順番を再現し、直す前は失敗・直した後は回答Judge が動くことを確かめた） | 実装済み |
 | ハーネスを方眼シートの数式で動かす v0.41.0（「方眼で動かす」＝1行1ノードの数式にして方眼シート（sheet.html）で開く。線はセルの参照、入力のセルを書き換えると先が計算し直し。ノードの中身の扱いは harness.html の関数を写して使い、一字一句同じかをテストで固定。実ハーネス v13.1 を同じスタブにつないで、送った文・呼んだ回数・各ノードの値・出力が harness と同じことを確かめた。同じに動かせないもの（ループ・条件・先着など）は理由を付けて変換しない） | 実装済み |
 | 方眼タブ v0.42.0（ハーネス編集に エディタ / JSON / 方眼 の3つ目。1行1ノードの数式で見せ、方眼で直すと図と JSON にすぐ入る＝数式からノードの中身と線を作る逆変換。A 列で名前の変更・空いた行に A と B でノードを足す・A を消すと削除・読めない数式は理由を出して入れない。ハーネス → 方眼 → ハーネス が一字一句同じ（v13.1 と例）。方眼の中の LLM はこのページの Provider で動かし engine を2つ作らない・落ちても残る記録にも残る。LLM ノードは HLLM＝引数がそのままノードの設定、送る文は harness の buildMessages を写して作る。改行のあるセルは改行を残せる欄で直す＝v0.41.0 の方眼シートでは数式バーで直すと改行が消えていた） | 実装済み |
-| **1セル1ノード v0.43.0（方眼タブを作り直した: 1つのセルが1つのノードで、セルは図と同じ並び。式は `=NODE.種類(設定…)`（関数名がノードの種類、引数がそのノードの設定。失敗したときの扱いも設定の中）。入ってくる値はほかのノードのセルの参照。ノードの名前は式に書かずセルに付け、選ぶと出る。空いたセルに書くとノードが増え、消すと消え、切り取って貼ると図の位置も動く。往復は一字一句同じ）** | **いまここ** |
+| 1セル1ノード v0.43.0（方眼タブを作り直した: 1つのセルが1つのノードで、セルは図と同じ並び。式は `=NODE.種類(設定…)`（関数名がノードの種類、引数がそのノードの設定。失敗したときの扱いも設定の中）。入ってくる値はほかのノードのセルの参照。ノードの名前は式に書かずセルに付け、選ぶと出る。空いたセルに書くとノードが増え、消すと消え、切り取って貼ると図の位置も動く。往復は一字一句同じ） | 実装済み |
+| **出口が運ぶもの v0.44.0（出口に `source` を足した: 値のほかに、入ってきた値・送った文（LLM / tool に送ったもの。エラーに関係なく）・エラー情報（code・stage・message…。失敗したときだけ）も出口から流せる。どの種類のノードでも（request は LLM / tool）。onError:"skip" の失敗では値以外の出口にだけ流れる。エラー情報の出口があるのに onError が止めるなら検証で止める。自己テスト 96〜98）** | **いまここ** |
 | Native版 Local Runtime（llama.cpp / MLC / Apple）・ローカルVLM | これから |
 
 | Cloud API Provider（課金額のリアルタイム把握・使用上限） | これから |
@@ -755,6 +756,28 @@ A -> まとめ from_port "p2"      items（リスト）が流れる
 
 ---
 
+### 出口が運ぶもの（入ってきた値・送った文・エラー情報）
+
+出口は値の一部だけでなく、**値のほかのもの**も運べる（JSON の `ports[].source`。画面は出口のプルダウンの「値のほか」）。
+分析するハーネス（送った文と答えを並べて点検する・失敗の種類ごとに直し方を変える）へ線を引ける。
+
+| `source` | 運ぶもの | いつ流れる |
+|---|---|---|
+| `value`（既定） | ノードの出力 | 成功・onError が value / null の失敗（決めた値） |
+| `input` | このノードが受け取った値（どの線から来たか付き） | 成功・onError で先へ進む失敗 |
+| `request` | LLM / tool に送ったもの（messages・model・generation・schema。切り詰めない） | 同上（送る文を作る前の失敗では流れない） |
+| `error` | 失敗の中身（code・stage・message・retryable・handledAs・attempt・truncated・partial…） | 失敗したときだけ |
+
+```json
+"onError": "skip",
+"ports": [{"id":"v","label":"値"},{"id":"req","label":"送った文","source":"request"},{"id":"err","label":"エラー","source":"error"}]
+```
+
+- `onError:"skip"` の失敗では、値の出口には流れず、値以外の出口にだけ流れる（ノードは stopped のまま）。
+- `error` の出口があって `onError` が止める（既定）なら、検証で止める（流れない出口を黙って作らない）。
+- `pick` も効く（例: `{"source":"request","pick":"messages"}`）。使える種類: llm / tool / calc / join / reduce / assert / pass / quorum / race / memory（`request` は llm / tool だけ）。
+- 方眼では書けない（理由を出す）。
+
 ## 2.8 条件分岐（cond）
 
 **出口そのものが条件。** 上から順に調べて、最初に当たった1本だけに流す。
@@ -1235,7 +1258,7 @@ runtime が気づいているが、`console.error` に出すだけでアプリ�
 ## 10. テスト
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト95件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す）
+node tests/harness-runtime.mjs      # 自己テスト98件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口/取り出し + 条件/計算 + 動く順番 + エラーの扱い + 実行の記録 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着 + 検証の適用範囲 + 記憶 + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す + 出口が運ぶもの（入ってきた値・送った文・エラー情報））
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-wllama.mjs       # CPUで動かす道（Wllama/GGUF）の契約と同梱本体
@@ -1250,6 +1273,7 @@ node tests/harness-sitemodels.mjs   # このサイトが配るモデル（取得
 node tests/harness-startup.mjs      # 開いた直後の状態（例がそのまま実行できる・前回の続きの復元・開き直しても落ちたあとでもハーネスが戻る）
 node tests/harness-loop.mjs         # ループノード・緊急停止・入力ノードの文言・出力の受け取り方・入力の順番・大きさ変更
 node tests/harness-outputs.mjs      # 出力の項目（出力1・出力2…）・数値の範囲・出口を分ける・受け取る側の項目えらび
+node tests/harness-portsource.mjs   # 出口が運ぶもの — プルダウンの「値のほか」（入ってきた値・送った文・エラー情報）・JSON と図・止めるままなら検証で止める・skip の失敗で送った文とエラー情報だけ届く・成功の回
 node tests/harness-calc.mjs         # 計算ノード（式/JavaScript）・条件分岐ノード・ループのJSモード・使い方の？とJSONタブ
 node tests/harness-race.mjs         # 先着（race）— 足す・中身を決める・実行して候補が止まる・記録・診断・使い方3タブ
 node tests/harness-memory.mjs       # 記憶（memory）— 入口ごとの扱い・毎周たまる・記録・診断・使い方3タブ

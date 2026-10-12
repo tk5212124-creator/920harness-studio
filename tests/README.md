@@ -3,7 +3,7 @@
 `harness.html` は1枚のHTMLなので、テストは Playwright でページを開いて中の関数を直接叩く形にしてある。
 
 ```
-node tests/harness-runtime.mjs      # 自己テスト95件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口 + 条件/計算 + 動く順番 + 動き出す条件 + エラーの扱い + 実行の記録 + 使い方のJSON + 出力の形と差し込み + まとめる/多数決/点検 + モジュール + Map + 多数決の確定 + 日本語pick + 詳しい動きの例 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着(race) + 検証の適用範囲 + 記憶(memory) + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す）
+node tests/harness-runtime.mjs      # 自己テスト98件（Runtime回帰 + Provider契約 + HSL + 合流 + ループ + 出口 + 条件/計算 + 動く順番 + 動き出す条件 + エラーの扱い + 実行の記録 + 使い方のJSON + 出力の形と差し込み + まとめる/多数決/点検 + モジュール + Map + 多数決の確定 + 日本語pick + 詳しい動きの例 + 式で使える名前と演算子 + first_matchのpriority + wllamaの既定 + 先着(race) + 検証の適用範囲 + 記憶(memory) + 読まないキーの診断 + 文脈の窓 + Checkpointのまとめ書き + engineのリセット + 落ちても残る記録 + 入力と送った文の記録 + ログと同じものを残す + 取り置き + engineへの推論は1本ずつ + 終わった Run に running を残さない + 忘れる前に engine を止める + GPU を失ったら読み直す + 出口が運ぶもの（入ってきた値・送った文・エラー情報））
 node tests/harness-local-llm.mjs    # 本物のHTTPでOpenAI互換サーバに繋いで端から端まで
 node tests/harness-webllm.mjs       # 同梱したWebLLM本体を実ブラウザで読み込み、WebGPUを実測
 node tests/harness-editor.mjs       # ノードエディタを iPhone 相当のタッチ端末として操作
@@ -12,6 +12,7 @@ node tests/harness-ai-loop.mjs      # 外部LLMとの往復（1枚を出す→�
 node tests/harness-io-models.mjs    # 入出力パネルの連動と、モデルの一覧・選択・ダウンロード
 node tests/harness-loop.mjs         # ループノード・緊急停止・入力ノードの文言・入力の順番
 node tests/harness-outputs.mjs      # 出力の項目・出口を分ける・受け取る側の項目えらび・％と思考過程
+node tests/harness-portsource.mjs   # 出口が運ぶもの（入ってきた値・送った文・エラー情報）を画面から選ぶ・検証・失敗/成功の回に何が届くか
 node tests/harness-calc.mjs         # 計算ノード・条件分岐ノード・ループのJSモード・使い方の？とJSONタブ
 node tests/harness-modexp.mjs       # モジュール（部分ハーネスの再利用）と「くらべる（実験）」
 node tests/harness-race.mjs         # 先着（race）— 足す・中身を決める・実行して候補が止まる・記録・診断・使い方3タブ
