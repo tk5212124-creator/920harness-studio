@@ -61,6 +61,15 @@ jobs:
           # 内蔵LLMの本体が配信物に入っていなければ、ここで落とす
           # （入れ忘れると端末側は「Importing a module script failed」になるだけで原因が分からない）
           test -s _site/vendor/web-llm/index.js
+          # Embedding（ツールノード）の Worker と、それが読む Transformers.js・WebAssembly
+          # （harness.html から "embed-worker.js" を相対で読む。入れ忘れると Embedding だけ 404 で動かない）
+          cp embed-worker.js _site/embed-worker.js
+          test -s _site/embed-worker.js
+          test -s _site/vendor/transformers/transformers.min.js
+          test -s _site/vendor/transformers/ort-wasm-simd-threaded.mjs
+          test -s _site/vendor/transformers/ort-wasm-simd-threaded.wasm
+          # 取り込めるハーネスの例（ツールノード）
+          cp -r samples _site/samples
           # いま配っている版を書いておく（端末が古い版を握っていたら気づけるように）
           ver=$(grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' harness.html | head -1)
           printf '{"version":"%s","commit":"%s","builtAt":"%s"}\n' \
@@ -127,6 +136,17 @@ jobs:
           set -e
           base="${{ steps.deployment.outputs.page_url }}"
           echo "base=$base"
+          # Embedding の Worker と本体が公開 URL から取れるか
+          for f in embed-worker.js vendor/transformers/transformers.min.js vendor/transformers/ort-wasm-simd-threaded.mjs vendor/transformers/ort-wasm-simd-threaded.wasm samples/tool-wikipedia-answer.json; do
+            code=000
+            for i in 1 2 3 4 5 6; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' -L "${base}${f}?t=$i")
+              [ "$code" = "200" ] && break
+              sleep 10
+            done
+            echo "$f: HTTP $code"
+            test "$code" = "200"
+          done
           code=000
           for i in 1 2 3 4 5 6 7 8 9 10; do
             code=$(curl -s -o /tmp/idx.json -w '%{http_code}' -L "${base}models_index.json?t=$i")
