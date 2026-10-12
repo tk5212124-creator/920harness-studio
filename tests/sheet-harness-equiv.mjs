@@ -68,7 +68,7 @@ const same = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
 
 // ① 変換
 const conv = await hp.evaluate(([s, q]) => window.__dbg.eng.specToSheet(s, { in: q }), [spec, QUESTION]);
-R['① 変換'] = { ok: conv.ok, 断る理由: conv.problems, 行: conv.rows && conv.rows.length, 動き方の注意: conv.warns && conv.warns.length };
+R["① 変換"] = { ok: conv.ok, 断る理由: conv.problems, ノード: conv.rows && conv.rows.length, セル: conv.sheet && Object.keys(conv.sheet.cells).length, 動き方の注意: conv.warns && conv.warns.length };
 ok.convert = conv.ok && conv.problems.length === 0 && conv.rows.length === v13.nodes.length;
 
 async function harnessRun() {
@@ -88,7 +88,7 @@ async function sheetRun(pg) {
     return !S.LLMCore.running && !S.LLMQ.queue.length && !S.JSQ.busy && !S.JSQ.queue.length && !S.LLMQ.follow; }, null, { timeout: 120000, polling: 200 });
   await pg.waitForTimeout(300);
   return await pg.evaluate(rows => { const S = window.__sheet, E = S.engine, si = S.wb.active; S.paint();
-    const o = {}; for (const r of rows) { if (r.inMap) continue; const v = E.cellValue(si, r.row - 1, 2);
+    const o = {}; for (const r of rows) { if (r.inMap) continue; const v = E.cellValue(si, r.r, r.c);   // 1つのセルが1つのノード
       if (E.isErr(v)) o[r.id] = { err: v.err, msg: v.msg }; else o[r.id] = E.hDec(v); }
     return o; }, conv.rows);
 }

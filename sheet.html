@@ -395,6 +395,7 @@ function cellValue(si,r,c){
     }catch(e){val=isErr(e)?e:e instanceof RangeError?ERR('#LOOP!','再帰が深すぎる'):ERR('#ERROR!',String(e&&e.message||e))}
     finally{visiting.delete(key);evalCell=prevEval}
   }else val=literal(raw,cell);
+  if(isErr(val))errCells.add(val);           // 手前のノードの失敗と、ノードの中の失敗を分けるため（NODE.〇〇 の onError）
   cache.set(key,val);return val;
 }
 function recalc(){
@@ -680,7 +681,7 @@ const LLMCore={
      text の値 … ふつうの文字列
      JSON の値 … 数・真偽はそのまま数・真偽。文字列・配列・オブジェクト・null は {json:値}（セルには JSON の文で見える）
    ノードの中身の扱い（差し込み・合流・pick・型・結合・まとめ・式）は harness.html から写した関数（HX）をそのまま使う。 */
-/*#HARNESS-COPY — harness.html v0.42.0 から写した（手で直さない。tools/sync-harness-copy.mjs で作り直す）*/
+/*#HARNESS-COPY — harness.html v0.43.0 から写した（手で直さない。tools/sync-harness-copy.mjs で作り直す）*/
 const HX=(()=>{
 const ABSENT=Symbol("absent");
 const OPS2=["&&","||","==","!=","<=",">="],OPS1=["+","-","*","/","%","<",">"];
@@ -1255,6 +1256,106 @@ Object.assign(FN,{
     }},
 });
 FN_GROUPS.splice(2,0,['ハーネス','HLLM LLMNODE HTEMPLATE HTEXT JS HEXPR HMAP ONERROR HPICK HTRANSFORM HTYPE HMERGE HJOIN HREDUCE HASSERT HJSON JSONGET']);
+/* ---------- NODE.〇〇: 1つのセルが1つのノード（Harness Studio の「方眼」タブ） ----------
+   関数の名前がノードの種類、引数がそのノードの設定（失敗したときの扱い onError / onErrorValue も設定の JSON に入る）。
+   ノードの名前は式に書かず、セルに付けておく（cell.nid）。文やエラーに出すときはそこから読む。
+   失敗したときの扱い: このノードの中で起きた失敗だけを代わりの値にする。手前のセルのエラー（そのセルの値そのもの）・
+   まだ来ていない値・止めた LLM・式の書き間違いは、そのまま通す（harness ではこのノードは動かないので）。 */
+const errCells=new WeakSet();          // どこかのセルの値になったエラー（＝手前のノードの失敗）
+function curNid(){if(!evalCell)return null;const[si,r,c]=evalCell.split(',').map(Number);const sh=wb.sheets[si];const x=sh&&sh.cells[A1(r,c)];return x&&x.nid||null}
+function nodeGuard(cf,body){
+  try{const v=body();const s=scalar(v);if(isErr(s))throw s;return v}
+  catch(e){
+    if(!isErr(e))throw e;const pol=cf&&cf.onError;
+    if(pol!=='value'&&pol!=='null')throw e;
+    if(errCells.has(e)||PENDING_ERRS.includes(e.err)||e.cancelled||H_STRUCT_ERRS.includes(e.err))throw e;
+    return hEnc(HX.rvOf(pol==='value'&&cf.onErrorValue!==undefined?cf.onErrorValue:null));
+  }
+}
+function hllmCall(a,cf,nid){
+  const pv=V(a[0]);const pname=pv===null?'':toStr(pv).trim();
+  const opt=i=>{if(!a[i])return null;const v=V(a[i]);return v===null?null:toStr(v)};
+  const system=opt(1),template=opt(2),prefix=opt(4),suffix=opt(5);
+  const inV=a[3]?a[3]():null;
+  const schemaArg=jsonArg(a[6],'schema');
+  const it=a[8]?toNum(V(a[8])):1;
+  const prompt={};
+  if(system!==null)prompt.system=system;
+  if(template!==null)prompt.template={syntax:'mustache',mode:'interpolation_only',value:template};
+  if(prefix!==null)prompt.prefix=prefix;if(suffix!==null)prompt.suffix=suffix;
+  const inputs={};if(inV!==null&&inV!==undefined)inputs.in=hDec(inV);
+  const c2=Object.assign({},cf,{id:nid||cf.id});
+  const messages=hTry(()=>HX.buildMessages({id:c2.id,prompt},inputs,{iteration:it},{vars:{},input:undefined}));
+  return LLMCore.nodeCall(pname,messages,schemaArg,c2,{iteration:it,inputs});
+}
+function hmapCall(a,cf,nid){
+  const rv=hDec(a[0]());const f=fnOf(a[1]);
+  const id=nid||cf.id||'NODE.MAP',pol=cf.onItemError||'error';const v=rv.value;
+  if(!Array.isArray(v))throw hErr({code:'MAP_NOT_ARRAY',retryable:false,message:`${id}: Map に入れられるのは配列だけ（来たのは ${HX.showVal(v)}）。手前で配列にしてから渡す`});
+  const out=[];let wait=null,hard=null;
+  v.forEach((item,i)=>{
+    const r=tryErr(()=>scalar(callClosure(f,[hEnc(HX.rvOf(item)),i])));
+    if(isErr(r)){
+      if(PENDING_ERRS.includes(r.err)||r.cancelled||H_STRUCT_ERRS.includes(r.err)){if(!wait||H_STRUCT_ERRS.includes(r.err))wait=r;return}
+      if(pol==='skip')return;
+      if(pol==='null'){out.push(null);return}
+      if(pol==='value'){out.push(cf.onItemErrorValue===undefined?null:cf.onItemErrorValue);return}
+      if(!hard)hard=r;return;
+    }
+    out.push(hDec(r).value);
+  });
+  if(wait&&H_STRUCT_ERRS.includes(wait.err))throw wait;
+  if(hard)throw hard;
+  if(wait)throw wait;
+  return hEnc({type:'json',value:out});
+}
+Object.assign(FN,{
+  'NODE.INPUT':a=>{need(a,0,1);if(!a[0])return'';const v=a[0]();return v===null?'':v},
+  'NODE.OUTPUT':a=>{need(a,0,2);const cf=jsonArg(a[1],'設定')||{};
+    return nodeGuard(cf,()=>{if(!a[0])return hEnc({type:'json',value:null});const v=a[0]();return v===null?'':v})},
+  'NODE.PASS':a=>{need(a,0,2);const cf=jsonArg(a[1],'設定')||{};
+    return nodeGuard(cf,()=>{if(!a[0])return'';const v=a[0]();return v===null?'':v})},
+  /* NODE.LLM(provider, system, template, 入ってきた値, prefix, suffix, schema, 設定) */
+  'NODE.LLM':a=>{need(a,1,9);const cf=jsonArg(a[7],'設定')||{};const nid=curNid();
+    return nodeGuard(cf,()=>hllmCall(a,cf,nid))},
+  /* NODE.JS(コード, 設定, 名前, 値, …) / NODE.EXPR(式, 設定, 名前, 値, …, "#ノード名", 値) */
+  'NODE.JS':a=>{if(!a.length)throw ERR('#VALUE!','NODE.JS(コード, 設定, 名前, 値, …)');const cf=jsonArg(a[1],'設定')||{};const nid=curNid();
+    return nodeGuard(cf,()=>{const code=toStr(V(a[0]));const{scope}=hScope(a,2);const where=`${nid||'JS'} の計算`;
+      if(!String(code).trim())throw hErr({code:'CODE_EMPTY',message:`${where}: 中身が書かれていない`});
+      const v=JSCore.call(code,scope,where);return hEnc(HX.rvOf(v===undefined?null:v))})},
+  'NODE.EXPR':a=>{if(!a.length)throw ERR('#VALUE!','NODE.EXPR(式, 設定, 名前, 値, …)');const cf=jsonArg(a[1],'設定')||{};const nid=curNid();
+    return nodeGuard(cf,()=>{const code=toStr(V(a[0]));const{scope,views}=hScope(a,2);const where=`${nid||'EXPR'} の計算`;
+      if(!String(code).trim())throw hErr({code:'CODE_EMPTY',message:`${where}: 中身が書かれていない`});
+      return hTry(()=>{const v=HX.evalValAt(code,{root:Object.assign(hRoot(views),scope)},where);return hEnc(HX.rvOf(v===undefined?null:v))})})},
+  /* NODE.ASSERT(点検の並び, 設定（onFail など）, 入ってきた値, "#ノード名", 値, …) */
+  'NODE.ASSERT':a=>{if(a.length<3)throw ERR('#VALUE!','NODE.ASSERT(点検の並び, 設定, 値, …)');const cf=jsonArg(a[1],'設定')||{};const nid=curNid()||'ASSERT';
+    return nodeGuard(cf,()=>{const list=jsonArg(a[0],'点検の並び');const inRV=hDec(a[2]());const{views,late}=hScope(a,3);
+      return hTry(()=>{
+        if(!Array.isArray(list)||!list.length)throw{code:'ASSERT_EMPTY',retryable:false,message:`${nid}: 点検する条件が1つも書かれていない`};
+        const locals=Object.assign(HX.localsOf(inRV,{iteration:late.iteration}),'index' in late?{index:late.index}:{});
+        const tests=[];
+        for(let i=0;i<list.length;i++){const t=list[i]||{};const name=String(t.name||('点検'+(i+1)));
+          const sev=HX.ASSERT_SEVERITY.includes(t.severity)?t.severity:'fail';let pass=false,err=null;
+          try{if((t.lang||'expr')==='js')throw{code:'NOT_SUPPORTED',message:'方眼では点検の JavaScript は動かさない'};
+            pass=HX.evalBoolAt(t.expr,{root:Object.assign(hRoot(views),locals)},`${nid} の「${name}」`)}
+          catch(e){pass=false;err=HX.errText(e)}
+          tests.push({name,expr:String(t.expr||''),severity:sev,pass,error:err})}
+        const failed=tests.filter(t=>!t.pass&&t.severity==='fail').length,warned=tests.filter(t=>!t.pass&&t.severity==='warn').length;
+        const out={total:tests.length,passed:tests.filter(t=>t.pass).length,failed,warned,info:tests.filter(t=>!t.pass&&t.severity==='info').length,tests};
+        if(failed&&cf.onFail==='error')throw{code:'ASSERT_FAILED',retryable:false,message:`${nid}: 点検に落ちた（${failed}件）: `
+          +tests.filter(t=>!t.pass&&t.severity==='fail').map(t=>t.name+(t.error?'（'+t.error+'）':'')).join(' / ')};
+        return hEnc(HX.rvOf(out))})})},
+  /* NODE.JOIN(設定, 値, …) / NODE.REDUCE(設定, 値, …) */
+  'NODE.JOIN':a=>{if(!a.length)throw ERR('#VALUE!','NODE.JOIN(設定, 値, …)');const cf=jsonArg(a[0],'結合の設定')||{};const nid=curNid();
+    return nodeGuard(cf,()=>{const items=a.slice(1).map(t=>hDec(t()));return hTry(()=>hEnc(HX.runJoin(Object.assign({},cf,{id:nid||cf.id}),{items})))})},
+  'NODE.REDUCE':a=>{if(!a.length)throw ERR('#VALUE!','NODE.REDUCE(設定, 値, …)');const cf=jsonArg(a[0],'まとめの設定')||{};const nid=curNid();
+    return nodeGuard(cf,()=>{const vs=a.slice(1).map(t=>hDec(t()));
+      return hTry(()=>hEnc(HX.runReduce(Object.assign({},cf,{id:nid||cf.id}),{in:vs.length===1?vs[0]:vs})))})},
+  /* NODE.MAP(配列, LAMBDA(_ITEM,_I, LET(_N1, 中のノード, …, 戻す値)), 設定) */
+  'NODE.MAP':a=>{need(a,2,3);const cf=jsonArg(a[2],'Map の設定')||{};const nid=curNid();
+    return nodeGuard(cf,()=>hmapCall(a,cf,nid))},
+});
+FN_GROUPS.splice(2,0,['ノード（方眼タブ）','NODE.INPUT NODE.LLM NODE.JS NODE.EXPR NODE.MAP NODE.JOIN NODE.REDUCE NODE.ASSERT NODE.OUTPUT NODE.PASS']);
 
 /* ---------- formula text transforms ---------- */
 function adjustFormula(f,cb){
@@ -1886,9 +1987,9 @@ function updateHarnessBar(bar,sh){
   const busy=LLMCore.running||LLMQ.queue.length||LLMQ.follow||JSQ.busy||JSQ.queue.length;
   const tx=$('demoTx'),btn=$('demoRun');bar.hidden=false;
   const nm=esc((sh.harness&&sh.harness.name)||sh.name);
-  if(busy){btn.hidden=true;tx.innerHTML=`<b>実行中</b> · ${LLMQ.progress?esc(LLMQ.progress):`LLM の答え ${done}件`}<span class="sub">ハーネス「${nm}」を上の行から順に計算している。下の「LLM 実行中」で止められる。</span>`}
+  if(busy){btn.hidden=true;tx.innerHTML=`<b>実行中</b> · ${LLMQ.progress?esc(LLMQ.progress):`LLM の答え ${done}件`}<span class="sub">ハーネス「${nm}」を手前のノードから順に計算している。下の「LLM 実行中」で止められる。</span>`}
   else if(pend){btn.hidden=false;btn.textContent='▶ ハーネスを実行';
-    tx.innerHTML=`<b>ハーネス「${nm}」</b> · 1行が1ノード（C列が値）<span class="sub">押すと、このシートの LLM だけを順に呼ぶ。計算ノードは自動で動く。入力のセル（黄色）を書き換えると、変わったところから先がまた #未実行 になる。${err?` 失敗した LLM ${err}件はセルを選んで「再実行」。`:''}</span>`}
+    tx.innerHTML=`<b>ハーネス「${nm}」</b> · 1つのセルが1つのノード（セルを選ぶと名前が出る）<span class="sub">押すと、このシートの LLM だけを順に呼ぶ。計算ノードは自動で動く。入力のセル（黄色）を書き換えると、変わったところから先がまた #未実行 になる。${err?` 失敗した LLM ${err}件はセルを選んで「再実行」。`:''}</span>`}
   else{btn.hidden=true;tx.innerHTML=`<b>完了</b> · ハーネス「${nm}」 · LLM の答え ${done}件${err?` · 失敗 ${err}件`:''}<span class="sub">答えは端末に保存される。入力のセルを書き換えると、また実行できる。</span>`}
 }
 function demoRun(){
@@ -2082,8 +2183,9 @@ function updateStatus(){
   const R=rng();const si=wb.active;
   if(R.r1===R.r2&&R.c1===R.c2){
     const v=cellValue(si,anchor.r,anchor.c);
-    if(isErr(v)&&v.msg){statEl.textContent=v.err+' '+v.msg;statEl.title=v.msg}
-    else{const ks=cellLLMOf(si,anchor.r,anchor.c);let t='';if(ks)for(const k of ks){const h=LLMCore.results.get(k);if(h){t=`LLM の答え（${h.model}・キャッシュ）`;break}}statEl.textContent=t;statEl.title=''}
+    const nc=S().cells[A1(anchor.r,anchor.c)];const nodeTag=nc&&nc.nid?`ノード「${nc.nid}」 · `:'';   // 方眼タブ: どのノードのセルか
+    if(isErr(v)&&v.msg){statEl.textContent=nodeTag+v.err+' '+v.msg;statEl.title=v.msg}
+    else{const ks=cellLLMOf(si,anchor.r,anchor.c);let t='';if(ks)for(const k of ks){const h=LLMCore.results.get(k);if(h){t=`LLM の答え（${h.model}・キャッシュ）`;break}}statEl.textContent=nodeTag+t;statEl.title=''}
     return}
   let cnt=0,n=0,sum=0;
   for(let r=R.r1;r<=R.r2;r++)for(let c=R.c1;c<=R.c2;c++){const v=cellValue(si,r,c);if(v===null||v==='')continue;cnt++;if(typeof v==='number'){n++;sum+=v}}
@@ -2664,12 +2766,12 @@ on('bHelp',()=>{
   </div>
   <p>答えは provider の設定・送る文・形ごとに保存し、同じ問いでは呼び直しません。待っている間は <code>#待機中</code>・<code>#実行中</code>、手動モードでは <code>#未実行</code>。失敗は <code>#LLM!</code> になり、セルを選ぶと下に理由が出ます。自動では再試行しません。</p>
   <h3>ハーネスを数式で動かす</h3>
-  <p>Harness Studio（harness.html）の「方眼」タブと「方眼で動かす」で、ハーネスを1行1ノードの数式にしたシートになります。C列がノードの値で、線はセルの参照です。上に出る「▶ ハーネスを実行」で、そのシートの LLM だけを順に呼びます。方眼タブの中で直すと、ハーネスの図と JSON にすぐ入ります。</p>
+  <p>Harness Studio（harness.html）の「方眼」タブと「方眼で動かす」で、ハーネスを数式にしたシートになります。1つのセルが1つのノードで（図と同じ並び）、式は =NODE.種類(設定…)、入ってくる値はほかのノードのセルの参照です。ノードの名前はセルを選ぶと下に出ます。上に出る「▶ ハーネスを実行」で、そのシートの LLM だけを順に呼びます。方眼タブの中で直すと、ハーネスの図と JSON にすぐ入ります。</p>
   <div class="ex">
-    <code>=HLLM("local", system, "{{{in}}}", C3, prefix, suffix, schema, 設定)　LLM ノード</code>
-    <code>=JS("return a*2", "a", C3)　計算ノード（JavaScript。3秒で打ち切り）</code>
-    <code>=HMAP(C7, LAMBDA(_ITEM,_I, …), 設定)　配列の1件ずつ</code>
-    <code>=ONERROR(中身, "value", "{}", C3)　失敗したら決めた値</code>
+    <code>=NODE.LLM("local", system, "{{{in}}}", B2, prefix, suffix, schema, 設定)　LLM ノード</code>
+    <code>=NODE.JS("return a*2", "", "a", B2)　計算ノード（JavaScript。3秒で打ち切り）</code>
+    <code>=NODE.MAP(B6, LAMBDA(_ITEM,_I, LET(…)), 設定)　配列の1件ずつ</code>
+    <code>=NODE.LLM(…, "{""onError"":""value"",""onErrorValue"":{}}")　失敗したら決めた値（設定の中）</code>
     <code>=JSONGET(C5, "items.0")　JSON の中を取り出す</code>
   </div>
   <p>JSON の値はセルに JSON の文で見えます（文字列の "5" と数の 5 は別）。中身の扱いは Harness Studio と同じコードです。改行のあるセル（プロンプトやコード）は、直そうとすると改行を残せる欄が開きます。</p>
@@ -2706,7 +2808,9 @@ const hasNL=t=>typeof t==='string'&&t.includes('\n');
      戻せなければ理由が返ってくるので、書き換える前に戻す（黙って捨てない）。
    ・LLM は親の Provider で動かす（engine を2つ作らない＝メモリを2倍にしない）。 */
 const EMB={on:new URLSearchParams(location.search).get('embed')==='harness',last:null,waiting:false,t:null,seq:0};
-function embedCellsV(sh){const o={};for(const k in sh.cells){const v=sh.cells[k]&&sh.cells[k].v;if(v!=null&&v!=='')o[k]=String(v)}return o}
+/* 送るのはセルの中身と、どのノードのセルか（nid。式には書かないノードの名前） */
+function embedCellsV(sh){const o={};for(const k in sh.cells){const x=sh.cells[k];const v=x&&x.v;if(v!=null&&v!=='')o[k]=x.nid?{v:String(v),nid:x.nid}:{v:String(v)}}return o}
+const embedSame=(a,b)=>(a?a.v:'')===(b?b.v:'')&&(a&&a.nid||'')===(b&&b.nid||'');
 function embedLoad(m){
   if(editing)endEdit();
   const sh=S();const before=sh.nr+'x'+sh.nc;
@@ -2722,14 +2826,14 @@ function embedLoad(m){
 function embedSend(){
   if(!EMB.on||!EMB.last)return;
   const now=embedCellsV(S());const changes={};
-  for(const k of new Set([...Object.keys(now),...Object.keys(EMB.last)]))if((now[k]||'')!==(EMB.last[k]||''))changes[k]=now[k]==null?null:now[k];
+  for(const k of new Set([...Object.keys(now),...Object.keys(EMB.last)]))if(!embedSame(now[k],EMB.last[k]))changes[k]=now[k]==null?null:now[k];
   if(!Object.keys(changes).length)return;
   EMB.waiting=true;
   parent.postMessage({type:'hs-edit',seq:++EMB.seq,cells:now,changes,at:{r:anchor.r,c:anchor.c}},'*');
 }
 function embedReject(m){
-  const sh=S();const keep={};for(const k in sh.cells){const x=sh.cells[k];const y=Object.assign({},x);delete y.v;keep[k]=y}
-  sh.cells={};for(const[k,v]of Object.entries(EMB.last||{}))sh.cells[k]=Object.assign({},keep[k]||{},{v});
+  const sh=S();const keep={};for(const k in sh.cells){const x=sh.cells[k];const y=Object.assign({},x);delete y.v;delete y.nid;keep[k]=y}
+  sh.cells={};for(const[k,c]of Object.entries(EMB.last||{}))sh.cells[k]=Object.assign({},keep[k]||{},c);
   EMB.waiting=false;paint();updateSel();
   toast('入れなかった: '+String(m.reason||'').slice(0,160));
 }
@@ -2762,7 +2866,7 @@ if(EMB.on){
 
 /* ---------- ハーネスから来たシート（harness.html の「方眼で動かす」） ----------
    harness.html が localStorage に置いた1件を読み、新しいシートとして足す（今あるシートには触らない）。読んだら消す。
-   provider は同じ名前で中身が違うものがあれば名前を変えて足し、そのシートの LLMNODE / HLLM の名前も合わせる。 */
+   provider は同じ名前で中身が違うものがあれば名前を変えて足し、そのシートの LLMNODE / HLLM / NODE.LLM の名前も合わせる。 */
 const LS_IMPORT='hogan-sheet.import.v1';
 function importHarness(){
   let o=null;try{o=JSON.parse(localStorage.getItem(LS_IMPORT)||'null')}catch(_){o=null}
@@ -2776,7 +2880,7 @@ function importHarness(){
   }
   const sh=Object.assign(newSheet(''),o.sheet);sh.name=uniqueName(o.sheet.name||'ハーネス');
   if(Object.keys(rename).length)for(const k in sh.cells){const c=sh.cells[k];
-    if(typeof c.v==='string'&&c.v[0]==='=')c.v=c.v.replace(/(LLMNODE|HLLM)\("((?:[^"]|"")*)"/g,(m,f,n)=>{const u=n.replace(/""/g,'"');return rename[u]?f+'("'+rename[u].replace(/"/g,'""')+'"':m})}
+    if(typeof c.v==='string'&&c.v[0]==='=')c.v=c.v.replace(/(LLMNODE|HLLM|NODE\.LLM)\("((?:[^"]|"")*)"/gi,(m,f,n)=>{const u=n.replace(/""/g,'"');return rename[u]?f+'("'+rename[u].replace(/"/g,'""')+'"':m})}
   wb.sheets.push(sh);wb.active=wb.sheets.length-1;save();
   return{name:sh.name,rename};
 }
@@ -2801,7 +2905,7 @@ window.addEventListener('resize',()=>updateSel());
 if(location.protocol.startsWith('http')&&!EMB.on)loadSiteModels();
 if(EMB.on)parent.postMessage({type:'hs-ready'},'*');
 /* テストから中を見る口（tests/sheet.mjs） */
-window.__sheet={engine:ENGINE,LLMCore,LLMQ,PROVIDERS,TRANSPORTS,ModelManager,paint,get wb(){return wb},set wb(v){wb=fixBook(v);renderTabs();build()},runPending:llmRunPending,demoRun,stop:llmStop,rerun:llmRerun,select,extend,JSCore,JSQ,importHarness,get imported(){return IMPORTED},EMB,openLongEdit,commitValue};
+window.__sheet={engine:ENGINE,LLMCore,LLMQ,PROVIDERS,TRANSPORTS,ModelManager,paint,get wb(){return wb},set wb(v){wb=fixBook(v);renderTabs();build()},runPending:llmRunPending,demoRun,stop:llmStop,rerun:llmRerun,select,extend,JSCore,JSQ,importHarness,get imported(){return IMPORTED},EMB,openLongEdit,commitValue,save,pushUndo};
 })();
 </script>
 </body>
